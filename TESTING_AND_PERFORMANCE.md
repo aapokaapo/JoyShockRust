@@ -314,6 +314,12 @@ lines. Then run
 `cargo run --locked -p joyshockrust-linux --example rumble_test -- --physical /dev/input/eventN`
 with the physical node from `Rumble forwarding ready` and compare whether
 the same pulse is felt. A successful write confirms kernel acceptance.
+The user's wired Edge test on `993abc2` accepted uploads and playback
+writes through both paths without physical vibration. To check whether
+device gain suppresses the pulse, close other controller applications and
+repeat the physical test with `--reset-gain`. This restores the device-wide
+gain to the Linux default of 100% before the pulse. Compare the direct
+result over Bluetooth if USB still produces no vibration.
 Check that vibration stops when the effect ends, the client exits or the
 controller disconnects. For in-game compatibility, record the game, Proton
 version and Steam Input setting.

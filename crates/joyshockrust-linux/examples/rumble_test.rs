@@ -27,29 +27,31 @@ mod linux {
     use evdev::{BusType, Device, FFEffectCode, FFEffectData, FFEffectKind, FFReplay, FFTrigger};
     use joyshockrust_input::DeviceModel;
 
-    const USAGE: &str =
-        "usage: rumble_test [/dev/input/eventN] | rumble_test --physical /dev/input/eventN";
+    const USAGE: &str = "usage: rumble_test [/dev/input/eventN] | rumble_test --physical /dev/input/eventN [--reset-gain]";
     const PULSE_MS: u16 = 750;
 
     pub fn run() -> io::Result<()> {
         let mut args = env::args_os().skip(1);
-        let (path, physical) = match (args.next(), args.next(), args.next()) {
-            (None, None, None) => (find_gamepad()?, false),
-            (Some(arg), None, None) if arg == "--help" || arg == "-h" => {
-                println!("{USAGE}");
-                return Ok(());
-            }
-            (Some(path), None, None) if !path.as_encoded_bytes().starts_with(b"-") => {
-                (PathBuf::from(path), false)
-            }
-            (Some(arg), Some(path), None)
-                if arg == "--physical" && !path.as_encoded_bytes().starts_with(b"-") =>
-            {
-                (PathBuf::from(path), true)
-            }
-            _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, USAGE)),
-        };
-        test_gamepad(&path, physical)
+        let (path, physical, reset_gain) =
+            match (args.next(), args.next(), args.next(), args.next()) {
+                (None, None, None, None) => (find_gamepad()?, false, false),
+                (Some(arg), None, None, None) if arg == "--help" || arg == "-h" => {
+                    println!("{USAGE}");
+                    return Ok(());
+                }
+                (Some(path), None, None, None) if !path.as_encoded_bytes().starts_with(b"-") => {
+                    (PathBuf::from(path), false, false)
+                }
+                (Some(arg), Some(path), option, None)
+                    if arg == "--physical"
+                        && !path.as_encoded_bytes().starts_with(b"-")
+                        && option.as_ref().is_none_or(|value| value == "--reset-gain") =>
+                {
+                    (PathBuf::from(path), true, option.is_some())
+                }
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, USAGE)),
+            };
+        test_gamepad(&path, physical, reset_gain)
             .map_err(|err| io::Error::new(err.kind(), format!("{}: {err}", path.display())))
     }
 
@@ -88,7 +90,7 @@ mod linux {
         Ok(path)
     }
 
-    fn test_gamepad(path: &Path, physical: bool) -> io::Result<()> {
+    fn test_gamepad(path: &Path, physical: bool, reset_gain: bool) -> io::Result<()> {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let node = udev::Device::from_devnum(udev::DeviceType::Character, file.metadata()?.rdev())?;
         if !physical && !is_joyshockrust_gamepad(&node) {
@@ -125,6 +127,20 @@ mod linux {
                     "virtual gamepad does not offer rumble; start the bridge with --rumble and check for Rumble forwarding ready"
                 },
             ));
+        }
+
+        if reset_gain {
+            if !device
+                .supported_ff()
+                .is_some_and(|effects| effects.contains(FFEffectCode::FF_GAIN))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "physical event node does not offer FF_GAIN",
+                ));
+            }
+            device.set_ff_gain(u16::MAX)?;
+            println!("Reset physical force feedback gain to the kernel default (100%).");
         }
 
         let mut effect = device.upload_ff_effect(FFEffectData {
