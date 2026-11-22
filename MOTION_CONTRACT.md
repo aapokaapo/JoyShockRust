@@ -2,36 +2,30 @@
 
 `joyshockrust-motion` must compile and test without Linux-specific dependencies, Tokio, device access, filesystem or IPC.
 
-## Core API sketch
-```rust
-pub struct ImuSample {
-    pub timestamp_ns: u64,
-    pub gyro_dps: [f32; 3],
-    pub accel_g: [f32; 3],
-}
+## Implemented API
 
-pub struct MotionConfig {
-    pub sensitivity_x: f32,
-    pub sensitivity_y: f32,
-    pub auto_calibration: bool,
-}
+`MotionEngine` consumes `ImuSample` values in degrees per second and g.
+The caller applies the device's factory conversion to raw counts before
+calling motion. A separately supplied stationary gyro bias is subtracted
+once. See the [API and example](crates/joyshockrust-motion/src/lib.rs).
 
-pub struct MotionOutput {
-    pub aim_delta: [f32; 2],
-    pub angular_velocity: [f32; 3],
-    pub gravity: [f32; 3],
-    pub stationary: bool,
-}
+Use elapsed nanoseconds within one continuous input segment. The first
+sample establishes a baseline. Later samples integrate angular velocity
+with the trapezoidal rule. Horizontal aim uses device Y, vertical aim
+uses device X, and signed sensitivities control the output direction.
+The bounds of 2048 °/s and 4 g per axis are provisional input guards.
+Non-finite or out-of-range samples, non-increasing timestamps, and gaps
+above the configured limit return errors and preserve the previous state.
+The caller ends a segment with `reset_segment`, which preserves the
+supplied bias. [Nominal range source reviewed 2026-11-22](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L166-L170)
 
-pub struct MotionEngine { /* private owned state */ }
-// MotionEngine::new(config, calibration) -> Self
-// MotionEngine::process(&mut self, sample) -> Result<MotionOutput, MotionError>
-```
-This sketch describes the future motion API. The first parser passes raw counts to a device-specific conversion stage. That stage uses validated factory coefficients and passes calibrated degrees per second and g to motion. Persisted manual gyro bias belongs to the profile and enters motion as three finite values in degrees per second. Motion applies that bias once and keeps runtime bias estimates in its own state.
+The engine predicts the gravity direction from gyro rotation and blends
+in accelerometer direction when its magnitude is near 1 g and it agrees
+with the predicted hemisphere. The first usable accelerometer sample
+initializes the estimate. The stationary flag uses magnitude and angular
+velocity thresholds. It is informational and leaves aim integration intact.
 
-Use elapsed nanoseconds within a continuous input segment. The caller forwards only accepted sensor samples for integration and explicitly resets the motion timebase when a new segment starts. The first sample establishes a baseline and produces no integrated aim delta. Proposed sample errors are non-finite values, out-of-range values and non-increasing timestamps. Each leaves the previous accepted motion state intact. A segment reset clears elapsed-time and fusion history while retaining validated calibration. Define the physical range limits alongside device calibration using the captured fixture data.
-
-## Processing stages
+## Planned extensions
 1. Validate finite values, timestamp ordering and plausible ranges.
 2. Apply static/device calibration and learned gyro bias.
 3. Detect stillness using calibrated sensor noise and accelerometer conditions.

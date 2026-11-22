@@ -49,3 +49,7 @@ The stationary USB capture added in `d7da53b` averaged approximately 1 kHz acros
 Recorded 2026-11-22. Use Linux `poll` with read readiness and bounded nonblocking drains for the single explicit hidraw descriptor. Check the opened descriptor with `HIDIOCGRAWINFO`. The Linux crate uses nix for polling and ioctl definitions and evdev for synchronized uinput batches. The virtual device has its own name and virtual bus identity. [hidraw and uinput references](docs/REFERENCE_ANALYSIS.md#readiness-permissions-and-coexistence)
 
 Automatic mode subscribes to udev hidraw events before enumerating and filters candidates by their physical USB parent. The opened descriptor must independently match the wired Edge identity. An input session owns one virtual gamepad. When the session ends, discovery resumes and the next session creates a fresh gamepad. An explicit device path remains a single-session diagnostic option. [hidraw discovery reference](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/Documentation/hid/hidraw.rst#L23-L54)
+
+## Phase 3 first increment
+
+Recorded 2026-11-22. The pure engine integrates calibrated device-axis angular velocity into aim deltas and estimates gravity by correcting the gyro prediction with near-1 g acceleration. The sensor factory conversion and Linux mouse output stay outside the crate. Runtime bias estimation remains open. A stationary flag alone is insufficient for learning because it can also classify slow deliberate rotation as stationary. [Motion contract](MOTION_CONTRACT.md)
