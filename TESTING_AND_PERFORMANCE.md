@@ -319,10 +319,10 @@ writes through both paths without physical vibration. To check whether
 device gain suppresses the pulse, close other controller applications and
 repeat the physical test with `--reset-gain`. This restores the device-wide
 gain to the Linux default of 100% before the pulse. Compare the direct
-result over Bluetooth if USB still produces no vibration. In the follow-up
-test the standard DualSense vibrated when addressed directly. Its virtual
-gamepad reported no rumble capability. The Edge produced no vibration from
-either path.
+result over Bluetooth if USB still produces no vibration. The user later
+confirmed that the standard DualSense vibrated through both the virtual and
+direct tests. The Edge's vibration had been disabled in the controller
+settings.
 
 To compare the Edge's legacy USB mode, stop the bridge and any other
 controller clients, leave the Edge connected over USB, and use the hidraw
@@ -336,8 +336,11 @@ cargo run --locked -p joyshockrust-linux --example rumble_test -- --edge-usb-leg
 Check that vibration stops when the effect ends, the client exits or the
 controller disconnects. For in-game compatibility, record the game, Proton
 version and Steam Input setting.
-Reconnect and repeat over the other transport. If permissions prevent
-opening the physical node, check that the bridge names the force feedback
+Disconnect and reconnect the controller with the same bridge process
+running. Wait for a new `Rumble forwarding ready` line and repeat the
+pulse test. The bridge allows up to one second for the rumble evdev node
+and its permissions to become available. Repeat over the other transport.
+If permissions prevent opening the physical node, check that the bridge names the force feedback
 node in its error and that normal input still works. Install the optional
 [rumble udev rule](README.md#virtual-gamepad-on-linux) in an active local
 session, reconnect and repeat the test. The ignored `uinput_rumble_gamepad_advertises_ff_rumble`

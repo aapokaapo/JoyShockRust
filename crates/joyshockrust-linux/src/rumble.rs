@@ -3,15 +3,24 @@ use std::{
     ffi::OsStr,
     fs::{File, OpenOptions},
     io,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::{
+        fd::AsFd,
+        unix::fs::{MetadataExt, OpenOptionsExt},
+    },
+    time::{Duration, Instant},
 };
 
 use evdev::{
     Device, EventSummary, FFEffect, FFEffectCode, FFEffectKind, UInputCode, uinput::VirtualDevice,
 };
-use nix::libc;
+use nix::{
+    libc,
+    poll::{PollFd, PollFlags, poll},
+};
 
 pub const EFFECT_SLOTS: usize = 16;
+const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+const PROBE_INTERVAL: Duration = Duration::from_millis(25);
 
 pub struct Rumble {
     physical: Device,
@@ -21,18 +30,49 @@ pub struct Rumble {
 
 impl Rumble {
     pub fn open(hidraw: &File) -> io::Result<Self> {
-        let hidraw =
+        let node =
             udev::Device::from_devnum(udev::DeviceType::Character, hidraw.metadata()?.rdev())?;
-        let hid = hidraw.parent_with_subsystem("hid")?.ok_or_else(|| {
+        let hid = node.parent_with_subsystem("hid")?.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
                 "could not find the controller's HID parent",
             )
         })?;
+        // hidraw can be ready before the evdev node and its active-seat ACL.
+        // Resolve that race before creating the virtual device, whose force
+        // feedback capabilities are fixed for the rest of this session.
+        let deadline = Instant::now() + PROBE_TIMEOUT;
+        open_when_ready(
+            || Self::probe(&hid),
+            || {
+                let delay = deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(PROBE_INTERVAL);
+                if delay.is_zero() {
+                    return Ok(false);
+                }
+
+                // Observe hangups without consuming queued HID reports.
+                let mut fds = [PollFd::new(hidraw.as_fd(), PollFlags::empty())];
+                poll(&mut fds, delay.as_millis().max(1) as u16)?;
+                let flags = fds[0].revents().unwrap_or_else(PollFlags::empty);
+                if flags.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        "controller detached before force feedback was ready",
+                    ));
+                }
+                Ok(true)
+            },
+        )
+    }
+
+    fn probe(hid: &udev::Device) -> io::Result<Self> {
         let mut devices = udev::Enumerator::new()?;
-        devices.match_parent(&hid)?;
+        devices.match_parent(hid)?;
         devices.match_subsystem("input")?;
         let mut open_error = None;
+        let mut has_candidate = false;
         for device in devices.scan_devices()? {
             if !device.sysname().as_encoded_bytes().starts_with(b"event") {
                 continue;
@@ -47,6 +87,7 @@ impl Rumble {
             if !has_force_feedback(input.attribute_value("capabilities/ff")) {
                 continue;
             }
+            has_candidate = true;
             let physical = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -69,18 +110,27 @@ impl Rumble {
                 }
                 Ok(_) => {}
                 Err(err) => {
-                    open_error = Some(io::Error::new(
-                        err.kind(),
-                        format!("{}: {err}", path.display()),
-                    ));
+                    let kind = if err.raw_os_error() == Some(libc::ENODEV) {
+                        io::ErrorKind::NotFound
+                    } else {
+                        err.kind()
+                    };
+                    open_error = Some(io::Error::new(kind, format!("{}: {err}", path.display())));
                 }
             }
         }
         Err(open_error.unwrap_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Unsupported,
-                "no physical evdev node advertises FF_RUMBLE",
-            )
+            if has_candidate {
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "no physical evdev node advertises FF_RUMBLE",
+                )
+            } else {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no physical force feedback evdev node found",
+                )
+            }
         }))
     }
 
@@ -176,6 +226,22 @@ impl Rumble {
     }
 }
 
+fn open_when_ready<T>(
+    mut probe: impl FnMut() -> io::Result<T>,
+    mut wait: impl FnMut() -> io::Result<bool>,
+) -> io::Result<T> {
+    loop {
+        match probe() {
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                ) && wait()? => {}
+            result => return result,
+        }
+    }
+}
+
 fn has_force_feedback(capabilities: Option<&OsStr>) -> bool {
     // Sysfs prints a whitespace-separated set of hexadecimal bitmap words.
     // Test for a nonzero bitmap independent of the kernel's word size.
@@ -200,5 +266,37 @@ mod tests {
         for bitmap in ["10000 0", "0 0000000a", "A0000 0 0"] {
             assert!(has_force_feedback(Some(OsStr::new(bitmap))));
         }
+    }
+    #[test]
+    fn waits_for_the_rumble_node_and_its_permissions() {
+        let mut probes = [
+            Err(io::ErrorKind::NotFound.into()),
+            Err(io::ErrorKind::PermissionDenied.into()),
+            Ok("ready"),
+        ]
+        .into_iter();
+        let mut waits = 0;
+        let opened = open_when_ready(
+            || probes.next().expect("only three probe attempts"),
+            || {
+                waits += 1;
+                Ok(true)
+            },
+        );
+        assert_eq!(opened.unwrap(), "ready");
+        assert_eq!(waits, 2);
+    }
+
+    #[test]
+    fn permanent_failure_and_expired_deadline_preserve_the_probe_error() {
+        let unsupported = open_when_ready::<()>(
+            || Err(io::ErrorKind::Unsupported.into()),
+            || panic!("unsupported devices should fall back immediately"),
+        );
+        assert_eq!(unsupported.unwrap_err().kind(), io::ErrorKind::Unsupported);
+
+        let denied =
+            open_when_ready::<()>(|| Err(io::ErrorKind::PermissionDenied.into()), || Ok(false));
+        assert_eq!(denied.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     }
 }

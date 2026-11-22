@@ -191,8 +191,10 @@ for the entire bridge run. Steam Input and Proton need hardware testing.
 Add `--rumble` to forward game vibration to the connected physical
 controller. The bridge uses the force feedback evdev node belonging to
 the same controller, which must be writable. Look for
-`Rumble forwarding ready` in the log. If the node is unavailable, the
-bridge reports the reason and starts the virtual gamepad without rumble.
+`Rumble forwarding ready` in the log. On each connection, the bridge
+allows up to one second for the physical evdev node and its permissions.
+If the node is still unavailable, the bridge reports the reason and starts
+the virtual gamepad without rumble.
 For a permission error in a local desktop session, the optional
 [udev rule](dist/udev/70-joyshockrust-rumble.rules) grants active-seat
 access to the force feedback nodes of supported DualSense controllers.
