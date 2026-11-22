@@ -152,7 +152,8 @@ The service needs the same hidraw and uinput access as a manual run.
 
 Query the running service with `$HOME/.local/bin/joyshockrust-linux --status`.
 The command prints `controller=waiting` or `controller=connected` and
-`gyro_configured=true` or `gyro_configured=false`. The gyro field describes
+`gyro_configured=true` or `gyro_configured=false`. The `transport` field
+reports `usb`, `bluetooth` or `none`. The gyro field describes
 the loaded profile. A hold or toggle binding can still suppress mouse output.
 The `last_reload` field reports `not_attempted` on startup, then `applied`
 or `rejected` after the bridge handles a reload. A bridge started without a
@@ -222,6 +223,12 @@ cargo run --locked -p joyshockrust-linux -- --bluetooth --gamepad xbox-series
 Append `--gyro-mouse` to use the controller's Bluetooth factory calibration
 for pointer output. Bluetooth discovery accepts full reports with a valid
 checksum and waits for reconnection after the device disconnects.
+
+Use `--auto-transport` to accept either connection in one run. When opening
+a session, the bridge tries USB first and then Bluetooth. It keeps the chosen
+connection until it disconnects and creates fresh virtual devices for the
+next session. `--diagnose --auto-transport` lists candidates for both
+transports.
 
 ## Experimental gyro mouse
 

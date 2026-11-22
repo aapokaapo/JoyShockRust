@@ -70,8 +70,10 @@ Xbox Series output on hardware. Per-game compatibility still needs evidence.
 
 The opt-in Bluetooth path discovers a paired DualSense Edge through udev and
 checks the descriptor bus and model. The parser verifies full input and
-factory calibration CRCs. Bluetooth hardware and reconnect tests remain
-open. [Bluetooth acceptance](TESTING_AND_PERFORMANCE.md#bluetooth-dualsense-edge-acceptance)
+factory calibration CRCs. The user verified Bluetooth on hardware.
+Automatic transport selection prefers an accessible USB node when opening a
+session and falls back to Bluetooth. Live switching after a disconnect
+awaits a hardware test. [Automatic transport acceptance](TESTING_AND_PERFORMANCE.md#automatic-transport-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.

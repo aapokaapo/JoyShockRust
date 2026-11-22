@@ -132,3 +132,9 @@ before decoding. The bridge accepts full Bluetooth input reports and
 validates their input CRC. Factory feature replies use the separate feature
 CRC seed. Both paths reuse the USB common report layout and calibration
 math. [Linux HID identity](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-core.c#L2870-L2877) · [Linux Bluetooth input](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1432-L1453) · [Linux feature CRC](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L783-L816)
+
+Updated 2026-11-22. Automatic transport selection tries USB candidates first,
+then Bluetooth candidates. The active descriptor determines report framing
+and factory calibration until the session ends. The next transport starts a
+new session with fresh virtual devices. The status snapshot includes the
+active transport. [Automatic transport acceptance](TESTING_AND_PERFORMANCE.md#automatic-transport-acceptance)

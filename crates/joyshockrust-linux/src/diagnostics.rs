@@ -3,24 +3,18 @@ use std::{
     path::Path,
 };
 
-use joyshockrust_input::Transport;
+use crate::discovery::{self, Selection};
 
-use crate::discovery;
-
-pub fn run(path: Option<&Path>, transport: Transport, mut output: impl Write) -> io::Result<()> {
+pub fn run(path: Option<&Path>, selection: Selection, mut output: impl Write) -> io::Result<()> {
     if let Some(path) = path {
-        check_edge(path, transport, &mut output)?;
+        check_edge(path, selection, &mut output)?;
     } else {
-        let nodes = discovery::edge_nodes(transport)?;
+        let nodes = discovery::edge_nodes(selection)?;
         if nodes.is_empty() {
-            writeln!(
-                output,
-                "No {} DualSense Edge hidraw nodes found.",
-                discovery::transport_name(transport)
-            )?;
+            writeln!(output, "No {} hidraw nodes found.", selection.description())?;
         }
-        for node in &nodes {
-            check_edge(node, transport, &mut output)?;
+        for (node, _) in &nodes {
+            check_edge(node, selection, &mut output)?;
         }
     }
     // Opening the builder checks the same permissions as startup. The
@@ -32,9 +26,9 @@ pub fn run(path: Option<&Path>, transport: Transport, mut output: impl Write) ->
     }
 }
 
-fn check_edge(path: &Path, transport: Transport, output: &mut impl Write) -> io::Result<()> {
-    match discovery::open_edge(path, transport) {
-        Ok(_) => writeln!(
+fn check_edge(path: &Path, selection: Selection, output: &mut impl Write) -> io::Result<()> {
+    match discovery::open_edge(path, selection) {
+        Ok((_, transport)) => writeln!(
             output,
             "{}: {} DualSense Edge, readable",
             path.display(),

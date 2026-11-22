@@ -10,6 +10,8 @@ use std::{
     time::Duration,
 };
 
+use joyshockrust_input::Transport;
+
 pub struct StatusSocket {
     listener: UnixListener,
     snapshot: Cell<Snapshot>,
@@ -17,7 +19,7 @@ pub struct StatusSocket {
 
 #[derive(Clone, Copy, Default)]
 struct Snapshot {
-    connected: bool,
+    transport: Option<Transport>,
     gyro_configured: bool,
 }
 
@@ -35,19 +37,25 @@ impl StatusSocket {
         self.listener.as_fd()
     }
 
-    pub fn update(&self, connected: bool, gyro_configured: bool) {
+    pub fn update(&self, transport: Option<Transport>, gyro_configured: bool) {
         self.snapshot.set(Snapshot {
-            connected,
+            transport,
             gyro_configured,
         });
     }
 
     pub fn respond(&self, last_reload: &str) -> io::Result<()> {
         let snapshot = self.snapshot.get();
-        let controller = if snapshot.connected {
+        let controller = if snapshot.transport.is_some() {
             "connected"
         } else {
             "waiting"
+        };
+        let transport = match snapshot.transport {
+            Some(Transport::Usb) => "usb",
+            Some(Transport::Bluetooth) => "bluetooth",
+            Some(Transport::Other) => "unknown",
+            None => "none",
         };
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
@@ -59,7 +67,7 @@ impl StatusSocket {
                     // Disconnected or slow clients must not interrupt input.
                     let _ = write!(
                         stream,
-                        "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\n",
+                        "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\n",
                         snapshot.gyro_configured
                     );
                 }
@@ -129,19 +137,24 @@ mod tests {
         };
         let (_sender, input) = UnixStream::pair().unwrap();
 
-        for (connected, gyro, expected) in [
+        for (transport, gyro, expected) in [
             (
-                false,
+                None,
                 true,
-                "version=1\ncontroller=waiting\ngyro_configured=true\nlast_reload=unavailable\n",
+                "version=1\ncontroller=waiting\ngyro_configured=true\nlast_reload=unavailable\ntransport=none\n",
             ),
             (
-                true,
+                Some(Transport::Bluetooth),
                 false,
-                "version=1\ncontroller=connected\ngyro_configured=false\nlast_reload=unavailable\n",
+                "version=1\ncontroller=connected\ngyro_configured=false\nlast_reload=unavailable\ntransport=bluetooth\n",
+            ),
+            (
+                Some(Transport::Usb),
+                true,
+                "version=1\ncontroller=connected\ngyro_configured=true\nlast_reload=unavailable\ntransport=usb\n",
             ),
         ] {
-            status.update(connected, gyro);
+            status.update(transport, gyro);
             let mut client = UnixStream::connect_addr(&address).unwrap();
             client
                 .set_read_timeout(Some(Duration::from_secs(2)))

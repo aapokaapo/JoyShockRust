@@ -269,7 +269,20 @@ and gradual trigger travel in Steam. Disconnect Bluetooth, reconnect the
 controller and check that the virtual device returns. Repeat with
 `--gyro-mouse` to check stationary pointer behavior and directional motion
 after factory calibration. The automated tests use synthetic frames and
-independent CRC values for both Bluetooth input and calibration.
+independent CRC values for both Bluetooth input and calibration. The user
+reported that Bluetooth input, gyro and reconnect worked with `c7c79b9`.
+
+## Automatic transport acceptance
+
+Start the bridge with `--auto-transport --gamepad xbox-series` and connect
+over Bluetooth with USB unplugged. Check the connection log for Bluetooth
+and test inputs in Steam. Disconnect Bluetooth, then connect USB while the
+bridge is still running. Check for a wired connection and test the virtual
+controller again. Unplug USB and reconnect Bluetooth to exercise the reverse
+transition. If both connections are visible at startup, the bridge tries USB
+first. When there is already a session, it keeps using it until disconnect.
+With a status socket configured, check that `--status` reports the active
+transport and reports `none` while waiting.
 
 ## Profile reload acceptance
 

@@ -36,10 +36,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "usage: joyshockrust-linux --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
-        "       joyshockrust-linux --diagnose [--bluetooth] [/dev/hidrawN]\n",
+        "       joyshockrust-linux --diagnose [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
-        "bridge options: [--bluetooth] [--gamepad generic|xbox360|xbox-series] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
+        "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -63,7 +63,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut reload_path = None;
     let mut status_path = None;
     let mut gamepad_kind = None;
-    let mut transport = Transport::Usb;
+    let mut selection = discovery::Selection::Usb;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
     let mut args = env::args_os().skip(1);
@@ -147,8 +147,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 _ => ProfileMode::Run,
             };
             profile_path = Some((PathBuf::from(file), mode));
-        } else if arg == "--bluetooth" && transport == Transport::Usb {
-            transport = Transport::Bluetooth;
+        } else if arg == "--bluetooth" || arg == "--auto-transport" {
+            if selection != discovery::Selection::Usb {
+                return Err("select only one transport option".into());
+            }
+            selection = if arg == "--bluetooth" {
+                discovery::Selection::Bluetooth
+            } else {
+                discovery::Selection::Auto
+            };
         } else if arg == "--gamepad" && gamepad_kind.is_none() {
             let value = args
                 .next()
@@ -211,7 +218,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             || diagnose
             || profile_path.is_some()
             || bridge_options
-            || transport == Transport::Bluetooth
+            || selection != discovery::Selection::Usb
             || mapping_options
         {
             return Err("select one socket command with only an optional socket path".into());
@@ -226,9 +233,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     }
     if diagnose {
         if profile_path.is_some() || bridge_options || mapping_options {
-            return Err("--diagnose takes only --bluetooth and an optional hidraw path".into());
+            return Err("--diagnose takes a transport option and an optional hidraw path".into());
         }
-        diagnostics::run(path.as_deref(), transport, std::io::stdout().lock())?;
+        diagnostics::run(path.as_deref(), selection, std::io::stdout().lock())?;
         return Ok(ExitCode::SUCCESS);
     }
     let (mut runtime, reload) = if let Some((profile_path, mode)) = profile_path {
@@ -236,7 +243,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
         if mode == ProfileMode::Install {
-            if bridge_options || transport == Transport::Bluetooth {
+            if bridge_options || selection != discovery::Selection::Usb {
                 return Err("--install-profile takes a source and an optional destination".into());
             }
             let destination = match path {
@@ -248,7 +255,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             return Ok(ExitCode::SUCCESS);
         }
         if mode == ProfileMode::Check
-            && (path.is_some() || bridge_options || transport == Transport::Bluetooth)
+            && (path.is_some() || bridge_options || selection != discovery::Selection::Usb)
         {
             return Err("--check-profile takes only a profile path".into());
         }
@@ -290,12 +297,12 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         .transpose()?;
     let status = status.as_ref();
     if let Some(status) = status {
-        status.update(false, runtime.gyro.is_some());
+        status.update(None, runtime.gyro.is_some());
     }
     let reload = reload.as_ref();
     let gamepad_kind = gamepad_kind.unwrap_or_default();
     if let Some(path) = path {
-        let mut input = discovery::open_edge(&path, transport)
+        let (mut input, transport) = discovery::open_edge(&path, selection)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
         serve_session(
             &mut input,
@@ -306,15 +313,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             transport,
         )?;
     } else {
-        discovery::run(transport, reload, status, |event| match event {
-            discovery::Event::Connected(input) => {
+        discovery::run(selection, reload, status, |event| match event {
+            discovery::Event::Connected(input, transport) => {
                 serve_session(input, &mut runtime, reload, status, gamepad_kind, transport)
             }
             discovery::Event::Reload(reload) => {
                 if let Some(next) = reload.load() {
                     runtime = next;
                     if let Some(status) = status {
-                        status.update(false, runtime.gyro.is_some());
+                        status.update(None, runtime.gyro.is_some());
                     }
                     reload.applied();
                 }
@@ -359,7 +366,7 @@ fn serve_session(
     let mut state = gamepad::GamepadState::new(gamepad_kind);
     let mut layer_state = gamepad::RemapState::default();
     if let Some(status) = status {
-        status.update(true, runtime.gyro.is_some());
+        status.update(Some(transport), runtime.gyro.is_some());
     }
     let result = forward_reports(input, transport, reload, status, |event| {
         let report = match event {
@@ -383,7 +390,7 @@ fn serve_session(
                 }
                 *runtime = next;
                 if let Some(status) = status {
-                    status.update(true, runtime.gyro.is_some());
+                    status.update(Some(transport), runtime.gyro.is_some());
                 }
                 reload.applied();
                 return Ok(());
@@ -407,7 +414,7 @@ fn serve_session(
         Ok(())
     });
     if let Some(status) = status {
-        status.update(false, runtime.gyro.is_some());
+        status.update(None, runtime.gyro.is_some());
     }
     let release = state.publish(joyshockrust_core::Controls::default(), |events| {
         output.emit(events)
