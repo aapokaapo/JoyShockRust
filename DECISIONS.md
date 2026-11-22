@@ -270,6 +270,12 @@ reconnects and reloads within the bridge process. They update only at
 session transitions.
 [Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
 
+Updated 2026-11-22. The Linux tests use a test-only thread-local allocation
+counter. It measures the steady-state USB decoding and mapping path and
+gyro integration with synthetic event sinks. Release builds use the
+standard allocator.
+[Allocation counter](https://docs.rs/allocation-counter/0.8.1/allocation_counter/)
+
 Updated 2026-11-22. The common DualSense payload supplies two contact slots.
 Grid bindings are opt-in in version 1 profiles. Either active slot can
 hold a touch binding. The mechanical click selects the first active slot's

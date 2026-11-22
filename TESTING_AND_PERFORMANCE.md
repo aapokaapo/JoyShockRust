@@ -608,3 +608,10 @@ requires separate evidence.
 
 ## Observability
 Counters for reports received/rejected, timestamp gaps, output writes, queue/backlog, reconnects and timer deadlines. Diagnostics must be buffered or collected outside the hot path; no synchronous per-sample logging.
+
+The Linux test suite checks the zero-heap-allocation target with synthetic
+USB reports through readiness polling, decoding, stick curves, remaps,
+touchpad bindings and gamepad event encoding. A second measurement
+covers gyro integration and relative mouse event encoding. Both checks
+use in-memory output sinks and start after configuration and device
+setup. Physical driver and IPC paths have separate acceptance tests.

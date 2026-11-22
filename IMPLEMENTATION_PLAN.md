@@ -153,6 +153,10 @@ Process-lifetime counters expose started and ended controller sessions.
 They allow repeated hotplug runs to verify transitions alongside the
 per-session input and output counters.
 
+The Linux test suite asserts zero heap allocations for steady-state USB
+report processing through mapped gamepad event encoding and for gyro
+integration through mouse event encoding. The checks run without hardware.
+
 The status socket reports virtual gamepad and mouse batch counts for the
 active connection. Synthetic tests cover output suppression and reset.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)

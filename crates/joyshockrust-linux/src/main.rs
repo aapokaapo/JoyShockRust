@@ -574,27 +574,8 @@ fn serve_session(
             if let Some(status) = status {
                 status.observe_battery(report.battery);
             }
-            let mut controls = runtime
-                .stick_curve
-                .map_or(report.controls, |curve| curve.apply(report.controls));
-            if runtime
-                .gyro
-                .is_some_and(|options| options.flick_stick.is_some())
-            {
-                controls.right_stick = Default::default();
-            }
-            let touch_buttons = runtime
-                .touchpad
-                .as_ref()
-                .map_or_else(Default::default, |grid| {
-                    grid.map(
-                        &mut controls.buttons,
-                        report.touch_contacts,
-                        &mut touch_click,
-                    )
-                });
-            let mut controls = runtime.remaps.apply(controls, &mut layer_state);
-            controls.buttons = controls.buttons.union(touch_buttons);
+            let controls =
+                map_gamepad_controls(runtime, &report, &mut layer_state, &mut touch_click);
             let gamepad_batch = state.publish(controls, |events| output.emit(events))?;
             let mouse_batch = if let Some(mouse) = &mut mouse {
                 mouse.publish(report)?
@@ -619,6 +600,33 @@ fn serve_session(
         output.emit(events)
     });
     result.and(release.map(|_| ()))
+}
+
+#[cfg(target_os = "linux")]
+fn map_gamepad_controls(
+    runtime: &profile::RuntimeOptions,
+    report: &joyshockrust_input::InputReport,
+    layer_state: &mut gamepad::RemapState,
+    touch_click: &mut touchpad::ClickState,
+) -> joyshockrust_core::Controls {
+    let mut controls = runtime
+        .stick_curve
+        .map_or(report.controls, |curve| curve.apply(report.controls));
+    if runtime
+        .gyro
+        .is_some_and(|options| options.flick_stick.is_some())
+    {
+        controls.right_stick = Default::default();
+    }
+    let touch_buttons = runtime
+        .touchpad
+        .as_ref()
+        .map_or_else(Default::default, |grid| {
+            grid.map(&mut controls.buttons, report.touch_contacts, touch_click)
+        });
+    let mut controls = runtime.remaps.apply(controls, layer_state);
+    controls.buttons = controls.buttons.union(touch_buttons);
+    controls
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -789,6 +797,73 @@ mod tests {
             },
         );
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn steady_state_report_replay_does_not_allocate() {
+        const FRAMES: usize = 64;
+        let profile = super::profile::parse(
+            r#"
+            version = 1
+            stick_curve = 1.5
+            remap_buttons = ["cross=triangle"]
+            layer_remaps = ["l1:cross=circle"]
+            [touchpad]
+            rows = 1
+            columns = 1
+            [[touchpad.regions]]
+            row = 1
+            column = 1
+            touch = "square"
+            click = "r3"
+            "#,
+        )
+        .unwrap();
+        let (sender, receiver) = UnixDatagram::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[1..=4].fill(128);
+        frame[37] = 0x80;
+        for index in 0..FRAMES {
+            let active = index % 2 == 0;
+            frame[1] = if active { 196 } else { 128 };
+            frame[8] = if active { 0x28 } else { 8 };
+            frame[9] = u8::from(active);
+            frame[10] = if active { 2 } else { 0 };
+            frame[33] = if active { 1 } else { 0x80 };
+            sender.send(&frame).unwrap();
+        }
+        // A zero-length datagram exits the read loop like end of input.
+        sender.send(&[]).unwrap();
+        let mut input = File::from(OwnedFd::from(receiver));
+        let mut pad = super::gamepad::GamepadState::default();
+        let mut layer = super::gamepad::RemapState::default();
+        let mut click = super::touchpad::ClickState::default();
+        let mut reports = 0;
+        let mut batches = 0;
+        let allocations = allocation_counter::measure(|| {
+            super::forward_reports(&mut input, USB_EDGE, None, None, None, None, |event| {
+                let super::SessionEvent::Report(report) = event else {
+                    unreachable!()
+                };
+                let controls =
+                    super::map_gamepad_controls(&profile, &report, &mut layer, &mut click);
+                if pad.publish(controls, |events| {
+                    std::hint::black_box(events);
+                    Ok(())
+                })? {
+                    batches += 1;
+                }
+                reports += 1;
+                Ok(super::ControlFlow::Continue(()))
+            })
+            .unwrap();
+        });
+        assert_eq!(reports, FRAMES);
+        assert_eq!(batches, FRAMES);
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
     }
 
     #[test]

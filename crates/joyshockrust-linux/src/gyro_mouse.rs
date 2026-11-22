@@ -317,12 +317,25 @@ mod tests {
         let mut aim = aim(false);
         assert_eq!(aim.advance(sample(0), true), [0, 0]);
         let mut total = [0, 0];
-        for step in 1..=10 {
-            let delta = aim.advance(sample(step * 3000), true);
-            total[0] += delta[0];
-            total[1] += delta[1];
-        }
+        let mut batches = 0;
+        let allocations = allocation_counter::measure(|| {
+            for step in 1..=10 {
+                let delta = aim.advance(sample(step * 3000), true);
+                total[0] += delta[0];
+                total[1] += delta[1];
+                if emit_movement(delta, |events| {
+                    std::hint::black_box(events);
+                    Ok(())
+                })
+                .unwrap()
+                {
+                    batches += 1;
+                }
+            }
+        });
         assert_eq!(total, [-4, 2]);
+        assert!(batches > 0);
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
     }
 
     #[test]
