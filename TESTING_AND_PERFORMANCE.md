@@ -177,12 +177,11 @@ cargo run --locked -p joyshockrust-linux -- \
 ```
 
 In Steam's **Test Device Inputs**, hold physical Cross throughout. It should
-start as virtual Triangle. Hold L1 to switch to Circle and then hold R1 as
-well to switch to Square. Release R1 for Circle, then release L1 for
-Triangle. Release Cross and confirm all four face buttons are up. L1 and
-R1 should also show their usual states. Press physical L3 with only L1 held
-and verify it maps to R3. Press L3 with both modifiers held and verify it
-outputs L3 because the R1 layer exclusively takes over.
+start as virtual Triangle. Hold L1 to switch to Circle, then press R1 while
+still holding L1. Cross should remain Circle, L3 should still map to R3,
+and R1 should show its ordinary virtual state. Release L1 while holding R1
+and check that Cross returns to Triangle. Release and press R1 again to
+switch Cross to Square. Finally release all buttons and confirm they are up.
 
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.

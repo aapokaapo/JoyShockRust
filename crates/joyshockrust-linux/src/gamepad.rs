@@ -17,6 +17,12 @@ struct RemapLayer {
     rules: Vec<(Button, Button)>,
 }
 
+#[derive(Default)]
+pub struct RemapState {
+    active: Option<usize>,
+    previous: Buttons,
+}
+
 impl ButtonRemaps {
     pub fn add(&mut self, spec: &str) -> Result<(), &'static str> {
         add_rule(&mut self.base, parse_rule(spec)?)
@@ -44,15 +50,23 @@ impl ButtonRemaps {
         }
     }
 
-    pub fn apply(&self, mut controls: Controls) -> Controls {
+    pub fn apply(&self, mut controls: Controls, state: &mut RemapState) -> Controls {
         let physical = controls.buttons;
+        if state
+            .active
+            .is_some_and(|i| !physical.contains(self.layers[i].modifier))
+        {
+            state.active = None;
+        }
+        if state.active.is_none() {
+            state.active = self.layers.iter().rposition(|layer| {
+                physical.contains(layer.modifier) && !state.previous.contains(layer.modifier)
+            });
+        }
+        state.previous = physical;
         let mut remaining = physical;
         let mut targets = Buttons::default();
-        let active_layer = self
-            .layers
-            .iter()
-            .rev()
-            .find(|layer| physical.contains(layer.modifier));
+        let active_layer = state.active.map(|i| &self.layers[i]);
         for &(source, target) in active_layer
             .into_iter()
             .flat_map(|layer| &layer.rules)
@@ -231,7 +245,7 @@ mod tests {
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
 
     #[test]
-    fn only_one_held_layer_overrides_base_rules() {
+    fn active_layer_stays_selected_until_its_modifier_is_released() {
         let mut remaps = ButtonRemaps::default();
         remaps.add("cross=triangle").unwrap();
         remaps.add("options=create").unwrap();
@@ -240,11 +254,15 @@ mod tests {
         remaps.add_layer("l1:l3=r3").unwrap();
         assert!(remaps.add_layer("l1:cross=square").is_err());
 
-        for (left, right, expected) in [
-            (false, false, Button::North),
-            (true, false, Button::East),
-            (false, true, Button::West),
-            (true, true, Button::West),
+        let mut state = RemapState::default();
+        for (left, right, expected, left_layer_active) in [
+            (false, false, Button::North, false),
+            (true, false, Button::East, true),
+            (true, true, Button::East, true),
+            (false, true, Button::North, false),
+            (false, false, Button::North, false),
+            (false, true, Button::West, false),
+            (true, true, Button::West, false),
         ] {
             let mut physical = Controls::default();
             for button in [Button::South, Button::Start, Button::LeftStick] {
@@ -256,14 +274,25 @@ mod tests {
             if right {
                 physical.buttons.insert(Button::RightShoulder);
             }
-            let mapped = remaps.apply(physical).buttons;
+            let mapped = remaps.apply(physical, &mut state).buttons;
             for face in [Button::South, Button::East, Button::West, Button::North] {
                 assert_eq!(mapped.contains(face), face == expected);
             }
             assert!(mapped.contains(Button::Select));
-            assert_eq!(mapped.contains(Button::RightStick), left && !right);
-            assert_eq!(mapped.contains(Button::LeftStick), !left || right);
+            assert_eq!(mapped.contains(Button::RightStick), left_layer_active);
+            assert_eq!(mapped.contains(Button::LeftStick), !left_layer_active);
+            assert_eq!(mapped.contains(Button::RightShoulder), right);
         }
+
+        remaps.add_layer("l1:r1=l2").unwrap();
+        let mut state = RemapState::default();
+        let mut physical = Controls::default();
+        physical.buttons.insert(Button::LeftShoulder);
+        remaps.apply(physical, &mut state);
+        physical.buttons.insert(Button::RightShoulder);
+        let buttons = remaps.apply(physical, &mut state).buttons;
+        assert!(buttons.contains(Button::LeftTrigger));
+        assert!(!buttons.contains(Button::RightShoulder));
     }
 
     #[test]
@@ -276,10 +305,11 @@ mod tests {
         let mut layered = base;
         layered.buttons.insert(Button::LeftShoulder);
         let mut gamepad = GamepadState::default();
+        let mut layer = RemapState::default();
         let mut batches = Vec::new();
         for controls in [base, layered, base, Controls::default()] {
             gamepad
-                .publish(remaps.apply(controls), |events| {
+                .publish(remaps.apply(controls, &mut layer), |events| {
                     batches.push(
                         events
                             .iter()
@@ -316,10 +346,14 @@ mod tests {
         remaps.add("circle=cross").unwrap();
         let mut raw = Controls::default();
         raw.buttons.insert(Button::South);
-        let virtual_buttons = remaps.apply(raw).buttons;
+        let mut layer = RemapState::default();
+        let virtual_buttons = remaps.apply(raw, &mut layer).buttons;
         assert!(!virtual_buttons.contains(Button::South));
         assert!(virtual_buttons.contains(Button::East));
-        assert_eq!(remaps.apply(Controls::default()), Controls::default());
+        assert_eq!(
+            remaps.apply(Controls::default(), &mut layer),
+            Controls::default()
+        );
         assert!(remaps.add("cross=r1").is_err());
         assert!(remaps.add("l1=fn-left").is_err());
     }
@@ -329,6 +363,7 @@ mod tests {
         let mut remaps = ButtonRemaps::default();
         remaps.add("cross=circle").unwrap();
         let mut state = GamepadState::default();
+        let mut layer = RemapState::default();
         let mut changes = Vec::new();
         let mut emit = |events: &[InputEvent]| {
             changes.extend(events.iter().map(|event| (event.code(), event.value())));
@@ -336,11 +371,17 @@ mod tests {
         };
         let mut raw = Controls::default();
         raw.buttons.insert(Button::South);
-        state.publish(remaps.apply(raw), &mut emit).unwrap();
+        state
+            .publish(remaps.apply(raw, &mut layer), &mut emit)
+            .unwrap();
         raw.buttons.insert(Button::East);
-        state.publish(remaps.apply(raw), &mut emit).unwrap();
+        state
+            .publish(remaps.apply(raw, &mut layer), &mut emit)
+            .unwrap();
         raw.buttons.remove(Button::South);
-        state.publish(remaps.apply(raw), &mut emit).unwrap();
+        state
+            .publish(remaps.apply(raw, &mut layer), &mut emit)
+            .unwrap();
         state.publish(Controls::default(), &mut emit).unwrap();
         assert_eq!(changes, [(Key::BTN_EAST.0, 1), (Key::BTN_EAST.0, 0)]);
     }

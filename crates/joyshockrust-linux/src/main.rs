@@ -143,9 +143,12 @@ fn serve_session(
     let mut output = gamepad::open()
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
     let mut state = gamepad::GamepadState::default();
+    let mut layer_state = gamepad::RemapState::default();
     let result = forward_reports(input, |report| {
         let controls = stick_curve.map_or(report.controls, |curve| curve.apply(report.controls));
-        state.publish(remaps.apply(controls), |events| output.emit(events))?;
+        state.publish(remaps.apply(controls, &mut layer_state), |events| {
+            output.emit(events)
+        })?;
         if let Some(mouse) = &mut mouse {
             mouse.publish(report)?;
         }

@@ -113,9 +113,11 @@ button. Analog trigger travel is forwarded independently.
 Layer rules use a separate, repeatable `--layer-remap MODIFIER:SOURCE=TARGET`
 option. For example, use `--layer-remap l1:cross=circle --layer-remap r1:cross=square`.
 Rules sharing a modifier belong to the same layer. At most one layer is
-active. If several modifiers are held, the layer introduced last on the
-command line takes over. Unmapped buttons in the selected layer fall back
-to base rules. The modifier still follows its own button mapping.
+active. Once selected, it stays active until its modifier is released.
+Other modifiers act like ordinary buttons while it is active. A modifier
+held across layer exit must be pressed again to select its layer.
+If multiple new modifiers arrive in the same report while no layer is
+active, the last-declared layer wins. Unmapped buttons use base rules. The modifier still follows its own button mapping.
 
 Replace the former `--remap-layer l1 --remap-button cross=circle` syntax
 with `--layer-remap l1:cross=circle`.
