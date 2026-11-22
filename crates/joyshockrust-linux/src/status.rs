@@ -127,23 +127,21 @@ pub fn query(path: Option<&Path>, mut output: impl Write) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn connect(path: Option<&Path>, socket_name: &str) -> io::Result<UnixStream> {
-    let default_path;
-    let path = if let Some(path) = path {
-        path
-    } else {
-        default_path = PathBuf::from(
-            env::var_os("XDG_RUNTIME_DIR")
-                .filter(|dir| !dir.is_empty())
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset")
-                })?,
-        )
+pub(crate) fn socket_path(path: Option<&Path>, socket_name: &str) -> io::Result<PathBuf> {
+    if let Some(path) = path {
+        return Ok(path.to_path_buf());
+    }
+    let runtime = env::var_os("XDG_RUNTIME_DIR")
+        .filter(|dir| !dir.is_empty())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
+    Ok(PathBuf::from(runtime)
         .join("joyshockrust")
-        .join(socket_name);
-        &default_path
-    };
-    let stream = UnixStream::connect(path).map_err(|err| {
+        .join(socket_name))
+}
+
+pub(crate) fn connect(path: Option<&Path>, socket_name: &str) -> io::Result<UnixStream> {
+    let path = socket_path(path, socket_name)?;
+    let stream = UnixStream::connect(&path).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!("could not connect to {}: {err}", path.display()),

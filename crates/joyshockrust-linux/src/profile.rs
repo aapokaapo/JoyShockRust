@@ -21,8 +21,7 @@ use crate::{
 #[serde(deny_unknown_fields)]
 struct Profile {
     version: u32,
-    #[serde(default)]
-    bridge: BridgeOptions,
+    bridge: Option<BridgeOptions>,
     stick_curve: Option<f32>,
     #[serde(default)]
     remap_buttons: Vec<String>,
@@ -37,6 +36,8 @@ struct Gyro {
     #[serde(default)]
     calibrate: bool,
     flick_stick: Option<f64>,
+    sensitivity_x: Option<f32>,
+    sensitivity_y: Option<f32>,
     binding: Option<GyroBinding>,
 }
 
@@ -66,7 +67,7 @@ pub struct BridgeOptions {
 }
 
 pub struct RuntimeOptions {
-    pub bridge: BridgeOptions,
+    pub bridge: Option<BridgeOptions>,
     pub stick_curve: Option<StickCurve>,
     pub remaps: ButtonRemaps,
     pub gyro: Option<gyro_mouse::Options>,
@@ -160,7 +161,7 @@ fn replace_file(destination: &Path, content: &[u8]) -> io::Result<()> {
     ))
 }
 
-fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
+pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
     let profile: Profile = toml::from_str(source)?;
     if profile.version != 1 {
         return Err(format!(
@@ -212,6 +213,10 @@ impl Gyro {
             calibrate: self.calibrate,
             binding,
             flick_stick,
+            sensitivity: gyro_mouse::Sensitivity::from_profile(
+                self.sensitivity_x,
+                self.sensitivity_y,
+            )?,
         })
     }
 }
@@ -224,10 +229,7 @@ mod tests {
 
     #[test]
     fn bridge_profiles_preserve_defaults_and_configure_output() {
-        assert_eq!(
-            parse("version = 1").unwrap().bridge,
-            BridgeOptions::default()
-        );
+        assert_eq!(parse("version = 1").unwrap().bridge, None);
         let profile = parse(
             r#"
             version = 1
@@ -239,7 +241,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            profile.bridge,
+            profile.bridge.unwrap(),
             BridgeOptions {
                 transport: Selection::Auto,
                 gamepad: OutputKind::XboxSeries,
@@ -250,7 +252,7 @@ mod tests {
             .unwrap()
             .bridge;
         assert_eq!(
-            partial,
+            partial.unwrap(),
             BridgeOptions {
                 gamepad: OutputKind::Xbox360,
                 ..BridgeOptions::default()
@@ -263,6 +265,28 @@ mod tests {
             "unknown = true",
         ] {
             assert!(parse(&format!("version = 1\n[bridge]\n{setting}")).is_err());
+        }
+    }
+
+    #[test]
+    fn gyro_sensitivity_defaults_independently_and_is_validated() {
+        use gyro_mouse::Sensitivity;
+
+        let partial = parse("version = 1\n[gyro]\nsensitivity_x = 12").unwrap();
+        assert_eq!(
+            partial.gyro.unwrap().sensitivity,
+            Sensitivity::from_profile(Some(12.0), Some(4.0)).unwrap()
+        );
+        let both = parse("version = 1\n[gyro]\nsensitivity_x = 0\nsensitivity_y = 2.5").unwrap();
+        assert_eq!(
+            both.gyro.unwrap().sensitivity,
+            Sensitivity::from_profile(Some(0.0), Some(2.5)).unwrap()
+        );
+        for field in ["sensitivity_x", "sensitivity_y"] {
+            for value in ["-1.0", "100.1", "nan", "inf"] {
+                let profile = format!("version = 1\n[gyro]\n{field} = {value}");
+                assert!(parse(&profile).is_err(), "{profile}");
+            }
         }
     }
 

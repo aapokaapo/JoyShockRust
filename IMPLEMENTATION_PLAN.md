@@ -95,6 +95,11 @@ physical DualSense IDs. Automated tests cover argument forwarding, existing
 filters and launch errors. Named game and backend checks remain open.
 [SDL visibility acceptance](TESTING_AND_PERFORMANCE.md#per-game-sdl-visibility-acceptance)
 
+Profiles define independent horizontal and vertical gyro scales. A CLI
+request can also apply a preset to the running service for the current
+session. The startup file remains available through the existing reload
+command. [Live gyro sensitivity acceptance](TESTING_AND_PERFORMANCE.md#live-gyro-sensitivity-acceptance)
+
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.
 

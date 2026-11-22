@@ -32,6 +32,30 @@ pub struct Options {
     pub calibrate: bool,
     pub binding: Binding,
     pub flick_stick: Option<f64>,
+    pub sensitivity: Sensitivity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sensitivity([f32; 2]);
+
+impl Default for Sensitivity {
+    fn default() -> Self {
+        Self([4.0; 2])
+    }
+}
+
+impl Sensitivity {
+    pub fn from_profile(x: Option<f32>, y: Option<f32>) -> Result<Self, &'static str> {
+        let [default_x, default_y] = Self::default().0;
+        let scales = [x.unwrap_or(default_x), y.unwrap_or(default_y)];
+        if !(0.0..=100.0).contains(&scales[0]) {
+            return Err("gyro.sensitivity_x must be between 0 and 100 counts per degree");
+        }
+        if !(0.0..=100.0).contains(&scales[1]) {
+            return Err("gyro.sensitivity_y must be between 0 and 100 counts per degree");
+        }
+        Ok(Self(scales))
+    }
 }
 
 pub fn validate_flick_scale(scale: f64) -> Result<f64, &'static str> {
@@ -58,11 +82,15 @@ impl GyroMouse {
             .with_relative_axes(&axes)?
             .build()?;
         Ok(Self {
-            aim: GyroAim::new(factory, options.calibrate),
+            aim: GyroAim::new(factory, options.calibrate, options.sensitivity),
             output,
             gate: GyroGate::new(options.binding),
             flick: options.flick_stick.map(FlickStick::new),
         })
+    }
+
+    pub fn set_sensitivity(&mut self, sensitivity: Sensitivity) {
+        self.aim.set_sensitivity(sensitivity);
     }
 
     pub fn publish(&mut self, report: InputReport) -> io::Result<()> {
@@ -96,11 +124,12 @@ struct GyroAim {
     motion: MotionEngine,
     calibration: Option<StationaryCalibration>,
     remainder: [f64; 2],
+    sensitivity: Sensitivity,
     was_enabled: bool,
 }
 
 impl GyroAim {
-    fn new(factory: FactoryCalibration, calibrate: bool) -> Self {
+    fn new(factory: FactoryCalibration, calibrate: bool, sensitivity: Sensitivity) -> Self {
         let config = Self::config();
         // The sensor clock advances at three ticks per microsecond.
         let max_gap_ticks = (config.max_gap_ns * 3 / 1_000) as u32;
@@ -111,6 +140,7 @@ impl GyroAim {
                 .expect("valid gyro mouse defaults"),
             calibration: calibrate.then(StationaryCalibration::default),
             remainder: [0.0; 2],
+            sensitivity,
             was_enabled: false,
         }
     }
@@ -119,10 +149,19 @@ impl GyroAim {
         MotionConfig {
             // Linux pointer directions use the opposite signs to the
             // controller rotations used for horizontal and vertical aim.
-            sensitivity_x: -4.0,
-            sensitivity_y: -4.0,
+            sensitivity_x: -1.0,
+            sensitivity_y: -1.0,
             ..MotionConfig::default()
         }
+    }
+
+    fn set_sensitivity(&mut self, sensitivity: Sensitivity) {
+        for (axis, remainder) in self.remainder.iter_mut().enumerate() {
+            if self.sensitivity.0[axis] != sensitivity.0[axis] {
+                *remainder = 0.0;
+            }
+        }
+        self.sensitivity = sensitivity;
     }
 
     fn advance(&mut self, sample: RawImuSample, enabled: bool) -> [i32; 2] {
@@ -171,7 +210,8 @@ impl GyroAim {
         // Retain fractional movement so repeated sub-count deltas still move
         // the pointer. Clear these fractions on discontinuities.
         std::array::from_fn(|axis| {
-            let total = self.remainder[axis] + f64::from(output.aim_delta[axis]);
+            let total = self.remainder[axis]
+                + f64::from(output.aim_delta[axis]) * f64::from(self.sensitivity.0[axis]);
             let whole = total as i32;
             self.remainder[axis] = total - f64::from(whole);
             whole
@@ -209,7 +249,11 @@ mod tests {
         ] {
             report[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
         }
-        GyroAim::new(FactoryCalibration::from_report(&report).unwrap(), calibrate)
+        GyroAim::new(
+            FactoryCalibration::from_report(&report).unwrap(),
+            calibrate,
+            Sensitivity::default(),
+        )
     }
 
     fn sample(device_ticks: u32) -> RawImuSample {
@@ -231,6 +275,22 @@ mod tests {
             total[1] += delta[1];
         }
         assert_eq!(total, [-4, 2]);
+    }
+
+    #[test]
+    fn changing_one_sensitivity_does_not_change_other_axis_or_restart_motion() {
+        let mut aim = aim(false);
+        assert_eq!(aim.advance(sample(0), true), [0, 0]);
+        let mut total = [0, 0];
+        for step in 1..=9 {
+            let delta = aim.advance(sample(step * 3000), true);
+            total[0] += delta[0];
+            total[1] += delta[1];
+        }
+        assert_eq!(total, [-3, 1]);
+        aim.set_sensitivity(Sensitivity::from_profile(Some(20.0), None).unwrap());
+        // X emits at the new scale immediately. Y retains its fractional carry.
+        assert_eq!(aim.advance(sample(30_000), true), [-2, 1]);
     }
 
     #[test]

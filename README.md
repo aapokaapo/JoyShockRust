@@ -110,6 +110,32 @@ The profile is loaded at startup. Send SIGHUP to the running bridge PID
 to reload it. Invalid edits leave the last valid configuration active. Choose the profile or the equivalent CLI
 mapping flags for that run. You can still pass a hidraw path with `--profile`.
 
+Set horizontal and vertical gyro sensitivity independently in the
+`[gyro]` table.
+
+```toml
+[gyro]
+sensitivity_x = 12.0
+sensitivity_y = 2.0
+```
+
+Each axis defaults to 4 counts per degree and accepts values from 0 to 100.
+A value of 0 disables gyro motion on that axis. A sensitivity-only change
+keeps the existing gyro mouse and calibration. Flick Stick has its own
+sensitivity setting.
+
+With the user service running, load a preset into the current session.
+
+```sh
+"$HOME/.local/bin/joyshockrust-linux" --load-profile profiles/gyro-except-l2.toml
+```
+
+This replaces the live mappings and gyro settings as a complete profile.
+The service replies after applying or rejecting it. The profile can omit
+`[bridge]` to keep the startup settings. The loaded preset remains active
+until another load, a reload of the startup profile or a service restart.
+Use `--install-profile` to persist a preset for the next start.
+
 A profile can also select the bridge's startup options. Add this table to
 the active service profile to use automatic transport selection, Xbox
 Series output and rumble.
@@ -308,8 +334,9 @@ cargo run --locked -p joyshockrust-linux -- --gyro-mouse
 
 The bridge reads the controller's factory calibration and creates
 **JoyShockRust Gyro Mouse** alongside the virtual gamepad. You can append
-`/dev/hidrawN` to select one device explicitly. The initial sensitivity is
-four relative counts per degree on both axes. To measure residual gyro bias,
+`/dev/hidrawN` to select one device explicitly. The default sensitivity is
+four relative counts per degree on both axes. A TOML profile can set each
+axis independently. To measure residual gyro bias,
 add `--calibrate-gyro`, put the controller on a stable surface, and wait for
 `Gyro rest calibration complete`. Pointer output starts when the calibration
 window completes. The bias is measured again on each reconnect.

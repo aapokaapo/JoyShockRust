@@ -187,3 +187,12 @@ process launch. It leaves system device access in place and reports
 inherited allow-list conflicts. SDL's two lists have explicit precedence,
 so a successful launch alone supplies no evidence of a per-game result.
 [SDL filter precedence](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/src/joystick/SDL_gamepad.c#L2742-L2758)
+
+Updated 2026-11-22. Independent gyro sensitivity is applied after angular
+integration and before fractional pointer accumulation. Sensitivity-only
+changes preserve the motion timebase, calibration and virtual mouse.
+A CLI preset load sends up to 64 KiB of TOML over a companion datagram
+socket in the service runtime directory. The running bridge validates and
+applies it with the same transactional reload path. The startup profile
+remains the source for ordinary reload and restart.
+[Live gyro sensitivity acceptance](TESTING_AND_PERFORMANCE.md#live-gyro-sensitivity-acceptance)

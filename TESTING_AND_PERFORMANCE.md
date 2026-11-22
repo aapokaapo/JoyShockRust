@@ -385,6 +385,21 @@ Press Cross once. Record whether the game receives only the remapped B
 action, along with the game build, SDL version and Steam Input setting.
 A Proton comparison should include the Proton version.
 
+## Live gyro sensitivity acceptance
+
+Run the updated service with gyro configured. In a temporary copy of the
+active profile, set `sensitivity_x = 12.0` and `sensitivity_y = 2.0` in
+the `[gyro]` table. Run `joyshockrust-linux --load-profile PATH` and expect a
+success response. Compare equal rotations on each axis. Change only the
+vertical sensitivity and load the preset again. Confirm that horizontal
+aim retains its sensitivity and that calibration continues. Check that a
+negative sensitivity is rejected and that the last valid profile remains
+active. Run `joyshockrust-linux --reload-profile` to restore the startup
+profile.
+
+A manual bridge needs `--profile PATH --reload-socket SOCKET`. Pass the same
+`SOCKET` as the optional final argument to `--load-profile`.
+
 ## Profile reload acceptance
 
 Install the updated executable and unit. Reload the systemd user manager

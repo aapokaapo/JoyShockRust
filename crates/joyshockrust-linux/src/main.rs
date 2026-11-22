@@ -45,6 +45,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --diagnose [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
+        "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
         "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
@@ -67,6 +68,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut diagnose = false;
     let mut status_query = false;
     let mut reload_query = false;
+    let mut load_profile_path = None;
     let mut reload_path = None;
     let mut status_path = None;
     let mut gamepad_kind = None;
@@ -137,6 +139,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             status_query = true;
         } else if arg == "--reload-profile" && !reload_query {
             reload_query = true;
+        } else if arg == "--load-profile" && load_profile_path.is_none() {
+            load_profile_path = Some(PathBuf::from(
+                args.next()
+                    .ok_or("expected a profile path after --load-profile")?,
+            ));
         } else if arg == "--reload-socket" && reload_path.is_none() {
             reload_path = Some(PathBuf::from(
                 args.next().ok_or("expected a reload socket path")?,
@@ -228,21 +235,33 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mapping_options = gyro_mouse || stick_curve.is_some() || !remaps.is_empty();
     let bridge_options =
         status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some() || rumble_enabled;
-    if status_query || reload_query {
-        if (status_query && reload_query)
+    let socket_commands =
+        u8::from(status_query) + u8::from(reload_query) + u8::from(load_profile_path.is_some());
+    if socket_commands > 0 {
+        if socket_commands > 1
             || diagnose
             || profile_path.is_some()
             || bridge_options
             || transport.is_some()
             || mapping_options
         {
-            return Err("select one socket command with only an optional socket path".into());
+            return Err("select one socket command and provide its required arguments".into());
         }
         if status_query {
             status::query(path.as_deref(), std::io::stdout().lock())?;
-        } else if let Err(err) = reload::request(path.as_deref()) {
-            eprintln!("{err}");
-            return Ok(ExitCode::FAILURE);
+        } else {
+            let result = if let Some(source) = load_profile_path.as_deref() {
+                reload::load_profile(source, path.as_deref())
+            } else {
+                reload::request(path.as_deref())
+            };
+            if let Err(err) = result {
+                eprintln!("{err}");
+                return Ok(ExitCode::FAILURE);
+            }
+            if let Some(source) = load_profile_path {
+                println!("Loaded profile: {}", source.display());
+            }
         }
         return Ok(ExitCode::SUCCESS);
     }
@@ -288,7 +307,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             println!("Valid profile: {}", profile_path.display());
             return Ok(ExitCode::SUCCESS);
         }
-        let reload = reload::Reload::new(profile_path, reload_path.as_deref(), profile.bridge)?;
+        let reload = reload::Reload::new(
+            profile_path,
+            reload_path.as_deref(),
+            profile.bridge.unwrap_or_default(),
+        )?;
         (profile, Some(reload))
     } else {
         if reload_path.is_some() {
@@ -296,7 +319,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         }
         (
             profile::RuntimeOptions {
-                bridge: profile::BridgeOptions::default(),
+                bridge: None,
                 gyro: gyro_mouse.then_some(options),
                 stick_curve,
                 remaps,
@@ -316,10 +339,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         status.update(None, runtime.gyro.is_some());
     }
     let reload = reload.as_ref();
+    let configured_bridge = runtime.bridge.unwrap_or_default();
     let bridge = profile::BridgeOptions {
-        transport: transport.unwrap_or(runtime.bridge.transport),
-        gamepad: gamepad_kind.unwrap_or(runtime.bridge.gamepad),
-        rumble: rumble_enabled || runtime.bridge.rumble,
+        transport: transport.unwrap_or(configured_bridge.transport),
+        gamepad: gamepad_kind.unwrap_or(configured_bridge.gamepad),
+        rumble: rumble_enabled || configured_bridge.rumble,
     };
     if let Some(path) = path {
         let (mut input, identity) = discovery::open_controller(&path, bridge.transport)
@@ -417,7 +441,15 @@ fn serve_session(
                     let Some(next) = reload.load() else {
                         return Ok(());
                     };
-                    if runtime.gyro != next.gyro {
+                    if let (Some(mouse), Some(current), Some(next)) =
+                        (&mut mouse, runtime.gyro, next.gyro)
+                        && (gyro_mouse::Options {
+                            sensitivity: next.sensitivity,
+                            ..current
+                        }) == next
+                    {
+                        mouse.set_sensitivity(next.sensitivity);
+                    } else if runtime.gyro != next.gyro {
                         let input = reload_input.as_ref().expect("reload descriptor");
                         match open_mouse(input, identity.transport, next.gyro) {
                             Ok(next_mouse) => mouse = next_mouse,
