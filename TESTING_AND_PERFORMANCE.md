@@ -524,6 +524,14 @@ userspace batch limit. Measuring the depth of the kernel queue or
 physical packet loss requires separate evidence. The count resets after a
 disconnect.
 
+Read `uinput_gamepad_batches` before and after pressing and releasing a
+button. With the gyro mouse enabled, rotate the controller and check that
+`uinput_mouse_batches` increases. A report produces at most one batch per
+output, even when several controls or both mouse axes change. Automatic
+gyro and Flick Stick output share the mouse counter. Both counters reset
+on disconnect and persist across a profile reload. They count normal
+report output during the session.
+
 ## Rapid reconnect acceptance
 
 Start the bridge in auto-discovery mode and record its process ID.
@@ -555,8 +563,15 @@ target/release/joyshockrust-linux --benchmark-reports 10000 --profile "$profile"
 Run once with the pad resting, then again while moving it and exercising
 its controls. Repeat with USB unplugged and Bluetooth connected. Check
 `benchmark_transport` on each run, and restart the user service when
-finished. Optionally prefix the binary command with `/usr/bin/time -v`
-to record CPU time and peak RSS for the whole command.
+finished.
+
+`benchmark_wall_ns` spans the report loop, including waits. The
+`benchmark_cpu_user_us` and `benchmark_cpu_system_us` fields report
+process CPU time during the same window. `benchmark_cpu_percent` is the
+sum divided by wall time, with 100% representing one fully occupied CPU
+core. `benchmark_peak_rss_kib` is the process's peak resident memory up
+to the end of collection and includes the benchmark's sample buffers.
+Optionally use `/usr/bin/time -v` for a whole-command measurement.
 
 `processing_*_ns` spans the decoded report callback through virtual
 output submission when controls change. `host_interval_*_ns` measures

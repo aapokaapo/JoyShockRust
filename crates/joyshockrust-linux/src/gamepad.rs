@@ -272,7 +272,7 @@ impl GamepadState {
         &mut self,
         next: Controls,
         mut emit: impl FnMut(&[InputEvent]) -> io::Result<()>,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         let mut changes =
             [InputEvent::new(0, 0, 0); BUTTONS.len() + DIGITAL_TRIGGERS.len() + AXES.len()];
         let mut count = 0;
@@ -298,7 +298,7 @@ impl GamepadState {
             emit(&changes[..count])?;
         }
         self.current = next;
-        Ok(())
+        Ok(count > 0)
     }
 }
 
@@ -738,9 +738,9 @@ mod tests {
             );
             Ok(())
         };
-        gamepad.publish(controls, &mut capture).unwrap();
-        gamepad.publish(controls, &mut capture).unwrap();
-        gamepad.publish(Controls::default(), &mut capture).unwrap();
+        assert!(gamepad.publish(controls, &mut capture).unwrap());
+        assert!(!gamepad.publish(controls, &mut capture).unwrap());
+        assert!(gamepad.publish(Controls::default(), &mut capture).unwrap());
         assert_eq!(batches.len(), 2);
         assert_eq!(
             batches[0],

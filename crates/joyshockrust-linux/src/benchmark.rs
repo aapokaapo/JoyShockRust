@@ -4,6 +4,10 @@ use std::{
 };
 
 use joyshockrust_input::{Timebase, TimestampUpdate};
+use nix::sys::{
+    resource::{UsageWho, getrusage},
+    time::TimeValLike,
+};
 
 use crate::{discovery, hidraw::Identity};
 
@@ -27,6 +31,7 @@ pub struct Benchmark {
     wraps: usize,
     first: Option<Instant>,
     last: Option<Instant>,
+    resources: Option<ResourceTotals>,
     pub rejected: u64,
 }
 
@@ -46,6 +51,7 @@ impl Benchmark {
             wraps: 0,
             first: None,
             last: None,
+            resources: None,
             rejected: 0,
         }
     }
@@ -70,6 +76,11 @@ impl Benchmark {
 
     pub fn complete(&self) -> bool {
         self.processing_ns.len() == self.target
+    }
+
+    pub fn finish_resources(&mut self, start: Option<ResourceSnapshot>) {
+        self.resources =
+            start.and_then(|start| ResourceSnapshot::capture().map(|end| end.since(start)));
     }
 
     pub fn write(
@@ -99,6 +110,11 @@ impl Benchmark {
         writeln!(output, "reports_target={}", self.target)?;
         writeln!(output, "reports_measured={}", self.processing_ns.len())?;
         writeln!(output, "reports_rejected={}", self.rejected)?;
+        if let Some(resources) = &self.resources {
+            resources.write(&mut output)?;
+        } else {
+            writeln!(output, "benchmark_resources=unavailable")?;
+        }
         if let Some((first, last)) = self.first.zip(self.last)
             && last > first
         {
@@ -119,6 +135,58 @@ impl Benchmark {
         writeln!(output, "device_timestamp_gaps={}", self.gaps)?;
         writeln!(output, "device_timestamp_wraps={}", self.wraps)?;
         write_distribution(&mut output, "device_interval", &mut self.device_interval_ns)
+    }
+}
+
+pub struct ResourceSnapshot {
+    timestamp: Instant,
+    user_us: i64,
+    system_us: i64,
+    peak_rss_kib: u64,
+}
+
+impl ResourceSnapshot {
+    pub fn capture() -> Option<Self> {
+        let timestamp = Instant::now();
+        let usage = getrusage(UsageWho::RUSAGE_SELF).ok()?;
+        Some(Self {
+            timestamp,
+            user_us: usage.user_time().num_microseconds(),
+            system_us: usage.system_time().num_microseconds(),
+            peak_rss_kib: u64::try_from(usage.max_rss()).ok()?,
+        })
+    }
+
+    fn since(self, start: Self) -> ResourceTotals {
+        ResourceTotals {
+            wall: self.timestamp.duration_since(start.timestamp),
+            user_us: self.user_us - start.user_us,
+            system_us: self.system_us - start.system_us,
+            peak_rss_kib: self.peak_rss_kib,
+        }
+    }
+}
+
+struct ResourceTotals {
+    wall: Duration,
+    user_us: i64,
+    system_us: i64,
+    peak_rss_kib: u64,
+}
+
+impl ResourceTotals {
+    fn write(&self, output: &mut impl Write) -> io::Result<()> {
+        writeln!(output, "benchmark_wall_ns={}", nanos(self.wall))?;
+        writeln!(output, "benchmark_cpu_user_us={}", self.user_us)?;
+        writeln!(output, "benchmark_cpu_system_us={}", self.system_us)?;
+        if self.wall.is_zero() {
+            writeln!(output, "benchmark_cpu_percent=none")?;
+        } else {
+            let cpu_seconds = (self.user_us + self.system_us) as f64 / 1_000_000.0;
+            let percent = 100.0 * cpu_seconds / self.wall.as_secs_f64();
+            writeln!(output, "benchmark_cpu_percent={percent:.2}")?;
+        }
+        writeln!(output, "benchmark_peak_rss_kib={}", self.peak_rss_kib)
     }
 }
 
@@ -219,6 +287,29 @@ mod tests {
         assert_eq!(
             benchmark.device_interval_ns,
             [1_000_000, 1_000_000, 50_000_000, 1_000_000]
+        );
+    }
+
+    #[test]
+    fn resource_report_uses_cpu_deltas_and_the_final_process_peak() {
+        let timestamp = Instant::now();
+        let start = ResourceSnapshot {
+            timestamp,
+            user_us: 500_000,
+            system_us: 20_000,
+            peak_rss_kib: 3500,
+        };
+        let end = ResourceSnapshot {
+            timestamp: timestamp + Duration::from_secs(2),
+            user_us: 516_000,
+            system_us: 24_000,
+            peak_rss_kib: 3900,
+        };
+        let mut output = Vec::new();
+        end.since(start).write(&mut output).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "benchmark_wall_ns=2000000000\nbenchmark_cpu_user_us=16000\nbenchmark_cpu_system_us=4000\nbenchmark_cpu_percent=1.00\nbenchmark_peak_rss_kib=3900\n"
         );
     }
 }

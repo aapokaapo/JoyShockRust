@@ -33,6 +33,8 @@ struct ReportStats {
     decoded: u64,
     rejected: u64,
     full_batches: u64,
+    gamepad_batches: u64,
+    mouse_batches: u64,
     baseline: Option<(Instant, u64)>,
 }
 
@@ -90,6 +92,13 @@ impl StatusSocket {
         }
     }
 
+    pub fn observe_outputs(&self, gamepad: bool, mouse: bool) {
+        let mut reports = self.reports.get();
+        reports.gamepad_batches += u64::from(gamepad);
+        reports.mouse_batches += u64::from(mouse);
+        self.reports.set(reports);
+    }
+
     pub fn respond(&self, last_reload: &str) -> io::Result<()> {
         let snapshot = self.snapshot.get();
         let controller = if snapshot.identity.is_some() {
@@ -128,8 +137,13 @@ impl StatusSocket {
             .map(|rate| format!("{rate:.1}"));
         let rate = rate.as_deref().unwrap_or("none");
         let response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\n",
-            snapshot.gyro_configured, reports.decoded, reports.rejected, reports.full_batches
+            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\n",
+            snapshot.gyro_configured,
+            reports.decoded,
+            reports.rejected,
+            reports.full_batches,
+            reports.gamepad_batches,
+            reports.mouse_batches
         );
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
@@ -236,8 +250,11 @@ mod tests {
                 crate::SessionEvent::Report(_) => {
                     // Query on the next wake, after the current batch is counted.
                     if client.is_none() {
+                        status.observe_outputs(true, true);
                         client = Some(UnixStream::connect_addr(&address)?);
                         feedback_sender.send(b"stop")?;
+                    } else {
+                        status.observe_outputs(true, false);
                     }
                     Ok(std::ops::ControlFlow::Continue(()))
                 }
@@ -253,7 +270,7 @@ mod tests {
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         assert!(response.ends_with(
-            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\n"
+            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\n"
         ));
         let reports = status.reports.get();
         let (start, initial_count) = reports.baseline.unwrap();
@@ -266,6 +283,8 @@ mod tests {
         assert_eq!(reports.rate_hz(start + Duration::from_millis(999)), None);
         assert_eq!(reports.rate_hz(start + Duration::from_secs(2)), Some(250.0));
         assert_eq!(reports.rejected, 1);
+        assert_eq!(reports.gamepad_batches, 2);
+        assert_eq!(reports.mouse_batches, 1);
 
         status.update(None, true);
         status.update(Some(identity), true);
@@ -273,6 +292,8 @@ mod tests {
         assert_eq!(reports.decoded, 0);
         assert_eq!(reports.rejected, 0);
         assert_eq!(reports.baseline, None);
+        assert_eq!(reports.gamepad_batches, 0);
+        assert_eq!(reports.mouse_batches, 0);
     }
 
     #[test]
@@ -434,7 +455,7 @@ mod tests {
             client.read_to_string(&mut response).unwrap();
             assert_eq!(
                 response
-                    .strip_suffix("reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\n"),
+                    .strip_suffix("reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\n"),
                 Some(expected)
             );
         }

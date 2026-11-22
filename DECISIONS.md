@@ -252,6 +252,18 @@ after interruptions, and timeout uses the normal virtual-output cleanup
 path. Ordinary bridge runs wait for readiness without a deadline.
 [Live benchmarks](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
 
+Updated 2026-11-22. Status counts successful synchronized uinput output
+batches separately for the gamepad and mouse. Each output reports
+whether it emitted a batch. The status counters update only when a batch
+is emitted and reset with the HID session.
+[Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
+
+Updated 2026-11-22. The live benchmark samples `getrusage(RUSAGE_SELF)`
+on both sides of the report loop. CPU values are interval deltas. Peak RSS
+comes from the final process high-water mark and includes sample storage.
+The loop itself adds no resource queries.
+[Linux getrusage](https://man7.org/linux/man-pages/man2/getrusage.2.html)
+
 Updated 2026-11-22. The common DualSense payload supplies two contact slots.
 Grid bindings are opt-in in version 1 profiles. Either active slot can
 hold a touch binding. The mechanical click selects the first active slot's

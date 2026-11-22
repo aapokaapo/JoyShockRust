@@ -231,6 +231,7 @@ Use `--benchmark-reports COUNT` for a bounded live bridge benchmark. It
 reports processing, host and device report interval percentiles plus
 timestamp discontinuity counts after handling the requested count.
 Use `--benchmark-timeout SECONDS` to set the report collection deadline.
+The summary also reports CPU time and the process's peak resident memory.
 [Live benchmark instructions](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
 
 ## systemd user service
@@ -283,6 +284,8 @@ batch. It shows `none` until at least a second has elapsed and a later
 batch has supplied a valid report. The counters reset to zero on disconnect.
 The `report_full_batches` field counts batches that read all 32 report
 slots, including any parser rejections.
+`uinput_gamepad_batches` and `uinput_mouse_batches` count synchronized
+event batches successfully submitted by the bridge for this connection.
 The `last_reload` field reports `not_attempted` on startup, then `applied`
 or `rejected` after the bridge handles a reload. A bridge started without a
 profile reports `unavailable`. To request the same reload directly, run

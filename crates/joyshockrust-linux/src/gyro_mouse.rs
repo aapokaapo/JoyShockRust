@@ -114,7 +114,7 @@ impl GyroMouse {
         }
     }
 
-    pub fn publish(&mut self, report: InputReport) -> io::Result<()> {
+    pub fn publish(&mut self, report: InputReport) -> io::Result<bool> {
         let was_calibrating = self.aim.calibration.is_some();
         let enabled = self
             .gate
@@ -126,19 +126,26 @@ impl GyroMouse {
         if was_calibrating && self.aim.calibration.is_none() {
             eprintln!("Gyro rest calibration complete");
         }
-        let mut events = [InputEvent::new(0, 0, 0); 2];
-        let mut count = 0;
-        for (axis, delta) in [Axis::REL_X, Axis::REL_Y].into_iter().zip(movement) {
-            if delta != 0 {
-                events[count] = InputEvent::new(EventType::RELATIVE.0, axis.0, delta);
-                count += 1;
-            }
-        }
-        if count > 0 {
-            self.output.emit(&events[..count])?;
-        }
-        Ok(())
+        emit_movement(movement, |events| self.output.emit(events))
     }
+}
+
+fn emit_movement(
+    movement: [i32; 2],
+    emit: impl FnOnce(&[InputEvent]) -> io::Result<()>,
+) -> io::Result<bool> {
+    let mut events = [InputEvent::new(0, 0, 0); 2];
+    let mut count = 0;
+    for (axis, delta) in [Axis::REL_X, Axis::REL_Y].into_iter().zip(movement) {
+        if delta != 0 {
+            events[count] = InputEvent::new(EventType::RELATIVE.0, axis.0, delta);
+            count += 1;
+        }
+    }
+    if count > 0 {
+        emit(&events[..count])?;
+    }
+    Ok(count > 0)
 }
 
 struct GyroAim {
@@ -250,6 +257,24 @@ impl GyroAim {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_batch_requires_movement_and_successful_emission() {
+        assert!(!emit_movement([0, 0], |_| panic!("empty batch emitted")).unwrap());
+        assert!(
+            emit_movement([-4, 2], |events| {
+                assert_eq!(events.len(), 2);
+                assert_eq!(events[0].code(), Axis::REL_X.0);
+                assert_eq!(events[1].code(), Axis::REL_Y.0);
+                assert_eq!(events[0].value(), -4);
+                assert_eq!(events[1].value(), 2);
+                Ok(())
+            })
+            .unwrap()
+        );
+        let err = emit_movement([1, 0], |_| Err(io::ErrorKind::BrokenPipe.into())).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
 
     fn aim(calibrate: bool) -> GyroAim {
         let mut report = [0; 41];

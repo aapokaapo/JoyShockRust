@@ -486,7 +486,7 @@ fn serve_session(
     status: Option<&status::StatusSocket>,
     identity: Identity,
     bridge: profile::BridgeOptions,
-    measurement: Option<&mut benchmark::Benchmark>,
+    mut measurement: Option<&mut benchmark::Benchmark>,
 ) -> std::io::Result<()> {
     use std::os::fd::AsFd;
 
@@ -515,13 +515,16 @@ fn serve_session(
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());
     }
+    let resource_start = measurement
+        .as_ref()
+        .and_then(|_| benchmark::ResourceSnapshot::capture());
     let result = forward_reports(
         input,
         identity,
         reload,
         status,
         feedback.as_ref().map(AsFd::as_fd),
-        measurement,
+        measurement.as_deref_mut(),
         |event| {
             let report = match event {
                 SessionEvent::Report(report) => report,
@@ -592,20 +595,30 @@ fn serve_session(
                 });
             let mut controls = runtime.remaps.apply(controls, &mut layer_state);
             controls.buttons = controls.buttons.union(touch_buttons);
-            state.publish(controls, |events| output.emit(events))?;
-            if let Some(mouse) = &mut mouse {
-                mouse.publish(report)?;
+            let gamepad_batch = state.publish(controls, |events| output.emit(events))?;
+            let mouse_batch = if let Some(mouse) = &mut mouse {
+                mouse.publish(report)?
+            } else {
+                false
+            };
+            if let Some(status) = status
+                && (gamepad_batch || mouse_batch)
+            {
+                status.observe_outputs(gamepad_batch, mouse_batch);
             }
             Ok(ControlFlow::Continue(()))
         },
     );
+    if let Some(measurement) = measurement {
+        measurement.finish_resources(resource_start);
+    }
     if let Some(status) = status {
         status.update(None, runtime.gyro.is_some());
     }
     let release = state.publish(joyshockrust_core::Controls::default(), |events| {
         output.emit(events)
     });
-    result.and(release)
+    result.and(release.map(|_| ()))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -824,6 +837,7 @@ mod tests {
         });
         let mut input = File::from(OwnedFd::from(receiver));
         let mut measurement = super::benchmark::Benchmark::new(2, Duration::from_millis(20));
+        let resource_start = super::benchmark::ResourceSnapshot::capture();
         let result = super::forward_reports(
             &mut input,
             USB_EDGE,
@@ -838,11 +852,17 @@ mod tests {
         result.unwrap();
         assert!(measurement.timed_out);
         assert!(!measurement.complete());
+        measurement.finish_resources(resource_start);
         let mut report = Vec::new();
         measurement.write(USB_EDGE, false, &mut report).unwrap();
         let report = String::from_utf8(report).unwrap();
         assert!(report.lines().any(|line| line == "benchmark_end=timeout"));
         assert!(report.lines().any(|line| line == "reports_measured=0"));
+        assert!(
+            report
+                .lines()
+                .any(|line| line.starts_with("benchmark_cpu_percent="))
+        );
     }
 
     #[test]

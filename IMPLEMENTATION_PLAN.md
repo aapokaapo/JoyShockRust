@@ -136,6 +136,8 @@ Desktop controls are deferred until the broader GUI work.
 
 The benchmark can also terminate at a collection deadline and report a
 partial result. Synthetic tests cover a silent but connected input.
+The report includes wall time, process CPU time, CPU utilization and
+peak resident memory. Physical idle and active baselines remain open.
 
 The service counts full read batches. A synthetic burst test checks that
 the readiness loop answers status queries between batches and preserves
@@ -146,6 +148,10 @@ Discovery now tracks disconnected HID instances by sysfs path. Synthetic
 rescans cover stale entries, multiple disconnected candidates and reuse
 of a hidraw node name by the same model and transport.
 [Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
+
+The status socket reports virtual gamepad and mouse batch counts for the
+active connection. Synthetic tests cover output suppression and reset.
+[Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.
