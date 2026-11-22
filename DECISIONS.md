@@ -79,3 +79,7 @@ Only one remap layer is active at a time. The selected layer remains active unti
 The generic uinput gamepad emits Linux `BTN_X` for physical Square and `BTN_Y` for Triangle. Linux aliases those codes to `BTN_NORTH` and `BTN_WEST` respectively. SDL's Linux fallback uses X/Y for generic devices and position names for Sony devices. The USB parser retains the physical face positions. Sources checked 2026-11-22. [Linux event codes](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/include/uapi/linux/input-event-codes.h#L380-L389) · [SDL mapping](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/src/joystick/linux/SDL_sysjoystick.c#L2342-L2374)
 
 Experimental Flick Stick uses physical right-stick direction and device report timing. It starts an initial 100 ms turn at 90% radial travel, follows the shortest angular change while held, and re-arms below 75%. It clears queued motion on timestamp gaps and keeps the virtual right stick centered. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
+
+## Phase 5 first increment
+
+Recorded 2026-11-22. TOML profiles have a required schema version and reject unknown fields. Startup validates profile values with the same button and curve validators used by the CLI. The process owns one resolved configuration for all USB sessions. Live reload and persistence are future work. [Profile example](profiles/dualsense-edge.example.toml)

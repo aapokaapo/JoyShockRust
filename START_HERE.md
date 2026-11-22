@@ -2,8 +2,8 @@
 
 The prompt below records the Phase 0 assignment. For current work, start with
 the [implementation plan](IMPLEMENTATION_PLAN.md), [feature matrix](FEATURE_MATRIX.md)
-and [test evidence](TESTING_AND_PERFORMANCE.md). The current focus is Phase 4
-controller mappings.
+and [test evidence](TESTING_AND_PERFORMANCE.md). The current focus is Phase 5
+configuration and the control plane.
 
 You are the lead engineer building **JoyShockRust**, a new Linux-first Rust controller mapper. The attached project guide is authoritative. First read `AGENTS.md`, `README.md`, and every file in `docs/`.
 

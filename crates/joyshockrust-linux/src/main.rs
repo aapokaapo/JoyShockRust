@@ -11,6 +11,8 @@ mod gyro_mouse;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod hidraw;
+#[cfg(target_os = "linux")]
+mod profile;
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,6 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use joyshockrust_core::Button;
 
     const USAGE: &str = concat!(
+        "usage: joyshockrust-linux --profile PATH [/dev/hidrawN]\n",
+        "       joyshockrust-linux --check-profile PATH\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -29,6 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut gyro_mouse = false;
     let mut options = gyro_mouse::Options::default();
     let mut path = None;
+    let mut profile_path = None;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
     let mut args = env::args_os().skip(1);
@@ -84,6 +89,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => Binding::Toggle(button),
                 }
             };
+        } else if arg == "--profile" || arg == "--check-profile" {
+            if profile_path.is_some() {
+                return Err("select only one profile".into());
+            }
+            let file = args.next().ok_or("expected a profile path")?;
+            profile_path = Some((PathBuf::from(file), arg == "--check-profile"));
         } else if arg == "--flick-stick" {
             if options.flick_stick.is_some() {
                 return Err("select only one Flick Stick sensitivity".into());
@@ -94,9 +105,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let scale = value
                 .to_str()
                 .and_then(|value| value.parse::<f64>().ok())
-                .filter(|scale| (0.01..=100.0).contains(scale))
-                .ok_or("Flick Stick sensitivity must be between 0.01 and 100 counts per degree")?;
-            options.flick_stick = Some(scale);
+                .ok_or("invalid Flick Stick sensitivity")?;
+            options.flick_stick = Some(gyro_mouse::validate_flick_scale(scale)?);
         } else if arg == "--stick-curve" {
             if stick_curve.is_some() {
                 return Err("select only one stick curve".into());
@@ -130,7 +140,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("gyro options require --gyro-mouse".into());
     }
-    let options = gyro_mouse.then_some(options);
+    let profile::RuntimeOptions {
+        gyro: options,
+        stick_curve,
+        remaps,
+    } = if let Some((profile_path, check_only)) = profile_path {
+        if gyro_mouse || stick_curve.is_some() || !remaps.is_empty() {
+            return Err("use either a TOML profile or command-line mapping options".into());
+        }
+        if check_only && path.is_some() {
+            return Err("--check-profile does not take a device path".into());
+        }
+        let profile = profile::load(&profile_path)
+            .map_err(|err| format!("{}: {err}", profile_path.display()))?;
+        if check_only {
+            println!("Valid profile: {}", profile_path.display());
+            return Ok(());
+        }
+        profile
+    } else {
+        profile::RuntimeOptions {
+            gyro: gyro_mouse.then_some(options),
+            stick_curve,
+            remaps,
+        }
+    };
     if let Some(path) = path {
         let mut input = discovery::open_wired_edge(&path)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;

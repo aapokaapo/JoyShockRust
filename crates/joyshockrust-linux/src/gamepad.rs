@@ -24,6 +24,10 @@ pub struct RemapState {
 }
 
 impl ButtonRemaps {
+    pub fn is_empty(&self) -> bool {
+        self.base.is_empty() && self.layers.is_empty()
+    }
+
     pub fn add(&mut self, spec: &str) -> Result<(), &'static str> {
         add_rule(&mut self.base, parse_rule(spec)?)
     }
@@ -105,7 +109,10 @@ pub struct StickCurve(f32);
 
 impl StickCurve {
     pub fn parse(value: &str) -> Result<Self, &'static str> {
-        let exponent: f32 = value.parse().map_err(|_| "invalid stick curve exponent")?;
+        Self::new(value.parse().map_err(|_| "invalid stick curve exponent")?)
+    }
+
+    pub fn new(exponent: f32) -> Result<Self, &'static str> {
         if !(0.25..=4.0).contains(&exponent) {
             return Err("stick curve exponent must be between 0.25 and 4");
         }

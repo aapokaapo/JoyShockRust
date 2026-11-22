@@ -29,7 +29,7 @@ Correct controller behavior first; then low input-to-output latency, low jitter,
 
 ## Status
 
-Development is in **Phase 4**, controller mappings. The USB parser replays a
+Development has started **Phase 5**, configuration and the control plane. The USB parser replays a
 300-report capture. The Linux virtual gamepad, USB reconnect, gyro mouse
 startup, and digital hold and toggle gates have user-reported hardware tests.
 The analog trigger gate also passed the user's hardware check. Tap/hold and
@@ -81,6 +81,22 @@ forward device timestamp interval.
 ```sh
 cargo run -p joyshockrust-input --example live_usb_dump -- /dev/hidrawN
 ```
+
+## TOML profiles
+
+Start with the [example profile](profiles/dualsense-edge.example.toml):
+
+```sh
+cargo run --locked -p joyshockrust-linux -- --check-profile profiles/dualsense-edge.example.toml
+cargo run --locked -p joyshockrust-linux -- --profile profiles/dualsense-edge.example.toml
+```
+
+Profiles require `version = 1`. The optional `[gyro]` table enables the gyro
+mouse. The optional `[gyro.binding]` table takes `mode` and `input`. Modes are
+`hold`, `toggle`, `tap-hold`, `double-tap`, `chord` and `trigger`. Input uses
+the same button, chord or analog trigger syntax as the equivalent CLI flag.
+The profile is loaded at startup. Choose the profile or the equivalent CLI
+mapping flags for that run. You can still pass a hidraw path with `--profile`.
 
 ## Virtual gamepad on Linux
 

@@ -1,0 +1,12 @@
+version = 1
+stick_curve = 2.0
+remap_buttons = ["cross=triangle"]
+layer_remaps = ["l1:cross=circle", "r1:cross=square"]
+
+[gyro]
+calibrate = false
+# flick_stick = 4.0
+
+[gyro.binding]
+mode = "hold"
+input = "l2"

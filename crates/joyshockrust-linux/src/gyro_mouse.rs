@@ -34,6 +34,13 @@ pub struct Options {
     pub flick_stick: Option<f64>,
 }
 
+pub fn validate_flick_scale(scale: f64) -> Result<f64, &'static str> {
+    if !(0.01..=100.0).contains(&scale) {
+        return Err("Flick Stick sensitivity must be between 0.01 and 100 counts per degree");
+    }
+    Ok(scale)
+}
+
 impl GyroMouse {
     pub fn open(input: &File, options: Options) -> io::Result<Self> {
         let factory = super::hidraw::read_factory_calibration(input).map_err(|err| {

@@ -4,7 +4,7 @@ Each phase requires tests, documentation, a runnable demonstration when appropri
 
 ## Status on 2026-11-22
 
-Phase 4 mappings are the current development focus. Phases 0–3 established
+Phase 5 configuration is the current development focus. Phases 0–3 established
 source evidence, captured USB replay, a Linux USB input/output bridge and
 opt-in gyro aiming. Hardware evidence is partial. Residual bias calibration,
 per-axis aiming accuracy and timing benchmarks still need validation.
@@ -56,6 +56,8 @@ Digital holds and toggles passed the user's hardware check. The next increment a
 
 ## Phase 5 — config, IPC, CLI and systemd
 Versioned TOML, snapshots, Unix socket protocol, diagnostics, udev permissions, systemd user service. **Exit:** live reload at sample boundaries and service restart/reconnect tested.
+
+The first Phase 5 increment loads a versioned TOML profile at startup and validates it before opening devices. An offline check command and a sample profile are available. Live reload, IPC, profile persistence and systemd integration remain open.
 
 ## Phase 6 — compatibility and transports
 Bluetooth DualSense Edge, DualSense, additional controllers, virtual output compatibility, optional game-launch visibility helpers. **Exit:** per-device and per-game compatibility evidence.

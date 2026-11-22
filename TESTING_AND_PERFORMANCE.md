@@ -197,6 +197,17 @@ axis. Confirm the camera follows smoothly without a full-turn jump. Set
 the counts-per-degree value for the game's sensitivity before measuring
 the angles. Confirm the left stick still drives the virtual gamepad.
 
+The user reported that Flick Stick worked as expected.
+
+## TOML profile acceptance
+
+Validate `profiles/dualsense-edge.example.toml` with `--check-profile`,
+then start the bridge with `--profile` on a wired DualSense Edge.
+The example sets Cross to Triangle, L1+Cross to Circle and R1+Cross to
+Square. Its gyro mouse should move only while L2 is held. After stopping
+the bridge, copy the example and change its version to 2. Check that
+`--check-profile` rejects the copy.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 
