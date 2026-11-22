@@ -181,3 +181,9 @@ The bridge uses the Linux midpoint estimate for known charge states and
 reports an unavailable percentage on error states. The status snapshot
 holds the latest reading for the current session.
 [Linux input layout](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L235-L258) · [Linux battery decoding](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1582-L1611)
+
+Updated 2026-11-22. The launcher applies SDL's VID/PID ignore hint at
+process launch. It leaves system device access in place and reports
+inherited allow-list conflicts. SDL's two lists have explicit precedence,
+so a successful launch alone supplies no evidence of a per-game result.
+[SDL filter precedence](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/src/joystick/SDL_gamepad.c#L2742-L2758)

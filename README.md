@@ -267,6 +267,16 @@ active, the last-declared layer wins. Unmapped buttons use base rules. The modif
 Replace the former `--remap-layer l1 --remap-button cross=circle` syntax
 with `--layer-remap l1:cross=circle`.
 
+## Per-game SDL controller visibility
+
+Keep the JoyShockRust bridge running and launch a native SDL game with
+`joyshockrust-linux --launch-sdl -- GAME [ARGS...]`. The launcher passes
+the supported physical DualSense IDs to SDL's ignore list for that process.
+For a Steam title, set its launch options to
+`/absolute/path/to/joyshockrust-linux --launch-sdl -- %command%`.
+The game's input backend determines whether the hint takes effect.
+[Per-game visibility details](OUTPUT_AND_VISIBILITY.md#physical-controller-visibility)
+
 ## DualSense and DualSense Edge over Bluetooth
 
 Pair the controller in the Linux Bluetooth settings, then select the

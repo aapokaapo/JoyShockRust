@@ -87,8 +87,13 @@ tests with the profile. Changes to those settings apply on restart.
 [Rumble forwarding acceptance](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance)
 
 Battery and charging state are decoded on both transports and exposed in
-the session status. The reading clears on disconnect. Fedora validation
-of the new fields is pending. [Battery status acceptance](TESTING_AND_PERFORMANCE.md#battery-status-acceptance)
+the session status. The reading clears on disconnect. The user confirmed
+the new fields on Fedora. [Battery status acceptance](TESTING_AND_PERFORMANCE.md#battery-status-acceptance)
+
+The optional SDL launcher applies a per-process ignore list for supported
+physical DualSense IDs. Automated tests cover argument forwarding, existing
+filters and launch errors. Named game and backend checks remain open.
+[SDL visibility acceptance](TESTING_AND_PERFORMANCE.md#per-game-sdl-visibility-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.

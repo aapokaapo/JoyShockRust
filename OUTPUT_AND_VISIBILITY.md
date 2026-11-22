@@ -16,9 +16,20 @@ The daemon reads physical devices through hidraw. Games may also discover the ph
 
 **Decision:** default to *per-game environment-based filtering* when supported, not global device hiding. This is a compatibility feature of launch tooling, not part of the low-latency engine.
 
-Candidate SDL variable: `SDL_GAMECONTROLLER_IGNORE_DEVICES` with a **verified** VID/PID; this only affects consumers honoring that SDL setting and is **not guaranteed to hide evdev/HID devices from Proton or native applications**. Do not claim it works universally. Verify behavior with the actual game, Proton build and input backend. Do not automatically use the physical controller's VID/PID for the virtual controller.
+The Linux launcher appends Sony IDs `054c:0ce6` and `054c:0df2` to
+`SDL_GAMECONTROLLER_IGNORE_DEVICES` for the launched command. The filter
+applies to SDL consumers that honor this hint. Steam Input, Proton and
+consumers using evdev or HID directly have their own device discovery.
+The launcher preserves the existing ignore list, including SDL's
+`@file` syntax, and reports a conflict if an SDL allow list is set.
+[SDL ignore-list format](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/include/SDL3/SDL_hints.h#L897-L929)
 
-CLI should eventually offer `visibility inspect`, `visibility launch-options` and a guided test, showing physical and virtual IDs, affected APIs, limitations and results. Avoid privileged device isolation by default; document optional fallback only after verifying feasibility and safety.
+```sh
+joyshockrust-linux --launch-sdl -- GAME [ARGS...]
+```
+
+The bridge runs separately and continues reading the physical controller.
+See the [SDL visibility test](TESTING_AND_PERFORMANCE.md#per-game-sdl-visibility-acceptance).
 
 ## Acceptance
 A tested game receives input from the virtual device and not the physical device; provide a repeatable verification method. A successful launch variable alone does not count as proof.

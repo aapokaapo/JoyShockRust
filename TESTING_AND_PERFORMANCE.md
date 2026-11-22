@@ -370,7 +370,20 @@ charge and power settings, it can report `charging` or `full`. Unplug USB and
 disconnect Bluetooth so the bridge waits. Both battery fields should
 then be `none`. Reconnect over Bluetooth without a charging cable and
 check for `discharging`. Reload a mapping profile and check that the reading
-remains available during the same session.
+remains available during the same session. The user confirmed the battery
+status with `ff56188`.
+
+## Per-game SDL visibility acceptance
+
+Keep the Xbox Series virtual gamepad running. Choose a native SDL game with
+an input screen or a repeatable action. Use a temporary profile remap such
+as Cross to Circle so input from the physical controller and the virtual
+gamepad can be distinguished. Compare a baseline launch with
+`joyshockrust-linux --launch-sdl -- GAME`. In Steam, enter the launcher
+path followed by `--launch-sdl -- %command%` in the game's launch options.
+Press Cross once. Record whether the game receives only the remapped B
+action, along with the game build, SDL version and Steam Input setting.
+A Proton comparison should include the Proton version.
 
 ## Profile reload acceptance
 

@@ -14,6 +14,8 @@ mod gyro_mouse;
 #[allow(unsafe_code)]
 mod hidraw;
 #[cfg(target_os = "linux")]
+mod launch;
+#[cfg(target_os = "linux")]
 mod profile;
 #[cfg(target_os = "linux")]
 mod reload;
@@ -43,6 +45,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --diagnose [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
+        "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
         "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
@@ -71,7 +74,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut transport = None;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
-    let mut args = env::args_os().skip(1);
+    let mut args = env::args_os().skip(1).peekable();
+    if args.next_if(|arg| arg == "--launch-sdl").is_some() {
+        eprintln!("{}", launch::run(args));
+        return Ok(ExitCode::FAILURE);
+    }
     while let Some(arg) = args.next() {
         if arg == "--help" {
             println!("{USAGE}");
