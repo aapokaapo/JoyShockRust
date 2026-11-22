@@ -1,4 +1,8 @@
+use std::time::{Duration, Instant};
+
 use joyshockrust_core::{Button, Controls};
+
+const HOLD_TIME: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, Default)]
 pub enum Binding {
@@ -6,6 +10,7 @@ pub enum Binding {
     Always,
     Hold(Button),
     Toggle(Button),
+    TapHold(Button),
     AnalogTrigger(TriggerGate),
 }
 
@@ -64,6 +69,7 @@ pub struct GyroGate {
     binding: Binding,
     previous_pressed: Option<bool>,
     active: bool,
+    hold_deadline: Option<Instant>,
 }
 
 impl GyroGate {
@@ -72,10 +78,11 @@ impl GyroGate {
             binding,
             previous_pressed: None,
             active: false,
+            hold_deadline: None,
         }
     }
 
-    pub fn enabled(&mut self, controls: &Controls) -> bool {
+    pub fn enabled(&mut self, controls: &Controls, clock: impl FnOnce() -> Instant) -> bool {
         let buttons = controls.buttons;
         match self.binding {
             Binding::Always => true,
@@ -87,6 +94,7 @@ impl GyroGate {
                 }
                 self.active
             }
+            Binding::TapHold(button) => self.tap_hold(buttons.contains(button), clock()),
             Binding::AnalogTrigger(trigger) => {
                 let travel = trigger.travel(controls);
                 self.active = if self.active {
@@ -96,6 +104,25 @@ impl GyroGate {
                 };
                 self.active
             }
+        }
+    }
+
+    fn tap_hold(&mut self, pressed: bool, now: Instant) -> bool {
+        let previous = self.previous_pressed.replace(pressed);
+        if pressed {
+            if previous == Some(false) {
+                self.hold_deadline = Some(now + HOLD_TIME);
+            }
+            self.active || self.hold_deadline.is_some_and(|deadline| now >= deadline)
+        } else {
+            if self
+                .hold_deadline
+                .take()
+                .is_some_and(|deadline| now < deadline)
+            {
+                self.active = !self.active;
+            }
+            self.active
         }
     }
 }
@@ -138,9 +165,9 @@ mod tests {
     #[test]
     fn configurable_hold_tracks_only_the_selected_button() {
         let mut gate = GyroGate::new(Binding::Hold(button_by_name("r1").unwrap()));
-        assert!(!gate.enabled(&pressed(Button::LeftShoulder)));
-        assert!(gate.enabled(&pressed(Button::RightShoulder)));
-        assert!(!gate.enabled(&Controls::default()));
+        assert!(!gate.enabled(&pressed(Button::LeftShoulder), Instant::now));
+        assert!(gate.enabled(&pressed(Button::RightShoulder), Instant::now));
+        assert!(!gate.enabled(&Controls::default(), Instant::now));
     }
 
     #[test]
@@ -149,13 +176,46 @@ mod tests {
         let up = Controls::default();
         let down = pressed(Button::RightStick);
         let mut gate = GyroGate::new(binding);
-        assert!(!gate.enabled(&down)); // already held at session start
-        assert!(!gate.enabled(&up));
-        assert!(gate.enabled(&down));
-        assert!(gate.enabled(&down));
-        assert!(gate.enabled(&up));
-        assert!(!gate.enabled(&down));
-        assert!(!GyroGate::new(binding).enabled(&up));
+        assert!(!gate.enabled(&down, Instant::now)); // already held at session start
+        assert!(!gate.enabled(&up, Instant::now));
+        assert!(gate.enabled(&down, Instant::now));
+        assert!(gate.enabled(&down, Instant::now));
+        assert!(gate.enabled(&up, Instant::now));
+        assert!(!gate.enabled(&down, Instant::now));
+        assert!(!GyroGate::new(binding).enabled(&up, Instant::now));
+    }
+
+    #[test]
+    fn tap_toggles_and_long_hold_preserves_the_latched_state() {
+        let binding = Binding::TapHold(Button::RightStick);
+        let mut gate = GyroGate::new(binding);
+        let up = Controls::default();
+        let down = pressed(Button::RightStick);
+        let start = Instant::now();
+        let mut update =
+            |controls, ms| gate.enabled(controls, || start + Duration::from_millis(ms));
+
+        assert!(!update(&up, 0));
+        assert!(!update(&down, 10));
+        assert!(update(&up, 209)); // 199 ms tap toggles on
+        assert!(update(&down, 250));
+        assert!(update(&up, 450)); // exact cutoff, no intervening report
+        assert!(update(&down, 500));
+        assert!(!update(&up, 600)); // next tap toggles off
+        assert!(!update(&down, 650));
+        assert!(!update(&down, 849));
+        assert!(update(&down, 850));
+        assert!(!update(&up, 851));
+    }
+
+    #[test]
+    fn button_held_at_connection_does_not_start_tap_or_hold() {
+        let mut gate = GyroGate::new(Binding::TapHold(Button::RightStick));
+        let down = pressed(Button::RightStick);
+        let start = Instant::now();
+        assert!(!gate.enabled(&down, || start));
+        assert!(!gate.enabled(&down, || start + HOLD_TIME));
+        assert!(!gate.enabled(&Controls::default(), || start + HOLD_TIME));
     }
 
     #[test]
@@ -176,10 +236,10 @@ mod tests {
             (1.0, true),
         ] {
             controls.right_trigger = travel;
-            assert_eq!(gate.enabled(&controls), enabled, "{travel}");
+            assert_eq!(gate.enabled(&controls, Instant::now), enabled, "{travel}");
         }
         controls.right_trigger = 0.5;
-        assert!(!GyroGate::new(binding).enabled(&controls));
+        assert!(!GyroGate::new(binding).enabled(&controls, Instant::now));
     }
 
     #[test]

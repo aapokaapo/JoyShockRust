@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     const USAGE: &str = concat!(
         "usage: joyshockrust-linux [--gyro-mouse [--calibrate-gyro] [BINDING]] [/dev/hidrawN]\n",
-        "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-hold-l2 | ",
+        "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | --gyro-hold-l2 | ",
         "--gyro-trigger SIDE[:PRESS:RELEASE]",
     );
     let mut gyro_mouse = false;
@@ -37,7 +37,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             options.calibrate = true;
         } else if matches!(
             arg.to_str(),
-            Some("--gyro-hold-l2" | "--gyro-hold" | "--gyro-toggle" | "--gyro-trigger")
+            Some(
+                "--gyro-hold-l2"
+                    | "--gyro-hold"
+                    | "--gyro-toggle"
+                    | "--gyro-tap-hold"
+                    | "--gyro-trigger"
+            )
         ) {
             if !matches!(options.binding, Binding::Always) {
                 return Err("select only one gyro binding".into());
@@ -60,10 +66,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or_else(|| {
                         format!("unknown gyro binding button: {}", name.to_string_lossy())
                     })?;
-                if arg == "--gyro-hold" {
-                    Binding::Hold(button)
-                } else {
-                    Binding::Toggle(button)
+                match arg.to_str() {
+                    Some("--gyro-hold") => Binding::Hold(button),
+                    Some("--gyro-tap-hold") => Binding::TapHold(button),
+                    _ => Binding::Toggle(button),
                 }
             };
         } else if path.is_none() && !arg.as_encoded_bytes().starts_with(b"-") {

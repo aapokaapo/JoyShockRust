@@ -112,13 +112,20 @@ turns on with one R3 press, stays on through release, and turns off with
 the next press. Reconnect and confirm aim starts off again.
 
 The user confirmed that digital hold and toggle worked as expected on the
-Phase 4 test branch. The analog trigger gate still needs a hardware run.
+Phase 4 test branch. The user also reported that the analog trigger gate
+worked as expected at the next milestone.
 
 Start with `--gyro-mouse --gyro-trigger l2:0.60:0.40`. While rotating slowly,
 squeeze L2 through 60% travel to enable aim. Ease back to around 50% and
 confirm aim stays on. Release below 40% to turn it off. At around 50% again,
 aim should stay off until L2 crosses 60%. Repeat with `r2:0.60:0.40` to check
 the other trigger.
+
+For tap/hold, run with `--gyro-mouse --gyro-tap-hold r3`. Aim starts off.
+Tap R3 briefly to turn it on, then tap again to turn it off. Hold R3
+while rotating the controller. Aim should begin after 200 ms and stop on
+release. Repeat a long hold with aim already latched on. Aim should stay on
+after that release. Reconnect and confirm a fresh session starts off.
 
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.

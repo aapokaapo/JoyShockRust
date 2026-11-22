@@ -1,4 +1,8 @@
-use std::{fs::File, io, time::Duration};
+use std::{
+    fs::File,
+    io,
+    time::{Duration, Instant},
+};
 
 use evdev::{
     AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode, RelativeAxisCode as Axis,
@@ -50,7 +54,7 @@ impl GyroMouse {
 
     pub fn publish(&mut self, report: InputReport) -> io::Result<()> {
         let was_calibrating = self.aim.calibration.is_some();
-        let enabled = self.gate.enabled(&report.controls);
+        let enabled = self.gate.enabled(&report.controls, Instant::now);
         let movement = self.aim.advance(report.imu, enabled);
         if was_calibrating && self.aim.calibration.is_none() {
             eprintln!("Gyro rest calibration complete");

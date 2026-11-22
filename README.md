@@ -32,8 +32,9 @@ Correct controller behavior first; then low input-to-output latency, low jitter,
 Development is in **Phase 4**, controller mappings. The USB parser replays a
 300-report capture. The Linux virtual gamepad, USB reconnect, gyro mouse
 startup, and digital hold and toggle gates have user-reported hardware tests.
-The analog trigger gate is covered by automated tests. Timed mappings and
-Flick Stick remain open, along with profiles and the control plane.
+The analog trigger gate also passed the user's hardware check. Tap/hold
+classification is now covered by automated tests. General timed mappings,
+Flick Stick, profiles and the control plane remain open.
 
 See the [implementation plan](IMPLEMENTATION_PLAN.md), [test evidence](TESTING_AND_PERFORMANCE.md)
 and [source analysis](docs/REFERENCE_ANALYSIS.md).
@@ -120,7 +121,9 @@ For analog travel, use `--gyro-trigger l2` or `--gyro-trigger r2:0.60:0.40`.
 The default trigger engages at 45% travel and releases at 35%. Custom
 thresholds use `SIDE:PRESS:RELEASE` in the range 0–1, with the release
 threshold below the press threshold. Select one binding per session.
-Any binding can be combined with `--calibrate-gyro`.
+Any binding can be combined with `--calibrate-gyro`. Use
+`--gyro-tap-hold r3` to toggle on a tap or enable aim temporarily on a
+hold of at least 200 ms. Releasing a long hold restores the latched state.
 
 Supported button names are `cross`, `circle`, `square`, `triangle`,
 `l1`, `r1`, `l2`, `r2`, `l3`, `r3`, `create`, `options`, `ps`,
