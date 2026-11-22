@@ -14,8 +14,8 @@ use crate::{
     discovery::Selection,
     game_calibration::GameCalibration,
     gamepad::{ButtonRemaps, OutputKind, StickCurve},
-    gyro_gate::{self, Binding, TriggerGate},
-    gyro_mouse,
+    gyro_gate::{self, Binding, DigitalInput, TriggerGate},
+    gyro_mouse, touchpad,
 };
 
 #[derive(Deserialize)]
@@ -29,6 +29,7 @@ struct Profile {
     #[serde(default)]
     layer_remaps: Vec<String>,
     gyro: Option<Gyro>,
+    touchpad: Option<touchpad::Config>,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +75,7 @@ pub struct RuntimeOptions {
     pub stick_curve: Option<StickCurve>,
     pub remaps: ButtonRemaps,
     pub gyro: Option<gyro_mouse::Options>,
+    pub touchpad: Option<touchpad::Grid>,
 }
 
 pub fn load(path: &Path) -> Result<RuntimeOptions, Box<dyn Error>> {
@@ -221,35 +223,60 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
     for rule in &profile.layer_remaps {
         remaps.add_layer(rule)?;
     }
-    let gyro = profile.gyro.map(Gyro::resolve).transpose()?;
+    let touchpad = profile
+        .touchpad
+        .map(touchpad::Config::resolve)
+        .transpose()?;
+    let gyro = profile
+        .gyro
+        .map(|gyro| gyro.resolve(touchpad.as_ref()))
+        .transpose()?;
     Ok(RuntimeOptions {
         bridge: profile.bridge,
         stick_curve,
         remaps,
         gyro,
+        touchpad,
     })
 }
 
 impl Gyro {
-    fn resolve(self) -> Result<gyro_mouse::Options, Box<dyn Error>> {
+    fn resolve(
+        self,
+        touchpad: Option<&touchpad::Grid>,
+    ) -> Result<gyro_mouse::Options, Box<dyn Error>> {
         let flick_stick = self
             .flick_stick
             .map(gyro_mouse::validate_flick_scale)
             .transpose()?;
-        let named_button = |name: &str| {
+        let resolve_input = |name: &str| -> Result<DigitalInput, String> {
+            if let Some(spec) = name.strip_prefix("touch:") {
+                let (row, column) = spec
+                    .split_once(':')
+                    .ok_or("expected touch:ROW:COLUMN for the gyro binding")?;
+                let row = row.parse().map_err(|_| "invalid gyro touch region row")?;
+                let column = column
+                    .parse()
+                    .map_err(|_| "invalid gyro touch region column")?;
+                let region = touchpad
+                    .ok_or("gyro touch binding requires a [touchpad] grid")?
+                    .region(row, column)?;
+                return Ok(DigitalInput::Touch(region));
+            }
             gyro_gate::button_by_name(name)
+                .map(DigitalInput::Button)
                 .ok_or_else(|| format!("unknown gyro binding button: {name}"))
         };
         let binding = match self.binding {
             None => Binding::Always,
-            Some(GyroBinding::Hold(name)) => Binding::Hold(named_button(&name)?),
+            Some(GyroBinding::Hold(name)) => Binding::Hold(resolve_input(&name)?),
             Some(GyroBinding::DisableWhileHeld(name)) => {
-                Binding::DisableWhileHeld(named_button(&name)?)
+                Binding::DisableWhileHeld(resolve_input(&name)?)
             }
-            Some(GyroBinding::Toggle(name)) => Binding::Toggle(named_button(&name)?),
-            Some(GyroBinding::TapHold(name)) => Binding::TapHold(named_button(&name)?),
-            Some(GyroBinding::DoubleTap(name)) => Binding::DoubleTap(named_button(&name)?),
-            Some(GyroBinding::Chord(spec)) => gyro_gate::chord_by_name(&spec)?,
+            Some(GyroBinding::Toggle(name)) => Binding::Toggle(resolve_input(&name)?),
+            Some(GyroBinding::TapHold(name)) => Binding::TapHold(resolve_input(&name)?),
+            Some(GyroBinding::DoubleTap(name)) => Binding::DoubleTap(resolve_input(&name)?),
+            Some(GyroBinding::Chord(spec)) => gyro_gate::parse_chord(&spec, resolve_input)?,
             Some(GyroBinding::Trigger(spec)) => Binding::AnalogTrigger(TriggerGate::parse(&spec)?),
         };
         Ok(gyro_mouse::Options {
@@ -271,6 +298,91 @@ impl Gyro {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+    #[test]
+    fn touch_region_controls_gyro_independently_of_gamepad_bindings() {
+        let profile = r#"
+            version = 1
+            [touchpad]
+            rows = 1
+            columns = 2
+            [[touchpad.regions]]
+            row = 1
+            column = 1
+            touch = "cross"
+            [gyro.binding]
+            mode = "hold"
+            input = "touch:1:2"
+        "#;
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[8] = 8;
+        let left = [0x01, 0xbf, 0x03, 0x00]; // x = 959
+        let right = [0x02, 0xc0, 0x03, 0x00]; // x = 960
+        let released = [0x80, 0, 0, 0];
+
+        for (mode, inverted) in [("hold", false), ("disable-while-held", true)] {
+            let runtime =
+                parse(&profile.replace("mode = \"hold\"", &format!("mode = \"{mode}\""))).unwrap();
+            let mut gate = gyro_gate::GyroGate::new(runtime.gyro.unwrap().binding);
+            for (first, second, clicked, occupied) in [
+                (released, released, false, false),
+                (released, released, true, false),
+                (left, released, false, false),
+                (left, right, false, true),
+                (right, released, true, true),
+                (left, released, true, false),
+                (released, released, false, false),
+            ] {
+                frame[10] = if clicked { 2 } else { 0 };
+                frame[33..37].copy_from_slice(&first);
+                frame[37..41].copy_from_slice(&second);
+                let report =
+                    parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap();
+                assert_eq!(
+                    gate.enabled(
+                        &report.controls,
+                        &report.touch_contacts,
+                        std::time::Instant::now
+                    ),
+                    occupied ^ inverted
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn validates_gyro_touch_regions_and_accepts_digital_modes() {
+        let grid = "[touchpad]\nrows = 2\ncolumns = 2";
+        let profile = |mode, input, grid| {
+            format!("version = 1\n[gyro.binding]\nmode = '{mode}'\ninput = '{input}'\n{grid}")
+        };
+        for mode in [
+            "hold",
+            "disable-while-held",
+            "toggle",
+            "tap-hold",
+            "double-tap",
+        ] {
+            assert!(parse(&profile(mode, "touch:2:2", grid)).is_ok(), "{mode}");
+        }
+        for input in ["l1,touch:2:2", "touch:1:1,touch:2:2"] {
+            assert!(parse(&profile("chord", input, grid)).is_ok(), "{input}");
+        }
+        for input in [
+            "touch:1",
+            "touch:a:1",
+            "touch:1:2:3",
+            "touch:0:1",
+            "touch:1:3",
+        ] {
+            assert!(parse(&profile("hold", input, grid)).is_err(), "{input}");
+        }
+        let error = parse(&profile("hold", "touch:1:1", "")).err().unwrap();
+        assert!(error.to_string().contains("requires a [touchpad] grid"));
+        assert!(parse(&profile("chord", "touch:1:1,touch:1:1", grid)).is_err());
+    }
     use crate::gamepad::RemapState;
     use joyshockrust_core::{Button, Controls, Stick};
 
@@ -380,11 +492,11 @@ mod tests {
             left_trigger: 0.5,
             ..Controls::default()
         };
-        assert!(gate.enabled(&controls, std::time::Instant::now));
+        assert!(gate.enabled(&controls, &[None; 2], std::time::Instant::now));
         controls.buttons.insert(Button::LeftTrigger);
-        assert!(!gate.enabled(&controls, std::time::Instant::now));
+        assert!(!gate.enabled(&controls, &[None; 2], std::time::Instant::now));
         controls.buttons.remove(Button::LeftTrigger);
-        assert!(gate.enabled(&controls, std::time::Instant::now));
+        assert!(gate.enabled(&controls, &[None; 2], std::time::Instant::now));
     }
 
     #[test]
@@ -395,7 +507,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             profile.gyro.unwrap().binding,
-            Binding::Hold(Button::LeftTrigger)
+            Binding::Hold(DigitalInput::Button(Button::LeftTrigger))
         ));
         let mut controls = Controls {
             left_stick: Stick { x: 0.5, y: 0.0 },

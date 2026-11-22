@@ -21,6 +21,9 @@ pub const DUALSENSE_EDGE_USB_REPORT_LEN: usize = 64;
 const DUALSENSE_EDGE_USB_REPORT_ID: u8 = 0x01;
 pub const DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN: usize = 78;
 const DUALSENSE_EDGE_BLUETOOTH_REPORT_ID: u8 = 0x31;
+pub const DUALSENSE_TOUCHPAD_WIDTH: u16 = 1920;
+pub const DUALSENSE_TOUCHPAD_HEIGHT: u16 = 1080;
+const TOUCH_CONTACTS_OFFSET: usize = 32;
 const BATTERY_STATUS_OFFSET: usize = 52;
 const COMMON_REPORT_LEN: usize = DUALSENSE_EDGE_USB_REPORT_LEN - 1;
 
@@ -95,10 +98,20 @@ pub struct InputReport {
     pub controls: Controls,
     pub imu: RawImuSample,
     pub battery: BatteryReading,
+    /// Sensor slots, independent of the mechanical touchpad button.
+    pub touch_contacts: [Option<TouchContact>; 2],
     /// Raw controller counter byte. Its sequence semantics require captures.
     pub counter: u8,
     /// Host monotonic receive time, when supplied by the caller.
     pub received_at_ns: Option<u64>,
+}
+
+/// One active contact, in device units from the top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TouchContact {
+    pub id: u8,
+    pub x: u16,
+    pub y: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,6 +246,7 @@ pub fn parse_report(
         }
     }
 
+    let (contacts, _) = bytes[TOUCH_CONTACTS_OFFSET..].as_chunks::<4>();
     Ok(InputReport {
         controls: Controls {
             buttons,
@@ -258,9 +272,17 @@ pub fn parse_report(
             device_ticks: u32::from_le_bytes([bytes[27], bytes[28], bytes[29], bytes[30]]),
         },
         battery: BatteryReading::decode(bytes[BATTERY_STATUS_OFFSET]),
+        touch_contacts: [decode_touch(contacts[0]), decode_touch(contacts[1])],
         counter: bytes[6],
         received_at_ns,
     })
+}
+
+fn decode_touch([contact, x_low, middle, y_high]: [u8; 4]) -> Option<TouchContact> {
+    let x = u16::from_le_bytes([x_low, middle & 0x0f]);
+    let y = (u16::from(y_high) << 4) | u16::from(middle >> 4);
+    (contact & 0x80 == 0 && x < DUALSENSE_TOUCHPAD_WIDTH && y < DUALSENSE_TOUCHPAD_HEIGHT)
+        .then_some(TouchContact { id: contact, x, y })
 }
 
 fn bluetooth_crc_matches(seed: u8, bytes: &[u8]) -> bool {

@@ -95,8 +95,8 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/dualsense-edge.ex
 Profiles require `version = 1`. The optional `[gyro]` table enables the gyro
 mouse. The optional `[gyro.binding]` table takes `mode` and `input`. Modes are
 `hold`, `disable-while-held`, `toggle`, `tap-hold`, `double-tap`, `chord`
-and `trigger`. Input names a digital button, a chord, or an analog trigger,
-depending on the mode. The [gyro-except-L2 profile](profiles/gyro-except-l2.toml)
+and `trigger`. Input names a digital button, a touch region, a chord, or an
+analog trigger, depending on the mode. The [gyro-except-L2 profile](profiles/gyro-except-l2.toml)
 keeps gyro aim enabled until the digital L2 button is pressed.
 Use `joyshockrust-linux --install-profile SOURCE [DESTINATION]` to validate
 a saved preset and copy it into place, preserving its comments and formatting.
@@ -154,6 +154,71 @@ USB, generic output and rumble off. Restart JoyShockRust when changing
 changes during a session when the bridge settings stay the same. The
 existing transport and gamepad flags override their profile values.
 `--rumble` enables rumble for the run.
+
+### Touchpad regions
+
+Add a `[touchpad]` grid to a version 1 profile for DualSense or DualSense
+Edge over USB or Bluetooth. This example splits the surface into two halves
+and gives each half a separate touch and click binding.
+
+```toml
+[touchpad]
+columns = 2
+rows = 1
+
+[[touchpad.regions]]
+column = 1
+row = 1
+touch = "cross"
+click = "square"
+
+[[touchpad.regions]]
+column = 2
+row = 1
+touch = "circle"
+click = "triangle"
+```
+
+Rows and columns start at 1 in the top-left corner. The grid supports up to
+25 cells, and a 1×1 grid covers the whole surface. Each region can define
+`touch`, `click`, or both. Targets use the same virtual gamepad button names
+as button remaps. Digital `l2` and `r2` targets are available with generic
+output.
+
+Both contacts can hold their respective touch targets. Moving across a
+boundary updates the held touch buttons. Pressing the pad also holds the
+click target from the first active contact slot until the pad is released.
+If that cell has no click binding or there is no active contact, the
+ordinary `touchpad` button mapping applies. Region targets go directly to
+the virtual gamepad and may share a target with a physical button. Region
+changes can be applied with `--load-profile` or a service reload.
+[Touchpad acceptance test](TESTING_AND_PERFORMANCE.md#touchpad-grid-acceptance)
+
+#### Touch region as a gyro input
+
+This version 1 profile enables gyro aim while either finger touches the
+right half of the pad.
+
+```toml
+version = 1
+
+[touchpad]
+rows = 1
+columns = 2
+
+[gyro.binding]
+mode = "hold"
+input = "touch:1:2"
+```
+
+`touch:ROW:COLUMN` selects a cell in the same grid used for gamepad
+bindings. Both coordinates start at 1. A cell can control gyro with or
+without its own `[[touchpad.regions]]` entry. Leaving the cell or lifting
+the last finger releases the input. Use `disable-while-held` to turn gyro
+aim off during the touch. Touch regions also work with `toggle`, `tap-hold`,
+`double-tap` and `chord`. For example, `input = "l1,touch:1:2"` with
+`mode = "chord"` requires both inputs. The existing `touchpad` input
+selects the physical click.
 
 ## Device diagnostics
 

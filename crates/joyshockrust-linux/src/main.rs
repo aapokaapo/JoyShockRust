@@ -27,6 +27,8 @@ mod rumble;
 mod status;
 #[cfg(target_os = "linux")]
 mod systemd;
+#[cfg(target_os = "linux")]
+mod touchpad;
 
 #[cfg(target_os = "linux")]
 use hidraw::Identity;
@@ -116,7 +118,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 return Err("select only one gyro binding".into());
             }
             options.binding = if arg == "--gyro-hold-l2" {
-                Binding::Hold(Button::LeftTrigger)
+                Binding::Hold(Button::LeftTrigger.into())
             } else if arg == "--gyro-chord" {
                 let spec = args.next().ok_or("expected two gyro chord buttons")?;
                 gyro_gate::chord_by_name(spec.to_str().ok_or("invalid gyro chord specification")?)?
@@ -137,10 +139,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         format!("unknown gyro binding button: {}", name.to_string_lossy())
                     })?;
                 match arg.to_str() {
-                    Some("--gyro-hold") => Binding::Hold(button),
-                    Some("--gyro-tap-hold") => Binding::TapHold(button),
-                    Some("--gyro-double-tap") => Binding::DoubleTap(button),
-                    _ => Binding::Toggle(button),
+                    Some("--gyro-hold") => Binding::Hold(button.into()),
+                    Some("--gyro-tap-hold") => Binding::TapHold(button.into()),
+                    Some("--gyro-double-tap") => Binding::DoubleTap(button.into()),
+                    _ => Binding::Toggle(button.into()),
                 }
             };
         } else if arg == "--diagnose" && !diagnose {
@@ -333,6 +335,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 gyro: gyro_mouse.then_some(options),
                 stick_curve,
                 remaps,
+                touchpad: None,
             },
             None,
         )
@@ -429,6 +432,7 @@ fn serve_session(
         .transpose()?;
     let mut state = gamepad::GamepadState::new(bridge.gamepad);
     let mut layer_state = gamepad::RemapState::default();
+    let mut touch_click = touchpad::ClickState::default();
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());
     }
@@ -473,6 +477,9 @@ fn serve_session(
                     if runtime.remaps != next.remaps {
                         layer_state = gamepad::RemapState::default();
                     }
+                    if runtime.touchpad != next.touchpad {
+                        touch_click = touchpad::ClickState::default();
+                    }
                     *runtime = next;
                     if let Some(status) = status {
                         status.update(Some(identity), runtime.gyro.is_some());
@@ -493,9 +500,19 @@ fn serve_session(
             {
                 controls.right_stick = Default::default();
             }
-            state.publish(runtime.remaps.apply(controls, &mut layer_state), |events| {
-                output.emit(events)
-            })?;
+            let touch_buttons = runtime
+                .touchpad
+                .as_ref()
+                .map_or_else(Default::default, |grid| {
+                    grid.map(
+                        &mut controls.buttons,
+                        report.touch_contacts,
+                        &mut touch_click,
+                    )
+                });
+            let mut controls = runtime.remaps.apply(controls, &mut layer_state);
+            controls.buttons = controls.buttons.union(touch_buttons);
+            state.publish(controls, |events| output.emit(events))?;
             if let Some(mouse) = &mut mouse {
                 mouse.publish(report)?;
             }

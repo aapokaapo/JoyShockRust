@@ -218,3 +218,19 @@ the first successful batch time once per connection. A status query
 computes the rate over elapsed host time, including idle periods. The
 counters persist across profile reloads and reset on disconnect.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
+
+Updated 2026-11-22. The common DualSense payload supplies two contact slots.
+Grid bindings are opt-in in version 1 profiles. Either active slot can
+hold a touch binding. The mechanical click selects the first active slot's
+binding on the press and holds the selection through release. A bound
+click takes precedence over the ordinary click mapping. Grid targets merge
+with remapped gamepad buttons after remapping, so shared targets remain
+held until all sources release. Grid edits are applied at the existing
+profile reload boundary.
+[Linux contact and click decoding](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1564-L1581) · [JSM grid processing](https://github.com/Electronicks/JoyShockMapper/blob/e148efe0b6ff4ad2ce0fc8c2560fa1028097b1a7/JoyShockMapper/src/main.cpp#L185-L208)
+
+Updated 2026-11-22. Gyro bindings can select a touch grid cell with
+`touch:ROW:COLUMN`. Either decoded contact can hold that input. The gyro
+gate uses the physical HID report and the same grid geometry as gamepad
+bindings. Profile validation resolves the cell even when it has no
+gamepad binding. [Touch region gyro input](README.md#touch-region-as-a-gyro-input)

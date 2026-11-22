@@ -78,6 +78,16 @@ both transports. The common layout and model-specific button handling
 have synthetic coverage. The user verified both models on hardware.
 [Standard DualSense acceptance](TESTING_AND_PERFORMANCE.md#standard-dualsense-acceptance)
 
+The DualSense and Edge parsers decode both touch contacts on USB and
+Bluetooth. Version 1 profiles can assign independent touch and click
+gamepad bindings to a grid of up to 25 regions. Synthetic reports verify
+two contacts, boundary crossings and click release. Hardware validation
+remains open. [Touchpad grid acceptance](TESTING_AND_PERFORMANCE.md#touchpad-grid-acceptance)
+Gyro bindings can also use any grid cell as a digital input. Synthetic
+reports cover entering and leaving the cell with either contact and keep
+physical clicks independent of the touch input.
+[Touchpad gyro acceptance](TESTING_AND_PERFORMANCE.md#touchpad-gyro-acceptance)
+
 Opt-in rumble forwards uinput effects to the physical controller through
 evdev. The event loop serves feedback while controller input is idle.
 The user verified that forwarding survives reconnection over USB and

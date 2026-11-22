@@ -1,7 +1,7 @@
 use joyshockrust_core::Button;
 use joyshockrust_input::{
     BatteryReading, BatteryState, CalibrationReportError, DeviceModel, FactoryCalibration,
-    ParseError, RawImuSample, Transport, parse_report,
+    ParseError, RawImuSample, TouchContact, Transport, parse_report,
 };
 
 fn full_bluetooth_frame() -> [u8; 78] {
@@ -16,9 +16,10 @@ fn full_bluetooth_frame() -> [u8; 78] {
         *chunk = sample.to_le_bytes();
     }
     frame[29..33].copy_from_slice(&0x1234_5678_u32.to_le_bytes());
+    frame[34..42].copy_from_slice(&[0x21, 0x45, 0x63, 0x12, 0xab, 0xff, 0xff, 0xff]);
     frame[54] = 0x16;
     // Reference CRC generated with zlib over seed 0xa1 followed by bytes 0–73.
-    frame[74..].copy_from_slice(&0xb79d_93fa_u32.to_le_bytes());
+    frame[74..].copy_from_slice(&0xcad6_3e4e_u32.to_le_bytes());
     frame
 }
 
@@ -49,6 +50,17 @@ fn full_bluetooth_frame_decodes_the_same_common_payload_as_usb() {
     assert!(report.controls.buttons.contains(Button::RightPaddle));
     assert_eq!(report.imu.gyro_counts, [123, -456, 789]);
     assert_eq!(report.imu.device_ticks, 0x1234_5678);
+    assert_eq!(
+        report.touch_contacts,
+        [
+            Some(TouchContact {
+                id: 0x21,
+                x: 0x345,
+                y: 0x126
+            }),
+            None
+        ]
+    );
 }
 
 #[test]

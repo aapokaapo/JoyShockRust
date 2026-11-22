@@ -465,6 +465,42 @@ that `last_reload=not_attempted`. The user's Fedora run of `1e4b78c`
 confirmed exit status `78/CONFIG`, no automatic retry, and a successful
 manual restart after restoring version 1.
 
+## Touchpad grid acceptance
+
+Add the [two-column example](README.md#touchpad-regions) to a copy of a
+working version 1 profile. Load the copy with
+`joyshockrust-linux --load-profile PATH` while the updated service is
+running. Open Steam's **Test Device Inputs** for the virtual gamepad. Expect
+the following gamepad buttons (Xbox A, B, X and Y).
+
+1. Rest a finger on the left half. Cross (A) should be held. Slide into the
+   right half without clicking. Cross should release and Circle (B) should
+   be held until you lift your finger.
+2. Put one finger on each half. Cross and Circle should both be held.
+   Lifting either finger should release the corresponding button.
+3. Click and hold on the left half. Square (X) should be held alongside
+   Cross. Slide to the right half while holding the click. Square should
+   remain held while the touch binding changes to Circle. Release the
+   click, then click on the right to check Triangle (Y).
+4. Repeat on Bluetooth with `transport = "auto"` in the startup profile.
+   Disconnect while a target is held and reconnect with the touchpad
+   clear. The virtual gamepad should return with the targets released.
+
+Use `joyshockrust-linux --reload-profile` to restore the startup profile.
+Record the model, transport and result for each step.
+
+## Touchpad gyro acceptance
+
+Load the [right-half gyro profile](README.md#touch-region-as-a-gyro-input)
+into the running bridge. Rotate the controller while touching the left
+half, then slide your finger to the right half while still rotating.
+Gyro aim should start when your finger enters the right half and stop
+when you slide back or lift your finger. Repeat with one finger resting
+on the left half and a second finger operating the right half. Change
+the mode to `disable-while-held` and reload the profile to verify the
+reverse behavior. Repeat over Bluetooth with an automatic-transport
+bridge.
+
 ## Report statistics acceptance
 
 With the updated service running, query `joyshockrust-linux --status`

@@ -90,14 +90,18 @@ impl ButtonRemaps {
 fn parse_rule(spec: &str) -> Result<(Button, Button), &'static str> {
     let (source, target) = spec.split_once('=').ok_or("expected SOURCE=TARGET")?;
     let source = super::gyro_gate::button_by_name(source).ok_or("unknown source button")?;
-    let target = super::gyro_gate::button_by_name(target).ok_or("unknown target button")?;
+    Ok((source, parse_target(target)?))
+}
+
+pub fn parse_target(name: &str) -> Result<Button, &'static str> {
+    let target = super::gyro_gate::button_by_name(name).ok_or("unknown target button")?;
     if !OutputKind::Generic
         .buttons()
         .any(|(button, _)| button == target)
     {
         return Err("target button is unavailable on the virtual gamepad");
     }
-    Ok((source, target))
+    Ok(target)
 }
 
 fn add_rule(rules: &mut Vec<(Button, Button)>, rule: (Button, Button)) -> Result<(), &'static str> {

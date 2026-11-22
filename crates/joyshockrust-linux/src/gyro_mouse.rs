@@ -116,7 +116,9 @@ impl GyroMouse {
 
     pub fn publish(&mut self, report: InputReport) -> io::Result<()> {
         let was_calibrating = self.aim.calibration.is_some();
-        let enabled = self.gate.enabled(&report.controls, Instant::now);
+        let enabled = self
+            .gate
+            .enabled(&report.controls, &report.touch_contacts, Instant::now);
         let mut movement = self.aim.advance(report.imu, enabled);
         if !was_calibrating && let Some(flick) = &mut self.flick {
             movement[0] += flick.advance(report.controls.right_stick, report.imu.device_ticks);

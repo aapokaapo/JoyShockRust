@@ -1,6 +1,9 @@
 use std::time::{Duration, Instant};
 
 use joyshockrust_core::{Button, Controls};
+use joyshockrust_input::TouchContact;
+
+use crate::touchpad::TouchRegion;
 
 const HOLD_TIME: Duration = Duration::from_millis(200);
 const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
@@ -9,13 +12,25 @@ const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
 pub enum Binding {
     #[default]
     Always,
-    Hold(Button),
-    DisableWhileHeld(Button),
-    Toggle(Button),
-    TapHold(Button),
-    DoubleTap(Button),
-    Chord(Button, Button),
+    Hold(DigitalInput),
+    DisableWhileHeld(DigitalInput),
+    Toggle(DigitalInput),
+    TapHold(DigitalInput),
+    DoubleTap(DigitalInput),
+    Chord(DigitalInput, DigitalInput),
     AnalogTrigger(TriggerGate),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DigitalInput {
+    Button(Button),
+    Touch(TouchRegion),
+}
+
+impl From<Button> for DigitalInput {
+    fn from(button: Button) -> Self {
+        Self::Button(button)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -88,22 +103,30 @@ impl GyroGate {
         }
     }
 
-    pub fn enabled(&mut self, controls: &Controls, clock: impl FnOnce() -> Instant) -> bool {
-        let buttons = controls.buttons;
+    pub fn enabled(
+        &mut self,
+        controls: &Controls,
+        contacts: &[Option<TouchContact>; 2],
+        clock: impl FnOnce() -> Instant,
+    ) -> bool {
+        let pressed = |input| match input {
+            DigitalInput::Button(button) => controls.buttons.contains(button),
+            DigitalInput::Touch(region) => region.pressed(contacts),
+        };
         match self.binding {
             Binding::Always => true,
-            Binding::Hold(button) => buttons.contains(button),
-            Binding::DisableWhileHeld(button) => !buttons.contains(button),
-            Binding::Chord(first, second) => buttons.contains(first) && buttons.contains(second),
-            Binding::Toggle(button) => {
-                let pressed = buttons.contains(button);
+            Binding::Hold(input) => pressed(input),
+            Binding::DisableWhileHeld(input) => !pressed(input),
+            Binding::Chord(first, second) => pressed(first) && pressed(second),
+            Binding::Toggle(input) => {
+                let pressed = pressed(input);
                 if self.previous_pressed.replace(pressed) == Some(false) && pressed {
                     self.active = !self.active;
                 }
                 self.active
             }
-            Binding::TapHold(button) => self.tap_hold(buttons.contains(button), clock()),
-            Binding::DoubleTap(button) => self.double_tap(buttons.contains(button), clock()),
+            Binding::TapHold(input) => self.tap_hold(pressed(input), clock()),
+            Binding::DoubleTap(input) => self.double_tap(pressed(input), clock()),
             Binding::AnalogTrigger(trigger) => {
                 let travel = trigger.travel(controls);
                 self.active = if self.active {
@@ -156,13 +179,24 @@ impl GyroGate {
 }
 
 pub fn chord_by_name(spec: &str) -> Result<Binding, &'static str> {
+    parse_chord(spec, |input| {
+        button_by_name(input)
+            .map(DigitalInput::Button)
+            .ok_or("unknown gyro chord button")
+    })
+}
+
+pub fn parse_chord<E: From<&'static str>>(
+    spec: &str,
+    resolve: impl Fn(&str) -> Result<DigitalInput, E>,
+) -> Result<Binding, E> {
     let (first, second) = spec
         .split_once(',')
-        .ok_or("expected two comma-separated gyro chord buttons")?;
-    let first = button_by_name(first).ok_or("unknown first gyro chord button")?;
-    let second = button_by_name(second).ok_or("unknown second gyro chord button")?;
+        .ok_or("expected two comma-separated gyro chord inputs")?;
+    let first = resolve(first)?;
+    let second = resolve(second)?;
     if first == second {
-        return Err("select two distinct gyro chord buttons");
+        return Err("select two distinct gyro chord inputs".into());
     }
     Ok(Binding::Chord(first, second))
 }
@@ -211,11 +245,11 @@ mod tests {
         let binding = chord_by_name("l1,r1").unwrap();
         for (first, remaining) in [(left, right), (right, left)] {
             let mut gate = GyroGate::new(binding);
-            assert!(!gate.enabled(&first, Instant::now));
-            assert!(gate.enabled(&both, Instant::now));
-            assert!(!gate.enabled(&remaining, Instant::now));
-            assert!(gate.enabled(&both, Instant::now));
-            assert!(!gate.enabled(&Controls::default(), Instant::now));
+            assert!(!gate.enabled(&first, &[None; 2], Instant::now));
+            assert!(gate.enabled(&both, &[None; 2], Instant::now));
+            assert!(!gate.enabled(&remaining, &[None; 2], Instant::now));
+            assert!(gate.enabled(&both, &[None; 2], Instant::now));
+            assert!(!gate.enabled(&Controls::default(), &[None; 2], Instant::now));
         }
     }
 
@@ -228,36 +262,36 @@ mod tests {
 
     #[test]
     fn configurable_hold_tracks_only_the_selected_button() {
-        let mut gate = GyroGate::new(Binding::Hold(button_by_name("r1").unwrap()));
-        assert!(!gate.enabled(&pressed(Button::LeftShoulder), Instant::now));
-        assert!(gate.enabled(&pressed(Button::RightShoulder), Instant::now));
-        assert!(!gate.enabled(&Controls::default(), Instant::now));
+        let mut gate = GyroGate::new(Binding::Hold(button_by_name("r1").unwrap().into()));
+        assert!(!gate.enabled(&pressed(Button::LeftShoulder), &[None; 2], Instant::now));
+        assert!(gate.enabled(&pressed(Button::RightShoulder), &[None; 2], Instant::now));
+        assert!(!gate.enabled(&Controls::default(), &[None; 2], Instant::now));
     }
 
     #[test]
     fn toggle_changes_once_per_press_and_reconnect_restarts_disabled() {
-        let binding = Binding::Toggle(Button::RightStick);
+        let binding = Binding::Toggle(Button::RightStick.into());
         let up = Controls::default();
         let down = pressed(Button::RightStick);
         let mut gate = GyroGate::new(binding);
-        assert!(!gate.enabled(&down, Instant::now)); // already held at session start
-        assert!(!gate.enabled(&up, Instant::now));
-        assert!(gate.enabled(&down, Instant::now));
-        assert!(gate.enabled(&down, Instant::now));
-        assert!(gate.enabled(&up, Instant::now));
-        assert!(!gate.enabled(&down, Instant::now));
-        assert!(!GyroGate::new(binding).enabled(&up, Instant::now));
+        assert!(!gate.enabled(&down, &[None; 2], Instant::now)); // already held at session start
+        assert!(!gate.enabled(&up, &[None; 2], Instant::now));
+        assert!(gate.enabled(&down, &[None; 2], Instant::now));
+        assert!(gate.enabled(&down, &[None; 2], Instant::now));
+        assert!(gate.enabled(&up, &[None; 2], Instant::now));
+        assert!(!gate.enabled(&down, &[None; 2], Instant::now));
+        assert!(!GyroGate::new(binding).enabled(&up, &[None; 2], Instant::now));
     }
 
     #[test]
     fn tap_toggles_and_long_hold_preserves_the_latched_state() {
-        let binding = Binding::TapHold(Button::RightStick);
+        let binding = Binding::TapHold(Button::RightStick.into());
         let mut gate = GyroGate::new(binding);
         let up = Controls::default();
         let down = pressed(Button::RightStick);
         let start = Instant::now();
         let mut update =
-            |controls, ms| gate.enabled(controls, || start + Duration::from_millis(ms));
+            |controls, ms| gate.enabled(controls, &[None; 2], || start + Duration::from_millis(ms));
 
         assert!(!update(&up, 0));
         assert!(!update(&down, 10));
@@ -274,17 +308,17 @@ mod tests {
 
     #[test]
     fn button_held_at_connection_does_not_start_tap_or_hold() {
-        let mut gate = GyroGate::new(Binding::TapHold(Button::RightStick));
+        let mut gate = GyroGate::new(Binding::TapHold(Button::RightStick.into()));
         let down = pressed(Button::RightStick);
         let start = Instant::now();
-        assert!(!gate.enabled(&down, || start));
-        assert!(!gate.enabled(&down, || start + HOLD_TIME));
-        assert!(!gate.enabled(&Controls::default(), || start + HOLD_TIME));
+        assert!(!gate.enabled(&down, &[None; 2], || start));
+        assert!(!gate.enabled(&down, &[None; 2], || start + HOLD_TIME));
+        assert!(!gate.enabled(&Controls::default(), &[None; 2], || start + HOLD_TIME));
     }
 
     #[test]
     fn double_tap_changes_state_on_second_release_once_per_pair() {
-        let mut gate = GyroGate::new(Binding::DoubleTap(Button::RightStick));
+        let mut gate = GyroGate::new(Binding::DoubleTap(Button::RightStick.into()));
         let up = Controls::default();
         let down = pressed(Button::RightStick);
         let start = Instant::now();
@@ -302,7 +336,7 @@ mod tests {
             (&up, 550, false),
         ] {
             assert_eq!(
-                gate.enabled(controls, || start + Duration::from_millis(ms)),
+                gate.enabled(controls, &[None; 2], || start + Duration::from_millis(ms)),
                 enabled,
                 "{ms}"
             );
@@ -311,7 +345,7 @@ mod tests {
 
     #[test]
     fn long_presses_and_expired_taps_do_not_complete_a_pair() {
-        let mut gate = GyroGate::new(Binding::DoubleTap(Button::RightStick));
+        let mut gate = GyroGate::new(Binding::DoubleTap(Button::RightStick.into()));
         let up = Controls::default();
         let down = pressed(Button::RightStick);
         let start = Instant::now();
@@ -328,7 +362,7 @@ mod tests {
             (&up, 620),
         ] {
             assert!(
-                !gate.enabled(controls, || start + Duration::from_millis(ms)),
+                !gate.enabled(controls, &[None; 2], || start + Duration::from_millis(ms)),
                 "{ms}"
             );
         }
@@ -352,10 +386,14 @@ mod tests {
             (1.0, true),
         ] {
             controls.right_trigger = travel;
-            assert_eq!(gate.enabled(&controls, Instant::now), enabled, "{travel}");
+            assert_eq!(
+                gate.enabled(&controls, &[None; 2], Instant::now),
+                enabled,
+                "{travel}"
+            );
         }
         controls.right_trigger = 0.5;
-        assert!(!GyroGate::new(binding).enabled(&controls, Instant::now));
+        assert!(!GyroGate::new(binding).enabled(&controls, &[None; 2], Instant::now));
     }
 
     #[test]
