@@ -11,7 +11,8 @@ use std::{
 use serde::Deserialize;
 
 use crate::{
-    gamepad::{ButtonRemaps, StickCurve},
+    discovery::Selection,
+    gamepad::{ButtonRemaps, OutputKind, StickCurve},
     gyro_gate::{self, Binding, TriggerGate},
     gyro_mouse,
 };
@@ -20,6 +21,8 @@ use crate::{
 #[serde(deny_unknown_fields)]
 struct Profile {
     version: u32,
+    #[serde(default)]
+    bridge: BridgeOptions,
     stick_curve: Option<f32>,
     #[serde(default)]
     remap_buttons: Vec<String>,
@@ -54,7 +57,16 @@ enum GyroBinding {
     Trigger(String),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BridgeOptions {
+    pub transport: Selection,
+    pub gamepad: OutputKind,
+    pub rumble: bool,
+}
+
 pub struct RuntimeOptions {
+    pub bridge: BridgeOptions,
     pub stick_curve: Option<StickCurve>,
     pub remaps: ButtonRemaps,
     pub gyro: Option<gyro_mouse::Options>,
@@ -167,6 +179,7 @@ fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
     }
     let gyro = profile.gyro.map(Gyro::resolve).transpose()?;
     Ok(RuntimeOptions {
+        bridge: profile.bridge,
         stick_curve,
         remaps,
         gyro,
@@ -208,6 +221,50 @@ mod tests {
     use super::*;
     use crate::gamepad::RemapState;
     use joyshockrust_core::{Button, Controls, Stick};
+
+    #[test]
+    fn bridge_profiles_preserve_defaults_and_configure_output() {
+        assert_eq!(
+            parse("version = 1").unwrap().bridge,
+            BridgeOptions::default()
+        );
+        let profile = parse(
+            r#"
+            version = 1
+            [bridge]
+            transport = "auto"
+            gamepad = "xbox-series"
+            rumble = true
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            profile.bridge,
+            BridgeOptions {
+                transport: Selection::Auto,
+                gamepad: OutputKind::XboxSeries,
+                rumble: true,
+            }
+        );
+        let partial = parse("version = 1\n[bridge]\ngamepad = \"xbox360\"")
+            .unwrap()
+            .bridge;
+        assert_eq!(
+            partial,
+            BridgeOptions {
+                gamepad: OutputKind::Xbox360,
+                ..BridgeOptions::default()
+            }
+        );
+        for setting in [
+            "transport = \"ethernet\"",
+            "gamepad = \"sony\"",
+            "rumble = \"true\"",
+            "unknown = true",
+        ] {
+            assert!(parse(&format!("version = 1\n[bridge]\n{setting}")).is_err());
+        }
+    }
 
     #[test]
     fn l2_profile_disables_gyro_only_while_digital_trigger_is_held() {

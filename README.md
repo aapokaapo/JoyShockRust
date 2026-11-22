@@ -110,6 +110,25 @@ The profile is loaded at startup. Send SIGHUP to the running bridge PID
 to reload it. Invalid edits leave the last valid configuration active. Choose the profile or the equivalent CLI
 mapping flags for that run. You can still pass a hidraw path with `--profile`.
 
+A profile can also select the bridge's startup options. Add this table to
+the active service profile to use automatic transport selection, Xbox
+Series output and rumble.
+
+```toml
+[bridge]
+transport = "auto"
+gamepad = "xbox-series"
+rumble = true
+```
+
+The transport options are `usb`, `bluetooth` and `auto`. The gamepad options
+are `generic`, `xbox360` and `xbox-series`. Profiles without this table use
+USB, generic output and rumble off. Restart JoyShockRust when changing
+`[bridge]` settings. The reload command still applies mapping and gyro
+changes during a session when the bridge settings stay the same. The
+existing transport and gamepad flags override their profile values.
+`--rumble` enables rumble for the run.
+
 ## Device diagnostics
 
 Run `cargo run --locked -p joyshockrust-linux -- --diagnose` to list wired

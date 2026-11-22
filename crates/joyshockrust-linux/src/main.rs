@@ -68,7 +68,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut status_path = None;
     let mut gamepad_kind = None;
     let mut rumble_enabled = false;
-    let mut selection = discovery::Selection::Usb;
+    let mut transport = None;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
     let mut args = env::args_os().skip(1);
@@ -153,14 +153,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             };
             profile_path = Some((PathBuf::from(file), mode));
         } else if arg == "--bluetooth" || arg == "--auto-transport" {
-            if selection != discovery::Selection::Usb {
+            if transport.is_some() {
                 return Err("select only one transport option".into());
             }
-            selection = if arg == "--bluetooth" {
+            transport = Some(if arg == "--bluetooth" {
                 discovery::Selection::Bluetooth
             } else {
                 discovery::Selection::Auto
-            };
+            });
         } else if arg == "--rumble" && !rumble_enabled {
             rumble_enabled = true;
         } else if arg == "--gamepad" && gamepad_kind.is_none() {
@@ -226,7 +226,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             || diagnose
             || profile_path.is_some()
             || bridge_options
-            || selection != discovery::Selection::Usb
+            || transport.is_some()
             || mapping_options
         {
             return Err("select one socket command with only an optional socket path".into());
@@ -243,7 +243,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         if profile_path.is_some() || bridge_options || mapping_options {
             return Err("--diagnose takes a transport option and an optional hidraw path".into());
         }
-        diagnostics::run(path.as_deref(), selection, std::io::stdout().lock())?;
+        diagnostics::run(
+            path.as_deref(),
+            transport.unwrap_or_default(),
+            std::io::stdout().lock(),
+        )?;
         return Ok(ExitCode::SUCCESS);
     }
     let (mut runtime, reload) = if let Some((profile_path, mode)) = profile_path {
@@ -251,7 +255,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
         if mode == ProfileMode::Install {
-            if bridge_options || selection != discovery::Selection::Usb {
+            if bridge_options || transport.is_some() {
                 return Err("--install-profile takes a source and an optional destination".into());
             }
             let destination = match path {
@@ -262,9 +266,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             println!("Installed profile: {}", destination.display());
             return Ok(ExitCode::SUCCESS);
         }
-        if mode == ProfileMode::Check
-            && (path.is_some() || bridge_options || selection != discovery::Selection::Usb)
-        {
+        if mode == ProfileMode::Check && (path.is_some() || bridge_options || transport.is_some()) {
             return Err("--check-profile takes only a profile path".into());
         }
         let profile = match profile::load(&profile_path) {
@@ -279,16 +281,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             println!("Valid profile: {}", profile_path.display());
             return Ok(ExitCode::SUCCESS);
         }
-        (
-            profile,
-            Some(reload::Reload::new(profile_path, reload_path.as_deref())?),
-        )
+        let reload = reload::Reload::new(profile_path, reload_path.as_deref(), profile.bridge)?;
+        (profile, Some(reload))
     } else {
         if reload_path.is_some() {
             return Err("--reload-socket requires --profile".into());
         }
         (
             profile::RuntimeOptions {
+                bridge: profile::BridgeOptions::default(),
                 gyro: gyro_mouse.then_some(options),
                 stick_curve,
                 remaps,
@@ -308,30 +309,20 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         status.update(None, runtime.gyro.is_some());
     }
     let reload = reload.as_ref();
-    let gamepad_kind = gamepad_kind.unwrap_or_default();
+    let bridge = profile::BridgeOptions {
+        transport: transport.unwrap_or(runtime.bridge.transport),
+        gamepad: gamepad_kind.unwrap_or(runtime.bridge.gamepad),
+        rumble: rumble_enabled || runtime.bridge.rumble,
+    };
     if let Some(path) = path {
-        let (mut input, identity) = discovery::open_controller(&path, selection)
+        let (mut input, identity) = discovery::open_controller(&path, bridge.transport)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-        serve_session(
-            &mut input,
-            &mut runtime,
-            reload,
-            status,
-            gamepad_kind,
-            identity,
-            rumble_enabled,
-        )?;
+        serve_session(&mut input, &mut runtime, reload, status, identity, bridge)?;
     } else {
-        discovery::run(selection, reload, status, |event| match event {
-            discovery::Event::Connected(input, identity) => serve_session(
-                input,
-                &mut runtime,
-                reload,
-                status,
-                gamepad_kind,
-                identity,
-                rumble_enabled,
-            ),
+        discovery::run(bridge.transport, reload, status, |event| match event {
+            discovery::Event::Connected(input, identity) => {
+                serve_session(input, &mut runtime, reload, status, identity, bridge)
+            }
             discovery::Event::Reload(reload) => {
                 if let Some(next) = reload.load() {
                     runtime = next;
@@ -371,15 +362,14 @@ fn serve_session(
     runtime: &mut profile::RuntimeOptions,
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
-    gamepad_kind: gamepad::OutputKind,
     identity: Identity,
-    rumble_enabled: bool,
+    bridge: profile::BridgeOptions,
 ) -> std::io::Result<()> {
     use std::os::fd::AsFd;
 
     let mut mouse = open_mouse(input, identity.transport, runtime.gyro)?;
     let reload_input = reload.map(|_| input.try_clone()).transpose()?;
-    let mut rumble = if rumble_enabled {
+    let mut rumble = if bridge.rumble {
         match rumble::Rumble::open(input) {
             Ok(rumble) => Some(rumble),
             Err(err) => {
@@ -390,13 +380,13 @@ fn serve_session(
     } else {
         None
     };
-    let mut output = gamepad::open(gamepad_kind, rumble.is_some())
+    let mut output = gamepad::open(bridge.gamepad, rumble.is_some())
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
     let feedback = rumble
         .as_ref()
         .map(|_| output.as_fd().try_clone_to_owned())
         .transpose()?;
-    let mut state = gamepad::GamepadState::new(gamepad_kind);
+    let mut state = gamepad::GamepadState::new(bridge.gamepad);
     let mut layer_state = gamepad::RemapState::default();
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());

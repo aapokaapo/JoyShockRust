@@ -19,12 +19,13 @@ use nix::{
 };
 
 use crate::{
-    profile::{self, RuntimeOptions},
+    profile::{self, BridgeOptions, RuntimeOptions},
     status::{self, StatusSocket},
 };
 
 pub struct Reload {
     path: PathBuf,
+    bridge_at_startup: BridgeOptions,
     signal: SignalFd,
     listener: Option<UnixListener>,
     outcome: Cell<Outcome>,
@@ -38,7 +39,11 @@ enum Outcome {
 }
 
 impl Reload {
-    pub fn new(path: PathBuf, socket: Option<&Path>) -> io::Result<Self> {
+    pub fn new(
+        path: PathBuf,
+        socket: Option<&Path>,
+        bridge_at_startup: BridgeOptions,
+    ) -> io::Result<Self> {
         let listener = socket
             .map(|path| {
                 let listener = UnixListener::bind(path).map_err(|err| {
@@ -58,6 +63,7 @@ impl Reload {
             SignalFd::with_flags(&signals, SfdFlags::SFD_CLOEXEC | SfdFlags::SFD_NONBLOCK)?;
         Ok(Self {
             path,
+            bridge_at_startup,
             signal,
             listener,
             outcome: Cell::new(Outcome::NotAttempted),
@@ -81,7 +87,11 @@ pub struct Request<'a> {
 impl Request<'_> {
     pub fn load(&self) -> Option<RuntimeOptions> {
         match profile::load(&self.reload.path) {
-            Ok(profile) => Some(profile),
+            Ok(profile) if profile.bridge == self.reload.bridge_at_startup => Some(profile),
+            Ok(_) => {
+                self.rejected("changes to [bridge] require restarting JoyShockRust");
+                None
+            }
             Err(err) => {
                 self.rejected(err);
                 None
@@ -223,6 +233,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reload_rejects_changes_to_bridge_settings() {
+        let mut reload = Reload {
+            path: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml"),
+            bridge_at_startup: BridgeOptions {
+                rumble: true,
+                ..BridgeOptions::default()
+            },
+            signal: SignalFd::new(&SigSet::empty()).unwrap(),
+            listener: None,
+            outcome: Cell::new(Outcome::NotAttempted),
+        };
+        assert!(
+            Request {
+                reload: &reload,
+                client: None
+            }
+            .load()
+            .is_none()
+        );
+        assert_eq!(reload.outcome(), "rejected");
+
+        reload.bridge_at_startup = BridgeOptions::default();
+        assert!(
+            Request {
+                reload: &reload,
+                client: None
+            }
+            .load()
+            .is_some()
+        );
+    }
+
+    #[test]
     fn reload_socket_replies_with_the_result_for_each_client() {
         let address =
             SocketAddr::from_abstract_name(format!("joyshockrust-reload-{}", process::id()))
@@ -231,6 +274,7 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let reload = Reload {
             path: PathBuf::from("/dev/null"),
+            bridge_at_startup: BridgeOptions::default(),
             signal: SignalFd::new(&SigSet::empty()).unwrap(),
             listener: Some(listener),
             outcome: Cell::new(Outcome::NotAttempted),

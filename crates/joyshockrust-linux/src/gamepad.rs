@@ -177,7 +177,8 @@ const AXES: [(Axis, i32, i32); 8] = [
     (Axis::ABS_HAT0Y, -1, 1),
 ];
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum OutputKind {
     #[default]
     Generic,

@@ -24,8 +24,10 @@ pub fn transport_name(transport: Transport) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Selection {
+    #[default]
     Usb,
     Bluetooth,
     Auto,

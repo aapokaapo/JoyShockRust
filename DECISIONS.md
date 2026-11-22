@@ -167,3 +167,10 @@ Updated 2026-11-22. Each rumble-enabled session retries a missing or
 permission-denied physical evdev node for up to one second before creating
 its virtual gamepad. This allows for udev initialization and active-seat ACL
 application after hidraw discovery. [Rumble reconnect acceptance](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance)
+
+Updated 2026-11-22. The optional version 1 `[bridge]` table stores transport,
+virtual gamepad mode and rumble settings. Existing profiles keep their
+defaults. Command-line transport and gamepad overrides are resolved at
+startup. Reload rejects changes to this table since the discovery loop
+and virtual-device capabilities are selected at startup.
+[Bridge profile settings](README.md#toml-profiles)

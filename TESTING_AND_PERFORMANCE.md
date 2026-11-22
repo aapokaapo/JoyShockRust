@@ -345,7 +345,18 @@ node in its error and that normal input still works. Install the optional
 [rumble udev rule](README.md#virtual-gamepad-on-linux) in an active local
 session, reconnect and repeat the test. The ignored `uinput_rumble_gamepad_advertises_ff_rumble`
 test checks the virtual node's capabilities with a writable `/dev/uinput`
-and readable virtual event node.
+and readable virtual event node. The user confirmed that rumble forwarding
+worked after reconnecting over both USB and Bluetooth with `ecbda68`.
+
+## Bridge startup profile acceptance
+
+Add the [bridge settings](README.md#toml-profiles) to the active service
+profile and restart the user service. Check that the Xbox Series gamepad
+appears in Steam and use `rumble_test` to check a pulse. Swap transports
+without restarting the service. Change only `rumble` in `[bridge]` and request
+a reload. Expect a restart-required error and the original gamepad to
+retain its capabilities. Restore the setting, make a gyro or mapping
+change and check that a profile reload applies it.
 
 ## Profile reload acceptance
 
