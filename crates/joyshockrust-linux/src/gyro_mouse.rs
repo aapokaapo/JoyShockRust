@@ -9,7 +9,7 @@ use evdev::{
     uinput::VirtualDevice,
 };
 use joyshockrust_input::{
-    InputReport, RawImuSample, Timebase, TimestampUpdate, UsbFactoryCalibration,
+    FactoryCalibration, InputReport, RawImuSample, Timebase, TimestampUpdate, Transport,
 };
 use joyshockrust_motion::{
     Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
@@ -42,8 +42,8 @@ pub fn validate_flick_scale(scale: f64) -> Result<f64, &'static str> {
 }
 
 impl GyroMouse {
-    pub fn open(input: &File, options: Options) -> io::Result<Self> {
-        let factory = super::hidraw::read_factory_calibration(input).map_err(|err| {
+    pub fn open(input: &File, transport: Transport, options: Options) -> io::Result<Self> {
+        let factory = super::hidraw::read_factory_calibration(input, transport).map_err(|err| {
             io::Error::other(format!("could not read factory calibration: {err}"))
         })?;
         let axes = [Axis::REL_X, Axis::REL_Y]
@@ -91,7 +91,7 @@ impl GyroMouse {
 }
 
 struct GyroAim {
-    factory: UsbFactoryCalibration,
+    factory: FactoryCalibration,
     timebase: Timebase,
     motion: MotionEngine,
     calibration: Option<StationaryCalibration>,
@@ -100,7 +100,7 @@ struct GyroAim {
 }
 
 impl GyroAim {
-    fn new(factory: UsbFactoryCalibration, calibrate: bool) -> Self {
+    fn new(factory: FactoryCalibration, calibrate: bool) -> Self {
         let config = Self::config();
         // The sensor clock advances at three ticks per microsecond.
         let max_gap_ticks = (config.max_gap_ns * 3 / 1_000) as u32;
@@ -209,10 +209,7 @@ mod tests {
         ] {
             report[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
         }
-        GyroAim::new(
-            UsbFactoryCalibration::from_report(&report).unwrap(),
-            calibrate,
-        )
+        GyroAim::new(FactoryCalibration::from_report(&report).unwrap(), calibrate)
     }
 
     fn sample(device_ticks: u32) -> RawImuSample {

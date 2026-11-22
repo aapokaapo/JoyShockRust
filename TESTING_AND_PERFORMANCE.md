@@ -255,6 +255,22 @@ with the evdev permissions described in [Virtual gamepad acceptance](#virtual-ga
 For Xbox 360 compatibility, repeat with `--gamepad xbox360` and the
 `uinput_xbox360_identity_and_cross_press` test.
 
+The user reported that the Xbox Series output worked as expected on Fedora
+with `0ff794e`.
+
+## Bluetooth DualSense Edge acceptance
+
+Turn off the existing user service before running the bridge manually.
+Disconnect USB, pair the Edge over Bluetooth and run
+`cargo run --locked -p joyshockrust-linux -- --diagnose --bluetooth`. Verify
+that diagnostics lists a readable Bluetooth hidraw node. Start the bridge
+with `--bluetooth --gamepad xbox-series` and check the face buttons, sticks
+and gradual trigger travel in Steam. Disconnect Bluetooth, reconnect the
+controller and check that the virtual device returns. Repeat with
+`--gyro-mouse` to check stationary pointer behavior and directional motion
+after factory calibration. The automated tests use synthetic frames and
+independent CRC values for both Bluetooth input and calibration.
+
 ## Profile reload acceptance
 
 Install the updated executable and unit. Reload the systemd user manager

@@ -7,7 +7,7 @@ Correct controller behavior first; then low input-to-output latency, low jitter,
 
 ## Locked decisions
 - Rust stable, edition 2024; Linux first.
-- Direct **hidraw** controller acquisition; USB DualSense Edge first, Bluetooth later.
+- Direct **hidraw** controller acquisition; DualSense Edge over USB or Bluetooth.
 - Event-driven report acquisition (`epoll`/nonblocking reads or equivalent), plus deadline-based timers for timed actions. **No global periodic polling loop by default.**
 - One dedicated processing thread per active controller initially; benchmark before changing.
 - Platform-agnostic, deterministic `joyshockrust-motion` crate; no I/O or runtime dependencies.
@@ -33,8 +33,9 @@ Development has started **Phase 6**, controller and game compatibility. The USB 
 300-report capture. The Linux virtual gamepad, USB reconnect, gyro mouse
 startup, and digital hold and toggle gates have user-reported hardware tests.
 The analog trigger gate also passed the user's hardware check. Tap/hold and
-double-tap have also passed the user's hardware check. An experimental Flick Stick mode is ready for hardware testing. General timed
-mappings, profiles and the control plane remain open.
+double-tap have also passed the user's hardware check. The user also verified
+Xbox Series virtual output. Bluetooth input and gyro calibration decoding
+have synthetic coverage and await testing on a paired controller.
 
 See the [implementation plan](IMPLEMENTATION_PLAN.md), [test evidence](TESTING_AND_PERFORMANCE.md)
 and [source analysis](docs/REFERENCE_ANALYSIS.md).
@@ -208,6 +209,20 @@ active, the last-declared layer wins. Unmapped buttons use base rules. The modif
 Replace the former `--remap-layer l1 --remap-button cross=circle` syntax
 with `--layer-remap l1:cross=circle`.
 
+## DualSense Edge over Bluetooth
+
+Pair the controller in the Linux Bluetooth settings, then select the
+Bluetooth bridge explicitly. USB discovery remains the default.
+
+```sh
+cargo run --locked -p joyshockrust-linux -- --diagnose --bluetooth
+cargo run --locked -p joyshockrust-linux -- --bluetooth --gamepad xbox-series
+```
+
+Append `--gyro-mouse` to use the controller's Bluetooth factory calibration
+for pointer output. Bluetooth discovery accepts full reports with a valid
+checksum and waits for reconnection after the device disconnects.
+
 ## Experimental gyro mouse
 
 On Linux, enable relative pointer output from a wired DualSense Edge:
@@ -216,16 +231,16 @@ On Linux, enable relative pointer output from a wired DualSense Edge:
 cargo run --locked -p joyshockrust-linux -- --gyro-mouse
 ```
 
-The bridge reads the controller's USB factory calibration and creates
+The bridge reads the controller's factory calibration and creates
 **JoyShockRust Gyro Mouse** alongside the virtual gamepad. You can append
 `/dev/hidrawN` to select one device explicitly. The initial sensitivity is
 four relative counts per degree on both axes. To measure residual gyro bias,
 add `--calibrate-gyro`, put the controller on a stable surface, and wait for
 `Gyro rest calibration complete`. Pointer output starts when the calibration
-window completes. The bias is measured again on each USB reconnect.
+window completes. The bias is measured again on each reconnect.
 Add `--gyro-hold l2` (or `--gyro-hold-l2`) to move the pointer only while
 L2 is held. Alternatively, use `--gyro-toggle r3` to switch gyro aiming on
-and off with each R3 press. A toggle starts off on every USB connection.
+and off with each R3 press. A toggle starts off on every connection.
 For analog travel, use `--gyro-trigger l2` or `--gyro-trigger r2:0.60:0.40`.
 The default trigger engages at 45% travel and releases at 35%. Custom
 thresholds use `SIDE:PRESS:RELEASE` in the range 0–1, with the release

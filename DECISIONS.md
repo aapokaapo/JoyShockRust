@@ -125,3 +125,10 @@ Updated 2026-11-22. Xbox Series X|S output advertises wired USB input ID
 `045e:0b12` and input version `0507`. It follows xpad's 0–1023 analog
 trigger range and emits `KEY_RECORD` for Share from the DualSense Edge
 touchpad click. [Linux xpad device ID](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/joystick/xpad.c#L165-L167) · [Linux xpad axis ranges](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/joystick/xpad.c#L1913-L1929) · [Linux SDL controller database](https://github.com/mdqinc/SDL_GameControllerDB/blob/4e87e3c6c2574f49e1cdf8526b6f829b61e5ccb3/gamecontrollerdb.txt#L1933)
+
+Updated 2026-11-22. Bluetooth discovery is opt-in and identifies the hidraw
+candidate through its HID parent's ID. The opened descriptor is checked again
+before decoding. The bridge accepts full Bluetooth input reports and
+validates their input CRC. Factory feature replies use the separate feature
+CRC seed. Both paths reuse the USB common report layout and calibration
+math. [Linux HID identity](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-core.c#L2870-L2877) · [Linux Bluetooth input](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1432-L1453) · [Linux feature CRC](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L783-L816)

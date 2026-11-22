@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use joyshockrust_input::Transport;
 use nix::poll::PollFlags;
 
 use super::{
@@ -14,15 +15,23 @@ use super::{
     systemd,
 };
 
-pub fn open_wired_edge(path: &Path) -> io::Result<File> {
+pub fn transport_name(transport: Transport) -> &'static str {
+    match transport {
+        Transport::Usb => "wired",
+        Transport::Bluetooth => "Bluetooth",
+        Transport::Other => "unknown transport",
+    }
+}
+
+pub fn open_edge(path: &Path, transport: Transport) -> io::Result<File> {
     let input = OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_NONBLOCK)
         .open(path)?;
-    if !super::hidraw::is_wired_dualsense_edge(&input)? {
+    if super::hidraw::edge_transport(&input)? != Some(transport) {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "expected a wired DualSense Edge",
+            format!("expected a {} DualSense Edge", transport_name(transport)),
         ));
     }
     Ok(input)
@@ -34,6 +43,7 @@ pub enum Event<'a> {
 }
 
 pub fn run(
+    transport: Transport,
     reload: Option<&Reload>,
     status: Option<&StatusSocket>,
     mut handle: impl FnMut(Event<'_>) -> io::Result<()>,
@@ -48,7 +58,7 @@ pub fn run(
     let mut disconnected = None;
     let mut waiting = false;
     loop {
-        if let Some((path, mut input)) = find_wired_edge(disconnected.as_deref())? {
+        if let Some((path, mut input)) = find_edge(transport, disconnected.as_deref())? {
             waiting = false;
             eprintln!("Connected: {}", path.display());
             handle(Event::Connected(&mut input))?;
@@ -58,7 +68,7 @@ pub fn run(
             disconnected = Some(path);
         } else {
             if !waiting {
-                eprintln!("Waiting for a wired DualSense Edge");
+                eprintln!("Waiting for a {} DualSense Edge", transport_name(transport));
                 waiting = true;
             }
             loop {
@@ -83,12 +93,12 @@ pub fn run(
     }
 }
 
-fn find_wired_edge(skip: Option<&Path>) -> io::Result<Option<(PathBuf, File)>> {
-    for path in wired_edge_nodes()? {
+fn find_edge(transport: Transport, skip: Option<&Path>) -> io::Result<Option<(PathBuf, File)>> {
+    for path in edge_nodes(transport)? {
         if Some(path.as_path()) == skip {
             continue;
         }
-        match open_wired_edge(&path) {
+        match open_edge(&path, transport) {
             Ok(file) => return Ok(Some((path, file))),
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => eprintln!("Could not use {}: {err}", path.display()),
@@ -97,7 +107,7 @@ fn find_wired_edge(skip: Option<&Path>) -> io::Result<Option<(PathBuf, File)>> {
     Ok(None)
 }
 
-pub fn wired_edge_nodes() -> io::Result<Vec<PathBuf>> {
+pub fn edge_nodes(transport: Transport) -> io::Result<Vec<PathBuf>> {
     let mut enumerator = udev::Enumerator::new()?;
     enumerator.match_subsystem("hidraw")?;
     let mut nodes = Vec::new();
@@ -105,15 +115,21 @@ pub fn wired_edge_nodes() -> io::Result<Vec<PathBuf>> {
         let Some(path) = device.devnode() else {
             continue;
         };
-        let Some(usb) = device.parent_with_subsystem_devtype("usb", "usb_device")? else {
-            continue;
+        let matches = match transport {
+            Transport::Usb => device
+                .parent_with_subsystem_devtype("usb", "usb_device")?
+                .is_some_and(|usb| {
+                    usb.attribute_value("idVendor") == Some(OsStr::new("054c"))
+                        && usb.attribute_value("idProduct") == Some(OsStr::new("0df2"))
+                }),
+            Transport::Bluetooth => device.parent_with_subsystem("hid")?.is_some_and(|hid| {
+                hid.property_value("HID_ID") == Some(OsStr::new("0005:0000054C:00000DF2"))
+            }),
+            Transport::Other => false,
         };
-        if usb.attribute_value("idVendor") != Some(OsStr::new("054c"))
-            || usb.attribute_value("idProduct") != Some(OsStr::new("0df2"))
-        {
-            continue;
+        if matches {
+            nodes.push(path.to_path_buf());
         }
-        nodes.push(path.to_path_buf());
     }
     Ok(nodes)
 }

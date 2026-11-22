@@ -23,6 +23,9 @@ mod status;
 mod systemd;
 
 #[cfg(target_os = "linux")]
+use joyshockrust_input::Transport;
+
+#[cfg(target_os = "linux")]
 fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     use std::{env, path::PathBuf, process::ExitCode};
 
@@ -33,10 +36,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "usage: joyshockrust-linux --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
-        "       joyshockrust-linux --diagnose [/dev/hidrawN]\n",
+        "       joyshockrust-linux --diagnose [--bluetooth] [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
-        "bridge options: [--gamepad generic|xbox360|xbox-series] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
+        "bridge options: [--bluetooth] [--gamepad generic|xbox360|xbox-series] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -60,6 +63,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut reload_path = None;
     let mut status_path = None;
     let mut gamepad_kind = None;
+    let mut transport = Transport::Usb;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
     let mut args = env::args_os().skip(1);
@@ -143,6 +147,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 _ => ProfileMode::Run,
             };
             profile_path = Some((PathBuf::from(file), mode));
+        } else if arg == "--bluetooth" && transport == Transport::Usb {
+            transport = Transport::Bluetooth;
         } else if arg == "--gamepad" && gamepad_kind.is_none() {
             let value = args
                 .next()
@@ -205,6 +211,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             || diagnose
             || profile_path.is_some()
             || bridge_options
+            || transport == Transport::Bluetooth
             || mapping_options
         {
             return Err("select one socket command with only an optional socket path".into());
@@ -219,9 +226,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     }
     if diagnose {
         if profile_path.is_some() || bridge_options || mapping_options {
-            return Err("--diagnose takes only an optional hidraw path".into());
+            return Err("--diagnose takes only --bluetooth and an optional hidraw path".into());
         }
-        diagnostics::run(path.as_deref(), std::io::stdout().lock())?;
+        diagnostics::run(path.as_deref(), transport, std::io::stdout().lock())?;
         return Ok(ExitCode::SUCCESS);
     }
     let (mut runtime, reload) = if let Some((profile_path, mode)) = profile_path {
@@ -229,7 +236,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
         if mode == ProfileMode::Install {
-            if bridge_options {
+            if bridge_options || transport == Transport::Bluetooth {
                 return Err("--install-profile takes a source and an optional destination".into());
             }
             let destination = match path {
@@ -240,7 +247,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             println!("Installed profile: {}", destination.display());
             return Ok(ExitCode::SUCCESS);
         }
-        if mode == ProfileMode::Check && (path.is_some() || bridge_options) {
+        if mode == ProfileMode::Check
+            && (path.is_some() || bridge_options || transport == Transport::Bluetooth)
+        {
             return Err("--check-profile takes only a profile path".into());
         }
         let profile = match profile::load(&profile_path) {
@@ -286,13 +295,20 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let reload = reload.as_ref();
     let gamepad_kind = gamepad_kind.unwrap_or_default();
     if let Some(path) = path {
-        let mut input = discovery::open_wired_edge(&path)
+        let mut input = discovery::open_edge(&path, transport)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-        serve_session(&mut input, &mut runtime, reload, status, gamepad_kind)?;
+        serve_session(
+            &mut input,
+            &mut runtime,
+            reload,
+            status,
+            gamepad_kind,
+            transport,
+        )?;
     } else {
-        discovery::run(reload, status, |event| match event {
+        discovery::run(transport, reload, status, |event| match event {
             discovery::Event::Connected(input) => {
-                serve_session(input, &mut runtime, reload, status, gamepad_kind)
+                serve_session(input, &mut runtime, reload, status, gamepad_kind, transport)
             }
             discovery::Event::Reload(reload) => {
                 if let Some(next) = reload.load() {
@@ -312,12 +328,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 #[cfg(target_os = "linux")]
 fn open_mouse(
     input: &std::fs::File,
+    transport: Transport,
     options: Option<gyro_mouse::Options>,
 ) -> std::io::Result<Option<gyro_mouse::GyroMouse>> {
     let Some(options) = options else {
         return Ok(None);
     };
-    let mouse = gyro_mouse::GyroMouse::open(input, options)
+    let mouse = gyro_mouse::GyroMouse::open(input, transport, options)
         .map_err(|err| std::io::Error::other(format!("could not start gyro mouse: {err}")))?;
     eprintln!("JoyShockRust Gyro Mouse ready");
     if options.calibrate {
@@ -333,8 +350,9 @@ fn serve_session(
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
     gamepad_kind: gamepad::OutputKind,
+    transport: Transport,
 ) -> std::io::Result<()> {
-    let mut mouse = open_mouse(input, runtime.gyro)?;
+    let mut mouse = open_mouse(input, transport, runtime.gyro)?;
     let reload_input = reload.map(|_| input.try_clone()).transpose()?;
     let mut output = gamepad::open(gamepad_kind)
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
@@ -343,7 +361,7 @@ fn serve_session(
     if let Some(status) = status {
         status.update(true, runtime.gyro.is_some());
     }
-    let result = forward_reports(input, reload, status, |event| {
+    let result = forward_reports(input, transport, reload, status, |event| {
         let report = match event {
             SessionEvent::Report(report) => report,
             SessionEvent::Reload(reload) => {
@@ -352,7 +370,7 @@ fn serve_session(
                 };
                 if runtime.gyro != next.gyro {
                     let input = reload_input.as_ref().expect("reload descriptor");
-                    match open_mouse(input, next.gyro) {
+                    match open_mouse(input, transport, next.gyro) {
                         Ok(next_mouse) => mouse = next_mouse,
                         Err(err) => {
                             reload.rejected(&err);
@@ -412,11 +430,12 @@ enum SessionEvent<'a> {
 #[cfg(target_os = "linux")]
 fn forward_reports(
     input: &mut std::fs::File,
+    transport: Transport,
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
     mut publish: impl FnMut(SessionEvent<'_>) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    use joyshockrust_input::{DeviceModel, Transport, parse_report};
+    use joyshockrust_input::{DeviceModel, parse_report};
     use nix::poll::PollFlags;
     use std::{
         io::{self, Read},
@@ -424,7 +443,7 @@ fn forward_reports(
     };
 
     // One read consumes one complete HID report. A larger buffer preserves
-    // length validation when a node delivers a report larger than 64 bytes.
+    // length validation when a node delivers a larger report than expected.
     let mut report = [0; 16_384];
     loop {
         let (ready, request) = reload::wait(input.as_fd(), reload, status)?;
@@ -450,12 +469,9 @@ fn forward_reports(
                 }
                 Err(err) => return Err(err),
             };
-            if let Ok(report) = parse_report(
-                DeviceModel::DualSenseEdge,
-                Transport::Usb,
-                &report[..len],
-                None,
-            ) {
+            if let Ok(report) =
+                parse_report(DeviceModel::DualSenseEdge, transport, &report[..len], None)
+            {
                 publish(SessionEvent::Report(report))?;
             }
         }
@@ -478,7 +494,7 @@ mod tests {
         let (sender, receiver) = UnixStream::pair().unwrap();
         drop(sender);
         let mut input = File::from(OwnedFd::from(receiver));
-        super::forward_reports(&mut input, None, None, |_| {
+        super::forward_reports(&mut input, super::Transport::Usb, None, None, |_| {
             panic!("disconnected input published controls")
         })
         .unwrap();
@@ -499,16 +515,17 @@ mod tests {
 
         let mut input = File::from(OwnedFd::from(receiver));
         let mut presses = Vec::new();
-        let result = super::forward_reports(&mut input, None, None, |event| {
-            let super::SessionEvent::Report(report) = event else {
-                unreachable!()
-            };
-            presses.push(report.controls.buttons.contains(Button::South));
-            if presses.len() == 2 {
-                return Err(io::ErrorKind::BrokenPipe.into());
-            }
-            Ok(())
-        });
+        let result =
+            super::forward_reports(&mut input, super::Transport::Usb, None, None, |event| {
+                let super::SessionEvent::Report(report) = event else {
+                    unreachable!()
+                };
+                presses.push(report.controls.buttons.contains(Button::South));
+                if presses.len() == 2 {
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                Ok(())
+            });
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(presses, [true, false]);
     }

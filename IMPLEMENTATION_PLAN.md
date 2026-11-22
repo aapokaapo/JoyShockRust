@@ -64,8 +64,14 @@ Bluetooth DualSense Edge, DualSense, additional controllers, virtual output comp
 
 Opt-in Xbox Series X|S and Xbox 360 uinput identities use xpad button, hat
 and analog trigger layouts. Automated coverage exercises USB report mapping,
-including the Series trigger range and Share button. Steam Input and Proton
-tests remain pending. [Xbox output acceptance](TESTING_AND_PERFORMANCE.md#xbox-output-acceptance)
+including the Series trigger range and Share button. The user confirmed
+Xbox Series output on hardware. Per-game compatibility still needs evidence.
+[Xbox output acceptance](TESTING_AND_PERFORMANCE.md#xbox-output-acceptance)
+
+The opt-in Bluetooth path discovers a paired DualSense Edge through udev and
+checks the descriptor bus and model. The parser verifies full input and
+factory calibration CRCs. Bluetooth hardware and reconnect tests remain
+open. [Bluetooth acceptance](TESTING_AND_PERFORMANCE.md#bluetooth-dualsense-edge-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.

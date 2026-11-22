@@ -104,12 +104,10 @@ fn validates_model_and_transport_before_decoding() {
             Err(ParseError::UnsupportedDevice(other))
         );
     }
-    for transport in [Transport::Bluetooth, Transport::Other] {
-        assert_eq!(
-            parse_report(edge, transport, &neutral_frame(), None),
-            Err(ParseError::UnsupportedTransport(transport))
-        );
-    }
+    assert_eq!(
+        parse_report(edge, Transport::Other, &neutral_frame(), None),
+        Err(ParseError::UnsupportedTransport(Transport::Other))
+    );
 }
 
 #[test]

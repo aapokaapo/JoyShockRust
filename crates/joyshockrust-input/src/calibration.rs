@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::RawImuSample;
+use crate::{RawImuSample, bluetooth_crc_matches};
 
 pub const DUALSENSE_USB_CALIBRATION_REPORT_ID: u8 = 0x05;
 pub const DUALSENSE_USB_CALIBRATION_REPORT_LEN: usize = 41;
@@ -24,16 +24,20 @@ impl AxisCalibration {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct UsbFactoryCalibration {
+pub struct FactoryCalibration {
     gyro: [AxisCalibration; 3],
     accel: [AxisCalibration; 3],
 }
+
+/// Compatibility name for callers using the USB decoder.
+pub type UsbFactoryCalibration = FactoryCalibration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CalibrationReportError {
     InvalidLength(usize),
     InvalidReportId(u8),
     InvalidGyroSpeed,
+    InvalidChecksum,
     InvalidGyroAxis(usize),
     InvalidAccelAxis(usize),
 }
@@ -43,8 +47,9 @@ impl fmt::Display for CalibrationReportError {
         match self {
             Self::InvalidLength(length) => write!(f, "expected 41 bytes, received {length}"),
             Self::InvalidReportId(id) => {
-                write!(f, "expected USB calibration report 0x05, got {id:#04x}")
+                write!(f, "expected calibration report 0x05, got {id:#04x}")
             }
+            Self::InvalidChecksum => f.write_str("invalid Bluetooth calibration CRC"),
             Self::InvalidGyroSpeed => f.write_str("invalid factory gyro reference speed"),
             Self::InvalidGyroAxis(axis) => {
                 write!(f, "invalid factory gyro endpoints on axis {axis}")
@@ -58,12 +63,21 @@ impl fmt::Display for CalibrationReportError {
 
 impl core::error::Error for CalibrationReportError {}
 
-impl UsbFactoryCalibration {
+impl FactoryCalibration {
     /// Decode the USB factory calibration reply, including the report ID.
     ///
     /// Uses the SDL HIDAPI convention in the project's reference analysis:
     /// remove the factory gyro bias and scale by the measured endpoint spans.
     pub fn from_report(report: &[u8]) -> Result<Self, CalibrationReportError> {
+        Self::parse(report, false)
+    }
+
+    /// Decode the Bluetooth factory calibration reply and validate its CRC.
+    pub fn from_bluetooth_report(report: &[u8]) -> Result<Self, CalibrationReportError> {
+        Self::parse(report, true)
+    }
+
+    fn parse(report: &[u8], bluetooth: bool) -> Result<Self, CalibrationReportError> {
         use CalibrationReportError::*;
         let report: &[u8; DUALSENSE_USB_CALIBRATION_REPORT_LEN] =
             report.try_into().map_err(|_| InvalidLength(report.len()))?;
@@ -71,6 +85,9 @@ impl UsbFactoryCalibration {
             return Err(InvalidReportId(report[0]));
         }
 
+        if bluetooth && !bluetooth_crc_matches(0xa3, report) {
+            return Err(InvalidChecksum);
+        }
         let word = |offset| f32::from(i16::from_le_bytes([report[offset], report[offset + 1]]));
         let speed_span = word(19) + word(21);
         if speed_span <= 0.0 {

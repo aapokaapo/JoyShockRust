@@ -1,4 +1,4 @@
-//! Pure decoding of DualSense Edge USB HID reports in the layout described in
+//! Pure decoding of DualSense Edge USB and Bluetooth HID reports in the layout described in
 //! `docs/REFERENCE_ANALYSIS.md`.
 
 #![no_std]
@@ -12,13 +12,16 @@ mod timebase;
 
 pub use calibration::{
     CalibratedImu, CalibrationReportError, DUALSENSE_USB_CALIBRATION_REPORT_ID,
-    DUALSENSE_USB_CALIBRATION_REPORT_LEN, UsbFactoryCalibration,
+    DUALSENSE_USB_CALIBRATION_REPORT_LEN, FactoryCalibration, UsbFactoryCalibration,
 };
 pub use timebase::{InvalidForwardLimit, Timebase, TimestampUpdate};
 
 /// The frame size including the numbered HID report ID.
 pub const DUALSENSE_EDGE_USB_REPORT_LEN: usize = 64;
 const DUALSENSE_EDGE_USB_REPORT_ID: u8 = 0x01;
+pub const DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN: usize = 78;
+const DUALSENSE_EDGE_BLUETOOTH_REPORT_ID: u8 = 0x31;
+const COMMON_REPORT_LEN: usize = DUALSENSE_EDGE_USB_REPORT_LEN - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceModel {
@@ -70,6 +73,7 @@ pub enum ParseError {
     InvalidLength { actual: usize },
     InvalidReportId { actual: u8 },
     InvalidHat { value: u8 },
+    InvalidChecksum,
 }
 
 impl fmt::Display for ParseError {
@@ -79,13 +83,13 @@ impl fmt::Display for ParseError {
             Self::UnsupportedTransport(transport) => {
                 write!(formatter, "unsupported transport {transport:?}")
             }
-            Self::InvalidLength { actual } => write!(
-                formatter,
-                "expected {DUALSENSE_EDGE_USB_REPORT_LEN} bytes, received {actual}"
-            ),
-            Self::InvalidReportId { actual } => {
-                write!(formatter, "unexpected USB report ID {actual:#04x}")
+            Self::InvalidLength { actual } => {
+                write!(formatter, "unexpected input report length {actual}")
             }
+            Self::InvalidReportId { actual } => {
+                write!(formatter, "unexpected input report ID {actual:#04x}")
+            }
+            Self::InvalidChecksum => write!(formatter, "invalid Bluetooth input CRC"),
             Self::InvalidHat { value } => write!(formatter, "invalid D-pad hat value {value}"),
         }
     }
@@ -134,18 +138,33 @@ pub fn parse_report(
     if model != DeviceModel::DualSenseEdge {
         return Err(ParseError::UnsupportedDevice(model));
     }
-    if transport != Transport::Usb {
-        return Err(ParseError::UnsupportedTransport(transport));
-    }
-    let bytes: &[u8; DUALSENSE_EDGE_USB_REPORT_LEN] =
-        bytes.try_into().map_err(|_| ParseError::InvalidLength {
+    let (length, id, offset) = match transport {
+        Transport::Usb => (
+            DUALSENSE_EDGE_USB_REPORT_LEN,
+            DUALSENSE_EDGE_USB_REPORT_ID,
+            1,
+        ),
+        Transport::Bluetooth => (
+            DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN,
+            DUALSENSE_EDGE_BLUETOOTH_REPORT_ID,
+            2,
+        ),
+        Transport::Other => return Err(ParseError::UnsupportedTransport(transport)),
+    };
+    if bytes.len() != length {
+        return Err(ParseError::InvalidLength {
             actual: bytes.len(),
-        })?;
-    if bytes[0] != DUALSENSE_EDGE_USB_REPORT_ID {
+        });
+    }
+    if bytes[0] != id {
         return Err(ParseError::InvalidReportId { actual: bytes[0] });
     }
+    if transport == Transport::Bluetooth && !bluetooth_crc_matches(0xa1, bytes) {
+        return Err(ParseError::InvalidChecksum);
+    }
+    let bytes = &bytes[offset..offset + COMMON_REPORT_LEN];
 
-    let dpad = match bytes[8] & 0x0f {
+    let dpad = match bytes[7] & 0x0f {
         0 => DPad::Up,
         1 => DPad::UpRight,
         2 => DPad::Right,
@@ -159,9 +178,9 @@ pub fn parse_report(
     };
     let mut buttons = Buttons::default();
     for (byte, mapping) in [
-        (bytes[8], FACE_BUTTONS),
-        (bytes[9], STANDARD_BUTTONS),
-        (bytes[10], EXTRA_BUTTONS),
+        (bytes[7], FACE_BUTTONS),
+        (bytes[8], STANDARD_BUTTONS),
+        (bytes[9], EXTRA_BUTTONS),
     ] {
         for &(mask, button) in mapping {
             if byte & mask != 0 {
@@ -175,29 +194,58 @@ pub fn parse_report(
             buttons,
             dpad,
             left_stick: Stick {
-                x: normalize_stick(bytes[1]),
-                y: normalize_stick(bytes[2]),
+                x: normalize_stick(bytes[0]),
+                y: normalize_stick(bytes[1]),
             },
             right_stick: Stick {
-                x: normalize_stick(bytes[3]),
-                y: normalize_stick(bytes[4]),
+                x: normalize_stick(bytes[2]),
+                y: normalize_stick(bytes[3]),
             },
-            left_trigger: f32::from(bytes[5]) / 255.0,
-            right_trigger: f32::from(bytes[6]) / 255.0,
+            left_trigger: f32::from(bytes[4]) / 255.0,
+            right_trigger: f32::from(bytes[5]) / 255.0,
         },
         imu: RawImuSample {
             gyro_counts: read_sensor_vector([
-                bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21],
+                bytes[15], bytes[16], bytes[17], bytes[18], bytes[19], bytes[20],
             ]),
             accel_counts: read_sensor_vector([
-                bytes[22], bytes[23], bytes[24], bytes[25], bytes[26], bytes[27],
+                bytes[21], bytes[22], bytes[23], bytes[24], bytes[25], bytes[26],
             ]),
-            device_ticks: u32::from_le_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]),
+            device_ticks: u32::from_le_bytes([bytes[27], bytes[28], bytes[29], bytes[30]]),
         },
-        counter: bytes[7],
+        counter: bytes[6],
         received_at_ns,
     })
 }
+
+fn bluetooth_crc_matches(seed: u8, bytes: &[u8]) -> bool {
+    // Linux uses reflected CRC-32 with the HID transaction byte prepended.
+    let Some((body, checksum)) = bytes.split_last_chunk::<4>() else {
+        return false;
+    };
+    let mut crc = u32::MAX;
+    for byte in core::iter::once(seed).chain(body.iter().copied()) {
+        crc = (crc >> 8) ^ CRC32_TABLE[((crc as u8) ^ byte) as usize];
+    }
+    !crc == u32::from_le_bytes(*checksum)
+}
+
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0; 256];
+    let mut index = 0;
+    while index < table.len() {
+        let mut value = index as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            let polynomial = if value & 1 == 0 { 0 } else { 0xedb8_8320 };
+            value = (value >> 1) ^ polynomial;
+            bit += 1;
+        }
+        table[index] = value;
+        index += 1;
+    }
+    table
+};
 
 fn normalize_stick(value: u8) -> f32 {
     let centered = f32::from(value) - 128.0;
