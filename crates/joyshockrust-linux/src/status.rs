@@ -229,6 +229,7 @@ mod tests {
             None,
             Some(&status),
             Some(feedback.as_fd()),
+            None,
             |event| match event {
                 crate::SessionEvent::Report(_) => {
                     // Query on the next wake, after the current batch is counted.

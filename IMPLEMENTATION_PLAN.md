@@ -126,5 +126,11 @@ Synthetic input covers successful and rejected reports and connection reset.
 USB and Bluetooth measurements are pending.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
 
+One-shot benchmarks now measure processing time and host report intervals
+through the real bridge. USB and Bluetooth baselines, CPU and memory
+measurements, and contention and reconnect experiments remain open.
+Desktop controls are deferred until the broader GUI work.
+[Live benchmarks](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
+
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

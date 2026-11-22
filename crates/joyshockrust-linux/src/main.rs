@@ -1,4 +1,6 @@
 #[cfg(target_os = "linux")]
+mod benchmark;
+#[cfg(target_os = "linux")]
 mod diagnostics;
 #[cfg(target_os = "linux")]
 mod discovery;
@@ -55,6 +57,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
         "       joyshockrust-linux --calibrate-game --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --calibrate-game COUNTS IN_GAME_SENS [MEASURED_TURNS]\n",
+        "       joyshockrust-linux --benchmark-reports COUNT [--profile PATH] [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
         "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
@@ -74,6 +77,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut path = None;
     let mut profile_path = None;
     let mut diagnose = false;
+    let mut benchmark_target = None;
     let mut status_query = false;
     let mut reload_query = false;
     let mut load_profile_path = None;
@@ -147,6 +151,17 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             };
         } else if arg == "--diagnose" && !diagnose {
             diagnose = true;
+        } else if arg == "--benchmark-reports" && benchmark_target.is_none() {
+            let value = args
+                .next()
+                .ok_or("expected a report count after --benchmark-reports")?;
+            benchmark_target = Some(
+                value
+                    .to_str()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .filter(|count| (2..=benchmark::MAX_REPORTS).contains(count))
+                    .ok_or("benchmark report count must be between 2 and 100000")?,
+            );
         } else if arg == "--status" && !status_query {
             status_query = true;
         } else if arg == "--reload-profile" && !reload_query {
@@ -249,6 +264,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some() || rumble_enabled;
     let socket_commands =
         u8::from(status_query) + u8::from(reload_query) + u8::from(load_profile_path.is_some());
+    if benchmark_target.is_some()
+        && (diagnose
+            || socket_commands > 0
+            || profile_path
+                .as_ref()
+                .is_some_and(|(_, mode)| *mode != ProfileMode::Run))
+    {
+        return Err("--benchmark-reports requires a controller bridge run".into());
+    }
     if socket_commands > 0 {
         if socket_commands > 1
             || diagnose
@@ -358,14 +382,45 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         gamepad: gamepad_kind.unwrap_or(configured_bridge.gamepad),
         rumble: rumble_enabled || configured_bridge.rumble,
     };
-    if let Some(path) = path {
+    if let Some(target) = benchmark_target {
+        let (mut input, identity) = if let Some(path) = path {
+            discovery::open_controller(&path, bridge.transport)
+                .map_err(|err| format!("could not use {}: {err}", path.display()))?
+        } else {
+            discovery::open_first_controller(bridge.transport)?
+        };
+        let mut measurement = benchmark::Benchmark::new(target);
+        let result = serve_session(
+            &mut input,
+            &mut runtime,
+            reload,
+            status,
+            identity,
+            bridge,
+            Some(&mut measurement),
+        );
+        measurement.write(identity, std::io::stdout().lock())?;
+        result?;
+        if !measurement.complete() {
+            eprintln!("Controller disconnected before benchmark completed");
+            return Ok(ExitCode::FAILURE);
+        }
+    } else if let Some(path) = path {
         let (mut input, identity) = discovery::open_controller(&path, bridge.transport)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-        serve_session(&mut input, &mut runtime, reload, status, identity, bridge)?;
+        serve_session(
+            &mut input,
+            &mut runtime,
+            reload,
+            status,
+            identity,
+            bridge,
+            None,
+        )?;
     } else {
         discovery::run(bridge.transport, reload, status, |event| match event {
             discovery::Event::Connected(input, identity) => {
-                serve_session(input, &mut runtime, reload, status, identity, bridge)
+                serve_session(input, &mut runtime, reload, status, identity, bridge, None)
             }
             discovery::Event::Reload(reload) => {
                 if let Some(next) = reload.load() {
@@ -408,6 +463,7 @@ fn serve_session(
     status: Option<&status::StatusSocket>,
     identity: Identity,
     bridge: profile::BridgeOptions,
+    measurement: Option<&mut benchmark::Benchmark>,
 ) -> std::io::Result<()> {
     use std::os::fd::AsFd;
 
@@ -442,6 +498,7 @@ fn serve_session(
         reload,
         status,
         feedback.as_ref().map(AsFd::as_fd),
+        measurement,
         |event| {
             let report = match event {
                 SessionEvent::Report(report) => report,
@@ -548,6 +605,7 @@ fn forward_reports(
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
     feedback: Option<std::os::fd::BorrowedFd<'_>>,
+    mut measurement: Option<&mut benchmark::Benchmark>,
     mut publish: impl FnMut(SessionEvent<'_>) -> std::io::Result<ControlFlow<()>>,
 ) -> std::io::Result<()> {
     use joyshockrust_input::parse_report;
@@ -600,11 +658,28 @@ fn forward_reports(
             match parse_report(identity.model, identity.transport, &report[..len], None) {
                 Ok(report) => {
                     decoded += 1;
-                    if publish(SessionEvent::Report(report))?.is_break() {
+                    let (progress, complete) = if let Some(measurement) = measurement.as_deref_mut()
+                    {
+                        let started = std::time::Instant::now();
+                        let progress = publish(SessionEvent::Report(report))?;
+                        measurement.record(started, started.elapsed());
+                        (progress, measurement.complete())
+                    } else {
+                        (publish(SessionEvent::Report(report))?, false)
+                    };
+                    if progress.is_break() || complete {
+                        if let Some(status) = status {
+                            status.observe_reports(decoded, rejected);
+                        }
                         return Ok(());
                     }
                 }
-                Err(_) => rejected += 1,
+                Err(_) => {
+                    rejected += 1;
+                    if let Some(measurement) = measurement.as_deref_mut() {
+                        measurement.rejected += 1;
+                    }
+                }
             }
         }
         if let Some(status) = status
@@ -638,7 +713,7 @@ mod tests {
         let (sender, receiver) = UnixStream::pair().unwrap();
         drop(sender);
         let mut input = File::from(OwnedFd::from(receiver));
-        super::forward_reports(&mut input, USB_EDGE, None, None, None, |_| {
+        super::forward_reports(&mut input, USB_EDGE, None, None, None, None, |_| {
             panic!("disconnected input published controls")
         })
         .unwrap();
@@ -658,12 +733,45 @@ mod tests {
             None,
             None,
             Some(feedback.as_fd()),
+            None,
             |event| {
                 assert!(matches!(event, super::SessionEvent::Feedback));
                 Err(io::ErrorKind::BrokenPipe.into())
             },
         );
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn benchmark_stops_at_the_requested_number_of_decoded_reports() {
+        let (sender, receiver) = UnixDatagram::pair().unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let mut valid = [0; 64];
+        valid[0] = 1;
+        sender.send(&[1; 65]).unwrap();
+        for _ in 0..3 {
+            sender.send(&valid).unwrap();
+        }
+        let mut input = File::from(OwnedFd::from(receiver));
+        let mut measurement = super::benchmark::Benchmark::new(2);
+        let mut published = 0;
+        super::forward_reports(
+            &mut input,
+            USB_EDGE,
+            None,
+            None,
+            None,
+            Some(&mut measurement),
+            |event| {
+                assert!(matches!(event, super::SessionEvent::Report(_)));
+                published += 1;
+                Ok(super::ControlFlow::Continue(()))
+            },
+        )
+        .unwrap();
+        assert_eq!(published, 2);
+        assert_eq!(measurement.rejected, 1);
+        assert!(measurement.complete());
     }
 
     #[test]
@@ -681,16 +789,17 @@ mod tests {
 
         let mut input = File::from(OwnedFd::from(receiver));
         let mut presses = Vec::new();
-        let result = super::forward_reports(&mut input, USB_EDGE, None, None, None, |event| {
-            let super::SessionEvent::Report(report) = event else {
-                unreachable!()
-            };
-            presses.push(report.controls.buttons.contains(Button::South));
-            if presses.len() == 2 {
-                return Err(io::ErrorKind::BrokenPipe.into());
-            }
-            Ok(super::ControlFlow::Continue(()))
-        });
+        let result =
+            super::forward_reports(&mut input, USB_EDGE, None, None, None, None, |event| {
+                let super::SessionEvent::Report(report) = event else {
+                    unreachable!()
+                };
+                presses.push(report.controls.buttons.contains(Button::South));
+                if presses.len() == 2 {
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+                Ok(super::ControlFlow::Continue(()))
+            });
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(presses, [true, false]);
     }

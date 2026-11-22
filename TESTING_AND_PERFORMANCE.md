@@ -520,5 +520,33 @@ reports that reached the parser and failed decoding.
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 
+### Live bridge benchmark
+
+Build once in release mode so compilation is outside the measurement.
+Stop the user service during the run to keep one virtual output active,
+then connect the controller before starting the benchmark.
+
+```sh
+cargo build --locked --release -p joyshockrust-linux
+systemctl --user stop joyshockrust.service
+profile="${XDG_CONFIG_HOME:-$HOME/.config}/joyshockrust/profile.toml"
+target/release/joyshockrust-linux --benchmark-reports 10000 --profile "$profile" --auto-transport
+```
+
+Run once with the pad resting, then again while moving it and exercising
+its controls. Repeat with USB unplugged and Bluetooth connected. Check
+`benchmark_transport` on each run, and restart the user service when
+finished. Optionally prefix the binary command with `/usr/bin/time -v`
+to record CPU time and peak RSS for the whole command.
+
+`processing_*_ns` spans the decoded report callback through virtual
+output submission when controls change. `host_interval_*_ns` measures
+spacing between callback starts, including queueing and scheduling
+effects. Both distributions show p50, p95, p99 and max. The processing
+target of 0.5 ms corresponds to `processing_p99_ns=500000`. The benchmark
+measures the service's userspace work and reports parser rejections
+separately. To test an early disconnect, unplug or power off the controller
+before the target count. Expect a partial summary and a nonzero exit.
+
 ## Observability
 Counters for reports received/rejected, timestamp gaps, output writes, queue/backlog, reconnects and timer deadlines. Diagnostics must be buffered or collected outside the hot path; no synchronous per-sample logging.

@@ -219,6 +219,12 @@ computes the rate over elapsed host time, including idle periods. The
 counters persist across profile reloads and reset on disconnect.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
 
+Updated 2026-11-22. The opt-in bridge benchmark brackets the normal
+report callback with monotonic clock reads. It preallocates sample storage
+and sorts after closing the virtual devices. The interval distribution
+uses the same host timestamps. Normal runs skip benchmark timing and
+storage. [Live benchmarks](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
+
 Updated 2026-11-22. The common DualSense payload supplies two contact slots.
 Grid bindings are opt-in in version 1 profiles. Either active slot can
 hold a touch binding. The mechanical click selects the first active slot's

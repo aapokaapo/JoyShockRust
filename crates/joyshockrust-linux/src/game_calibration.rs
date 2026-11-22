@@ -130,7 +130,7 @@ fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dy
     );
     eprintln!("Count the turns. At the landmark, center the stick and press Options again.");
 
-    forward_reports(&mut controller, identity, None, None, None, |event| {
+    forward_reports(&mut controller, identity, None, None, None, None, |event| {
         let SessionEvent::Report(report) = event else {
             return Ok(ControlFlow::Continue(()));
         };

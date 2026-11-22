@@ -227,6 +227,10 @@ DualSense Edge hidraw nodes and check access to them and `/dev/uinput`.
 Append a hidraw path to check that node directly. The command opens the
 devices as the current user and exits without creating virtual outputs.
 
+Use `--benchmark-reports COUNT` for a bounded live bridge benchmark. It
+reports processing and host report interval percentiles after handling
+the requested count. [Live benchmark instructions](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
+
 ## systemd user service
 
 Stop any manually running bridge before starting the service. Install the
