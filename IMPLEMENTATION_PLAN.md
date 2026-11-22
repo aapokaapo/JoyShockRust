@@ -33,7 +33,7 @@ Document the future motion boundary before adding fusion. Define calibrated inpu
 ## Phase 2 — end-to-end USB vertical slice
 Discover hidraw via udev, open/read events, process buttons/sticks and create uinput virtual gamepad/mouse; clean disconnection. **Exit:** physical USB controller produces verified virtual events; no stuck buttons.
 
-The first increment accepts a hidraw node explicitly, checks the USB bus and Edge VID/PID through the opened descriptor, and forwards standard gamepad controls to a uniquely named uinput device. It waits for input readiness and discards the virtual device after releasing held controls on disconnect. Udev discovery, automatic reconnection, and a physical input-to-output test remain open.
+The Linux bridge accepts a hidraw node explicitly or uses udev discovery with automatic reconnection. It checks the USB bus and Edge VID/PID through the opened descriptor, waits for input readiness, and releases held controls before dropping the uinput device on disconnect. The [uinput and Steam acceptance tests](TESTING_AND_PERFORMANCE.md#virtual-gamepad-acceptance) cover press/release and reconnect. Their results on hardware are pending.
 
 ## Phase 3 — pure motion engine
 Implement deterministic IMU processing, calibration, sensor fusion and gyro-to-mouse with replay fixtures. **Exit:** calibrated gyro aiming verified on real hardware and replay tests.

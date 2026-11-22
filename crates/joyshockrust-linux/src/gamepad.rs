@@ -119,6 +119,63 @@ mod tests {
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
 
     #[test]
+    #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
+    fn uinput_cross_press_and_release() {
+        use std::os::fd::AsFd;
+
+        use evdev::{Device, SynchronizationCode};
+        use nix::poll::{PollFd, PollFlags, poll};
+
+        let mut virtual_device = open().expect("create the virtual gamepad");
+        let node = virtual_device
+            .enumerate_dev_nodes_blocking()
+            .expect("enumerate the virtual gamepad's event nodes")
+            .next()
+            .expect("virtual gamepad event node")
+            .expect("read the event node path");
+        let mut observer = Device::open(&node).expect("open the virtual gamepad's evdev node");
+        assert_eq!(observer.name(), Some("JoyShockRust Virtual Gamepad"));
+        observer.set_nonblocking(true).unwrap();
+
+        let mut report = [0; 64];
+        report[0] = 1;
+        report[1..=4].fill(128);
+        report[8] = 0x28;
+        let pressed = parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &report, None)
+            .unwrap()
+            .controls;
+        let mut state = GamepadState::default();
+        state
+            .publish(pressed, |events| virtual_device.emit(events))
+            .unwrap();
+        state
+            .publish(Controls::default(), |events| virtual_device.emit(events))
+            .unwrap();
+
+        let mut fds = [PollFd::new(observer.as_fd(), PollFlags::POLLIN)];
+        assert!(poll(&mut fds, 1_000_u16).unwrap() > 0, "no uinput events");
+        let events: Vec<_> = observer
+            .fetch_events()
+            .unwrap()
+            .map(|event| (event.event_type(), event.code(), event.value()))
+            .collect();
+        let sync = (
+            EventType::SYNCHRONIZATION,
+            SynchronizationCode::SYN_REPORT.0,
+            0,
+        );
+        assert_eq!(
+            events,
+            [
+                (EventType::KEY, Key::BTN_SOUTH.0, 1),
+                sync,
+                (EventType::KEY, Key::BTN_SOUTH.0, 0),
+                sync,
+            ],
+        );
+    }
+
+    #[test]
     fn usb_report_changes_are_batched_and_released() {
         let mut report = [0; 64];
         report[..10].copy_from_slice(&[1, 255, 128, 128, 128, 255, 0, 0, 0x21, 0x04]);

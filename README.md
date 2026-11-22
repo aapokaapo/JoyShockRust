@@ -36,7 +36,17 @@ The parser and timebase are covered by synthetic tests and replay of a stationar
 
 ## Local checks
 
-From the workspace root with stable Rust, rustfmt and Clippy installed:
+From the workspace root with stable Rust, rustfmt and Clippy installed. The
+Linux bridge also needs `pkg-config` and the libudev development files
+(`libudev-dev` on Debian/Ubuntu or `systemd-devel` on Fedora).
+
+Install the formatter for the Cargo toolchain you use:
+
+- Fedora-packaged Cargo: `sudo dnf install rustfmt`.
+- Rustup-managed Cargo: `rustup component add rustfmt` from the workspace root.
+
+The Fedora package `fmt` is a C++ formatting library. Use
+`cargo fmt --version` to verify that Cargo can find rustfmt.
 
 ```sh
 cargo fetch --locked
@@ -69,14 +79,17 @@ cargo run -p joyshockrust-input --example live_usb_dump -- /dev/hidrawN
 
 ## Virtual gamepad on Linux
 
-Run the first Linux bridge with a readable DualSense Edge USB hidraw node and
-write access to `/dev/uinput`.
+Run the Linux bridge with read access to a DualSense Edge USB hidraw node and
+write access to `/dev/uinput`. With no arguments it uses udev discovery and
+waits for the next connection when the controller is unplugged. Pass a
+specific node to run a single session.
 
 ```sh
+cargo run --locked -p joyshockrust-linux
 cargo run --locked -p joyshockrust-linux -- /dev/hidrawN
 ```
 
 The bridge exposes **JoyShockRust Virtual Gamepad** with standard buttons,
 D-pad, sticks and analog triggers. It releases held controls when the input
-session ends. Start a new invocation after reconnecting. Physical validation
-is pending, and games can still see the physical controller.
+session ends. Games can still see the physical controller. See the
+[uinput and Steam acceptance tests](TESTING_AND_PERFORMANCE.md#virtual-gamepad-acceptance).
