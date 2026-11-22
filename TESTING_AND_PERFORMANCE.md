@@ -71,6 +71,11 @@ Record the commit, Linux kernel, controller firmware if known, and results.
 The test observes physical response. The synthetic suite separately covers
 calibration conversion, fractional mouse movement and timestamp gaps.
 
+On Fedora with commit `647dcf6`, the user reported that the pointer stayed
+still at rest, that both pointer axes were inverted, and that USB reconnect
+restored pointer control without a jump. The bridge also printed duplicate
+waiting messages. The axis sign and wait logging fixes need a hardware retest.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

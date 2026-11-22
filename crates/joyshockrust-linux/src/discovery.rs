@@ -32,8 +32,10 @@ pub fn run(mut serve: impl FnMut(&mut File) -> io::Result<()>) -> io::Result<()>
         .match_subsystem("hidraw")?
         .listen()?;
     let mut disconnected = None;
+    let mut waiting = false;
     loop {
         if let Some((path, mut input)) = find_wired_edge(disconnected.as_deref())? {
+            waiting = false;
             eprintln!("Connected: {}", path.display());
             serve(&mut input)?;
             eprintln!("Disconnected: {}", path.display());
@@ -41,7 +43,10 @@ pub fn run(mut serve: impl FnMut(&mut File) -> io::Result<()>) -> io::Result<()>
             // A different already-connected controller can take over immediately.
             disconnected = Some(path);
         } else {
-            eprintln!("Waiting for a wired DualSense Edge");
+            if !waiting {
+                eprintln!("Waiting for a wired DualSense Edge");
+                waiting = true;
+            }
             wait_for_change(&monitor)?;
             disconnected = None;
         }

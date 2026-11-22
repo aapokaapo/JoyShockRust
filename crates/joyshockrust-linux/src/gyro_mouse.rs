@@ -63,8 +63,10 @@ struct GyroAim {
 impl GyroAim {
     fn new(factory: UsbFactoryCalibration) -> Self {
         let config = MotionConfig {
-            sensitivity_x: 4.0,
-            sensitivity_y: 4.0,
+            // Linux pointer directions use the opposite signs to the
+            // controller rotations used for horizontal and vertical aim.
+            sensitivity_x: -4.0,
+            sensitivity_y: -4.0,
             ..MotionConfig::default()
         };
         // The sensor clock advances at three ticks per microsecond.
@@ -151,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn fractional_motion_accumulates_on_both_axes() {
+    fn fractional_motion_accumulates_in_pointer_direction_on_both_axes() {
         let mut aim = aim();
         assert_eq!(aim.advance(sample(0)), [0, 0]);
         let mut total = [0, 0];
@@ -160,7 +162,7 @@ mod tests {
             total[0] += delta[0];
             total[1] += delta[1];
         }
-        assert_eq!(total, [4, -2]);
+        assert_eq!(total, [-4, 2]);
     }
 
     #[test]
