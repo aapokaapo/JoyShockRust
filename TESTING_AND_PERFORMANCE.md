@@ -219,6 +219,22 @@ again after unplugging and check that the node disappears from the list.
 The command checks opening and hidraw identity. Virtual output events are
 covered separately by the uinput acceptance test.
 
+On 2026-11-22, the user tested commit `03a7f40` on Fedora. With USB
+connected, diagnostics reported a readable wired DualSense Edge at
+`/dev/hidraw6`. After unplugging, diagnostics reported no wired Edge nodes.
+`/dev/uinput` opened in read-write mode in both runs.
+
+## User service acceptance
+
+Install and start the unit using the [service instructions](README.md#systemd-user-service).
+With USB disconnected, check that the service is active and its journal
+reports that it is waiting. Connect the Edge, check the journal for the
+connection, and verify the profile drives the virtual gamepad in Steam.
+Unplug and reconnect while the service is active and check that the virtual
+gamepad returns. Restart the service after editing the profile and verify
+the new settings. Finally stop the service and check that its virtual
+devices are gone.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

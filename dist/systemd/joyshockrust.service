@@ -1,0 +1,11 @@
+[Unit]
+Description=JoyShockRust USB controller bridge
+
+[Service]
+Type=exec
+ExecStart=%h/.local/bin/joyshockrust-linux --profile %E/joyshockrust/profile.toml
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=default.target

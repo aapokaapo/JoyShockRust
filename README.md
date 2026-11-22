@@ -107,6 +107,32 @@ DualSense Edge hidraw nodes and check access to them and `/dev/uinput`.
 Append a hidraw path to check that node directly. The command opens the
 devices as the current user and exits without creating virtual outputs.
 
+## systemd user service
+
+Stop any manually running bridge before starting the service. Install the
+binary and the [user unit](dist/systemd/joyshockrust.service) from this
+checkout. The sample profile is copied only if the destination is absent.
+
+```sh
+cargo install --locked --path crates/joyshockrust-linux --root "$HOME/.local"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+profile="$config_dir/joyshockrust/profile.toml"
+if [ ! -e "$profile" ]; then
+  install -Dm644 profiles/dualsense-edge.example.toml "$profile"
+fi
+install -Dm644 dist/systemd/joyshockrust.service "$config_dir/systemd/user/joyshockrust.service"
+systemctl --user daemon-reload
+systemctl --user start joyshockrust.service
+journalctl --user -u joyshockrust.service -f
+```
+
+The service uses the user manager's configuration directory. Edit
+`joyshockrust/profile.toml` there and run
+`systemctl --user restart joyshockrust.service` to load the changes.
+Use `systemctl --user enable joyshockrust.service` to start it with the
+user manager, or `systemctl --user stop joyshockrust.service` to stop it.
+The service needs the same hidraw and uinput access as a manual run.
+
 ## Virtual gamepad on Linux
 
 Run the Linux bridge with read access to a DualSense Edge USB hidraw node and
