@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const USAGE: &str = concat!(
         "usage: joyshockrust-linux [--gyro-mouse [--calibrate-gyro] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
-        "--gyro-double-tap BUTTON | --gyro-hold-l2 | ",
+        "--gyro-double-tap BUTTON | --gyro-chord BUTTON,BUTTON | --gyro-hold-l2 | ",
         "--gyro-trigger SIDE[:PRESS:RELEASE]",
     );
     let mut gyro_mouse = false;
@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | "--gyro-toggle"
                     | "--gyro-tap-hold"
                     | "--gyro-double-tap"
+                    | "--gyro-chord"
                     | "--gyro-trigger"
             )
         ) {
@@ -52,6 +53,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             options.binding = if arg == "--gyro-hold-l2" {
                 Binding::Hold(Button::LeftTrigger)
+            } else if arg == "--gyro-chord" {
+                let spec = args.next().ok_or("expected two gyro chord buttons")?;
+                gyro_gate::chord_by_name(spec.to_str().ok_or("invalid gyro chord specification")?)?
             } else if arg == "--gyro-trigger" {
                 let spec = args
                     .next()

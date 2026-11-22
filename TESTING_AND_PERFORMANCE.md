@@ -133,6 +133,13 @@ Wait more than 300 ms between taps and press for 200 ms or longer in separate
 attempts. Both should leave aim unchanged. Reconnect with R3 held, release
 it, and confirm that aim is still off.
 
+The user reported that both tap/hold and double-tap worked as expected on the Phase 4 USB test branch.
+
+For the chord gate, run with `--gyro-mouse --gyro-chord l1,r1`. While
+rotating, test L1 and R1 separately, then hold both in either order. Aim
+should move only while both are down. Release either button while rotating
+to check that motion stops, then press it again and check for a jump.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

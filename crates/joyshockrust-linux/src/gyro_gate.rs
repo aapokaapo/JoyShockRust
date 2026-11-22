@@ -13,6 +13,7 @@ pub enum Binding {
     Toggle(Button),
     TapHold(Button),
     DoubleTap(Button),
+    Chord(Button, Button),
     AnalogTrigger(TriggerGate),
 }
 
@@ -91,6 +92,7 @@ impl GyroGate {
         match self.binding {
             Binding::Always => true,
             Binding::Hold(button) => buttons.contains(button),
+            Binding::Chord(first, second) => buttons.contains(first) && buttons.contains(second),
             Binding::Toggle(button) => {
                 let pressed = buttons.contains(button);
                 if self.previous_pressed.replace(pressed) == Some(false) && pressed {
@@ -151,6 +153,18 @@ impl GyroGate {
     }
 }
 
+pub fn chord_by_name(spec: &str) -> Result<Binding, &'static str> {
+    let (first, second) = spec
+        .split_once(',')
+        .ok_or("expected two comma-separated gyro chord buttons")?;
+    let first = button_by_name(first).ok_or("unknown first gyro chord button")?;
+    let second = button_by_name(second).ok_or("unknown second gyro chord button")?;
+    if first == second {
+        return Err("select two distinct gyro chord buttons");
+    }
+    Ok(Binding::Chord(first, second))
+}
+
 pub fn button_by_name(name: &str) -> Option<Button> {
     Some(match name {
         "cross" => Button::South,
@@ -184,6 +198,30 @@ mod tests {
         let mut controls = Controls::default();
         controls.buttons.insert(button);
         controls
+    }
+
+    #[test]
+    fn chord_tracks_both_buttons_regardless_of_press_order() {
+        let left = pressed(Button::LeftShoulder);
+        let right = pressed(Button::RightShoulder);
+        let mut both = left;
+        both.buttons.insert(Button::RightShoulder);
+        let binding = chord_by_name("l1,r1").unwrap();
+        for (first, remaining) in [(left, right), (right, left)] {
+            let mut gate = GyroGate::new(binding);
+            assert!(!gate.enabled(&first, Instant::now));
+            assert!(gate.enabled(&both, Instant::now));
+            assert!(!gate.enabled(&remaining, Instant::now));
+            assert!(gate.enabled(&both, Instant::now));
+            assert!(!gate.enabled(&Controls::default(), Instant::now));
+        }
+    }
+
+    #[test]
+    fn malformed_chords_are_rejected() {
+        for spec in ["l1", "l1,l1", "l1,", ",r1", "l1,r1,r2", "l1,unknown"] {
+            assert!(chord_by_name(spec).is_err(), "{spec}");
+        }
     }
 
     #[test]

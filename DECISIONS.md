@@ -67,3 +67,5 @@ The analog gyro gate uses normalized trigger travel and separate engage/release 
 The tap/hold gyro binding compares report arrival time with a 200 ms monotonic deadline. A short release flips the latch. A long hold temporarily enables aim and preserves the latch on release. The gate affects pointer output at report boundaries. Actions that must fire without new input still need an event-loop timer. [Gyro acceptance](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
 
 Double-tap gyro toggling counts complete short taps. Each press must be shorter than 200 ms, and the second release must arrive within 300 ms of the first. A long press cancels a pending pair. Timing uses monotonic report arrival and each USB session starts with an empty gesture state. [Gyro acceptance](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
+
+The gyro chord holds aim active while two distinct digital buttons are down. Button order is irrelevant. It uses the same report-boundary gate as a single hold. [Gyro acceptance](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
