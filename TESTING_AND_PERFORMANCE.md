@@ -208,6 +208,17 @@ Square. Its gyro mouse should move only while L2 is held. After stopping
 the bridge, copy the example and change its version to 2. Check that
 `--check-profile` rejects the copy.
 
+The user reported that the gyro-except-L2 profile worked as expected.
+
+## Device diagnostics acceptance
+
+Run `cargo run --locked -p joyshockrust-linux -- --diagnose` with the wired
+Edge connected. Expect its hidraw path to be listed as readable and
+`/dev/uinput: read-write open OK` for a user who can run the bridge. Run
+again after unplugging and check that the node disappears from the list.
+The command checks opening and hidraw identity. Virtual output events are
+covered separately by the uinput acceptance test.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

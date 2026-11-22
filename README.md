@@ -100,6 +100,13 @@ keeps gyro aim enabled until the digital L2 button is pressed.
 The profile is loaded at startup. Choose the profile or the equivalent CLI
 mapping flags for that run. You can still pass a hidraw path with `--profile`.
 
+## Device diagnostics
+
+Run `cargo run --locked -p joyshockrust-linux -- --diagnose` to list wired
+DualSense Edge hidraw nodes and check access to them and `/dev/uinput`.
+Append a hidraw path to check that node directly. The command opens the
+devices as the current user and exits without creating virtual outputs.
+
 ## Virtual gamepad on Linux
 
 Run the Linux bridge with read access to a DualSense Edge USB hidraw node and

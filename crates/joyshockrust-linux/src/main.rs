@@ -1,4 +1,6 @@
 #[cfg(target_os = "linux")]
+mod diagnostics;
+#[cfg(target_os = "linux")]
 mod discovery;
 #[cfg(target_os = "linux")]
 mod flick_stick;
@@ -24,6 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const USAGE: &str = concat!(
         "usage: joyshockrust-linux --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
+        "       joyshockrust-linux --diagnose [/dev/hidrawN]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -34,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut options = gyro_mouse::Options::default();
     let mut path = None;
     let mut profile_path = None;
+    let mut diagnose = false;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
     let mut args = env::args_os().skip(1);
@@ -89,6 +93,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => Binding::Toggle(button),
                 }
             };
+        } else if arg == "--diagnose" && !diagnose {
+            diagnose = true;
         } else if arg == "--profile" || arg == "--check-profile" {
             if profile_path.is_some() {
                 return Err("select only one profile".into());
@@ -139,6 +145,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         && !gyro_mouse
     {
         return Err("gyro options require --gyro-mouse".into());
+    }
+    if diagnose {
+        if profile_path.is_some() || gyro_mouse || stick_curve.is_some() || !remaps.is_empty() {
+            return Err("--diagnose takes only an optional hidraw path".into());
+        }
+        diagnostics::run(path.as_deref(), std::io::stdout().lock())?;
+        return Ok(());
     }
     let profile::RuntimeOptions {
         gyro: options,

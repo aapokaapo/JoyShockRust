@@ -83,3 +83,5 @@ Experimental Flick Stick uses physical right-stick direction and device report t
 ## Phase 5 first increment
 
 Recorded 2026-11-22. TOML profiles have a required schema version and reject unknown fields. Startup validates profile values with the same button and curve validators used by the CLI. The process owns one resolved configuration for all USB sessions. Live reload and persistence are future work. [Profile example](profiles/dualsense-edge.example.toml)
+
+Device diagnostics shares automatic USB Edge enumeration and fd identity verification with normal startup. It checks uinput access by opening the builder and exits before creating a device. [Diagnostic acceptance](TESTING_AND_PERFORMANCE.md#device-diagnostics-acceptance)

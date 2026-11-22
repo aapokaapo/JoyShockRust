@@ -54,15 +54,27 @@ pub fn run(mut serve: impl FnMut(&mut File) -> io::Result<()>) -> io::Result<()>
 }
 
 fn find_wired_edge(skip: Option<&Path>) -> io::Result<Option<(PathBuf, File)>> {
+    for path in wired_edge_nodes()? {
+        if Some(path.as_path()) == skip {
+            continue;
+        }
+        match open_wired_edge(&path) {
+            Ok(file) => return Ok(Some((path, file))),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => eprintln!("Could not use {}: {err}", path.display()),
+        }
+    }
+    Ok(None)
+}
+
+pub fn wired_edge_nodes() -> io::Result<Vec<PathBuf>> {
     let mut enumerator = udev::Enumerator::new()?;
     enumerator.match_subsystem("hidraw")?;
+    let mut nodes = Vec::new();
     for device in enumerator.scan_devices()? {
         let Some(path) = device.devnode() else {
             continue;
         };
-        if Some(path) == skip {
-            continue;
-        }
         let Some(usb) = device.parent_with_subsystem_devtype("usb", "usb_device")? else {
             continue;
         };
@@ -71,13 +83,9 @@ fn find_wired_edge(skip: Option<&Path>) -> io::Result<Option<(PathBuf, File)>> {
         {
             continue;
         }
-        match open_wired_edge(path) {
-            Ok(file) => return Ok(Some((path.to_path_buf(), file))),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => eprintln!("Could not use {}: {err}", path.display()),
-        }
+        nodes.push(path.to_path_buf());
     }
-    Ok(None)
+    Ok(nodes)
 }
 
 fn wait_for_change(monitor: &udev::MonitorSocket) -> io::Result<()> {
