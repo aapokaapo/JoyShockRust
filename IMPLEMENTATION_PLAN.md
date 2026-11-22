@@ -178,6 +178,8 @@ closes the existing virtual devices before opening a new controller.
 The process handles a single active controller session. Status shows
 the effective filter while waiting, and a headless integration test
 verifies it after file reload and preset load.
+The CLI also supports changing or clearing the ID filter directly while
+retaining the current mappings and other filters.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
 ## Change control

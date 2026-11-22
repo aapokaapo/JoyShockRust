@@ -22,7 +22,7 @@ nix::ioctl_read_buf!(hid_get_raw_unique, b'H', 0x08, u8);
 pub struct ControllerId([u8; 6]);
 
 impl ControllerId {
-    fn parse(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         let mut address = [0; 6];
         let mut parts = value.split(':');
         for byte in &mut address {

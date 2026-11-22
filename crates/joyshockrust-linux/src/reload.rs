@@ -27,11 +27,13 @@ use nix::{
 
 use crate::{
     discovery::{ControllerFilter, Selection},
+    hidraw::ControllerId,
     profile::{self, BridgeOptions, RuntimeOptions},
     status::{self, StatusSocket},
 };
 
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
+const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
 
 pub struct Reload {
     path: PathBuf,
@@ -131,8 +133,48 @@ enum Client {
     Load(SocketAddr, Vec<u8>),
 }
 
+pub struct Update {
+    pub profile: Option<RuntimeOptions>,
+    pub filter: ControllerFilter,
+}
+
 impl Request<'_> {
-    pub fn load(&self) -> Option<RuntimeOptions> {
+    fn selection_payload(&self) -> Option<&[u8]> {
+        match &self.client {
+            Some(Client::Load(_, data)) => data.strip_prefix(SELECT_CONTROLLER_PREFIX),
+            _ => None,
+        }
+    }
+
+    pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
+        if let Some(payload) = self.selection_payload() {
+            if !self.reload.allow_controller_switch {
+                self.rejected("controller selection changes require automatic discovery");
+                return None;
+            }
+            let selection = std::str::from_utf8(payload)
+                .ok()
+                .and_then(|value| parse_controller_selection(value).ok());
+            let Some(controller_id) = selection else {
+                self.rejected("expected a controller HID ID or any");
+                return None;
+            };
+            return Some(Update {
+                profile: None,
+                filter: ControllerFilter {
+                    controller_id,
+                    ..current
+                },
+            });
+        }
+        let next = self.load()?;
+        Some(Update {
+            filter: self.controller_filter(&next, current),
+            profile: Some(next),
+        })
+    }
+
+    fn load(&self) -> Option<RuntimeOptions> {
         let inline = match &self.client {
             Some(Client::Load(_, data)) => Some(data.as_slice()),
             _ => None,
@@ -174,7 +216,7 @@ impl Request<'_> {
         }
     }
 
-    pub fn controller_filter(
+    fn controller_filter(
         &self,
         next: &RuntimeOptions,
         current: ControllerFilter,
@@ -192,6 +234,11 @@ impl Request<'_> {
     }
 
     pub fn applied(self) {
+        if self.selection_payload().is_some() {
+            eprintln!("Controller selection updated from CLI");
+            self.reply(b"applied\n");
+            return;
+        }
         self.reload.outcome.set(Outcome::Applied);
         if matches!(self.client, Some(Client::Load(_, _))) {
             eprintln!("Profile loaded from CLI");
@@ -201,6 +248,11 @@ impl Request<'_> {
         self.reply(b"applied\n");
     }
     pub fn rejected(&self, err: impl Display) {
+        if self.selection_payload().is_some() {
+            eprintln!("Controller selection rejected: {err}");
+            self.reply(b"rejected\n");
+            return;
+        }
         self.reload.outcome.set(Outcome::Rejected);
         if matches!(self.client, Some(Client::Load(_, _))) {
             eprintln!("CLI profile rejected: {err}");
@@ -233,18 +285,18 @@ pub fn request(path: Option<&Path>) -> io::Result<()> {
     let stream = status::connect(path, "reload.sock")?;
     let mut response = Vec::new();
     stream.take(32).read_to_end(&mut response)?;
-    check_reply(&response)
+    check_reply(&response, "profile reload")
 }
 
-fn check_reply(response: &[u8]) -> io::Result<()> {
+fn check_reply(response: &[u8], operation: &str) -> io::Result<()> {
     match response {
         b"applied\n" => Ok(()),
-        b"rejected\n" => Err(io::Error::other(
-            "profile reload rejected; see the bridge log for details",
-        )),
+        b"rejected\n" => Err(io::Error::other(format!(
+            "{operation} rejected; see the bridge log for details"
+        ))),
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "profile reload returned no valid result",
+            format!("{operation} returned no valid result"),
         )),
     }
 }
@@ -277,6 +329,30 @@ pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<(
         ));
     }
 
+    send_update(&profile, reload_socket, "profile reload")
+}
+
+pub fn parse_controller_selection(value: &str) -> Result<Option<ControllerId>, &'static str> {
+    if value == "any" {
+        Ok(None)
+    } else {
+        ControllerId::parse(value)
+            .map(Some)
+            .ok_or("expected a controller HID ID or any")
+    }
+}
+
+pub fn select_controller(id: Option<ControllerId>, reload_socket: Option<&Path>) -> io::Result<()> {
+    let mut payload = SELECT_CONTROLLER_PREFIX.to_vec();
+    if let Some(id) = id {
+        write!(payload, "{id}")?;
+    } else {
+        payload.extend_from_slice(b"any");
+    }
+    send_update(&payload, reload_socket, "controller selection")
+}
+
+fn send_update(payload: &[u8], reload_socket: Option<&Path>, operation: &str) -> io::Result<()> {
     let path = load_socket_path(&status::socket_path(reload_socket, "reload.sock")?);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -293,10 +369,10 @@ pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<(
     let timeout = Some(Duration::from_secs(2));
     socket.set_write_timeout(timeout)?;
     socket.set_read_timeout(timeout)?;
-    socket.send(&profile)?;
+    socket.send(payload)?;
     let mut response = [0; 32];
     let len = socket.recv(&mut response)?;
-    check_reply(&response[..len])
+    check_reply(&response[..len], operation)
 }
 
 pub fn wait<'a>(
@@ -497,6 +573,52 @@ mod tests {
             .load()
             .is_some()
         );
+    }
+
+    #[test]
+    fn direct_controller_selection_preserves_the_profile_and_other_filters() {
+        let mut reload = Reload {
+            path: PathBuf::from("/dev/null"),
+            bridge_at_startup: BridgeOptions::default(),
+            allow_controller_switch: true,
+            transport_override: None,
+            signal: SignalFd::new(&SigSet::empty()).unwrap(),
+            listener: None,
+            load_socket: None,
+            outcome: Cell::new(Outcome::NotAttempted),
+        };
+        let current = ControllerFilter {
+            transport: Selection::Bluetooth,
+            model: crate::discovery::ModelSelection::DualSenseEdge,
+            controller_id: ControllerId::parse("00:11:22:33:44:55"),
+        };
+        fn request<'a>(server: &'a Reload, payload: &[u8]) -> Request<'a> {
+            Request {
+                reload: server,
+                client: Some(Client::Load(
+                    SocketAddr::from_abstract_name("joyshockrust-select-test").unwrap(),
+                    [SELECT_CONTROLLER_PREFIX, payload].concat(),
+                )),
+            }
+        }
+        let change = request(&reload, b"aa:bb:cc:dd:ee:ff");
+        let update = change.resolve(current).unwrap();
+        assert_eq!(
+            update.filter.controller_id,
+            ControllerId::parse("aa:bb:cc:dd:ee:ff")
+        );
+        assert_eq!(update.filter.transport, current.transport);
+        assert_eq!(update.filter.model, current.model);
+        assert!(update.profile.is_none());
+        change.applied();
+        let cleared = request(&reload, b"any").resolve(update.filter).unwrap();
+        assert!(cleared.filter.controller_id.is_none());
+        assert!(cleared.profile.is_none());
+        assert!(request(&reload, b"invalid").resolve(current).is_none());
+        assert_eq!(reload.outcome(), "not_attempted");
+
+        reload.allow_controller_switch = false;
+        assert!(request(&reload, b"any").resolve(current).is_none());
     }
 
     #[test]

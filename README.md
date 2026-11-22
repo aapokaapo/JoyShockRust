@@ -181,6 +181,14 @@ ignored in hexadecimal digits. If the ID is unavailable, choose a model
 filter without an ID. Use `systemctl --user reload joyshockrust.service`
 or `--load-profile PATH` to change the active selection in discovery mode.
 
+To change only the live ID filter, use `joyshockrust-linux
+--select-controller ID` or pass `any` to clear the ID filter.
+This keeps the current transport, model, mappings and gyro settings.
+The new ID applies until another selection command, a profile load that
+sets the selection, or a process restart. `--reload-profile` restores
+the startup selection. An optional final argument selects the reload
+socket.
+
 ### Touchpad regions
 
 Add a `[touchpad]` grid to a version 1 profile for DualSense or DualSense

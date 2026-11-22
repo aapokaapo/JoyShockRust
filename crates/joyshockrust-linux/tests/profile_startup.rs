@@ -197,4 +197,27 @@ fn status_reports_the_current_selection_after_live_reload_while_waiting() {
     let result = load();
     assert!(result.status.success(), "{result:?}");
     check("bluetooth", "dualsense");
+
+    let result = Command::new(binary)
+        .args(["--select-controller", "ff:ff:ff:ff:ff:fe"])
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    check("bluetooth", "dualsense");
+    let output = Command::new(binary)
+        .arg("--status")
+        .arg(&status)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("gyro_configured=true\nlast_reload=applied\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("ff:ff:ff:ff:ff:fe"), "{stdout}");
+    assert_eq!(
+        fs::read_to_string(&startup).unwrap(),
+        settings("auto", "dualsense-edge")
+    );
 }

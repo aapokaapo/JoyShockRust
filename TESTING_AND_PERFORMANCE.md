@@ -593,6 +593,13 @@ Check `selected_transport`, `selected_model` and
 `controller_id_configured` immediately after each successful reload,
 including while the service waits for the newly selected controller.
 
+With a model and transport filter that includes both controllers, use
+`--select-controller ID` to switch between them. Verify that bindings
+stay the same and that only one virtual gamepad is active. Use
+`--select-controller any` to clear the pin and check that
+`controller_id_configured=false`. Reload the startup profile to restore
+its selection.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

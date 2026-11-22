@@ -329,3 +329,9 @@ transport filter and whether an individual controller ID is required.
 The status payload omits the actual HID ID. Discovery updates the
 filter snapshot between sessions, before it serves the next query.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
+
+Updated 2026-11-22. The CLI can update the current HID ID filter without
+loading a profile. The command uses the existing local datagram socket
+and the same single-session handoff as a profile filter change. It
+preserves the active profile and records no profile reload outcome.
+[Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)

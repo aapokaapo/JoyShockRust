@@ -54,6 +54,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
+        "       joyshockrust-linux --select-controller ID|any [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
         "       joyshockrust-linux --calibrate-game --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --calibrate-game COUNTS IN_GAME_SENS [MEASURED_TURNS]\n",
@@ -83,6 +84,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut status_query = false;
     let mut reload_query = false;
     let mut load_profile_path = None;
+    let mut controller_selection = None;
     let mut reload_path = None;
     let mut status_path = None;
     let mut gamepad_kind = None;
@@ -187,6 +189,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 args.next()
                     .ok_or("expected a profile path after --load-profile")?,
             ));
+        } else if arg == "--select-controller" && controller_selection.is_none() {
+            let value = args.next().ok_or("expected a controller HID ID or any")?;
+            controller_selection = Some(reload::parse_controller_selection(
+                value
+                    .to_str()
+                    .ok_or("expected a controller HID ID or any")?,
+            )?);
         } else if arg == "--reload-socket" && reload_path.is_none() {
             reload_path = Some(PathBuf::from(
                 args.next().ok_or("expected a reload socket path")?,
@@ -278,8 +287,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mapping_options = gyro_mouse || stick_curve.is_some() || !remaps.is_empty();
     let bridge_options =
         status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some() || rumble_enabled;
-    let socket_commands =
-        u8::from(status_query) + u8::from(reload_query) + u8::from(load_profile_path.is_some());
+    let socket_commands = u8::from(status_query)
+        + u8::from(reload_query)
+        + u8::from(load_profile_path.is_some())
+        + u8::from(controller_selection.is_some());
     if show_controller_id && !diagnose {
         return Err("--show-controller-id requires --diagnose".into());
     }
@@ -310,6 +321,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         } else {
             let result = if let Some(source) = load_profile_path.as_deref() {
                 reload::load_profile(source, path.as_deref())
+            } else if let Some(selection) = controller_selection {
+                reload::select_controller(selection, path.as_deref())
             } else {
                 reload::request(path.as_deref())
             };
@@ -319,6 +332,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             }
             if let Some(source) = load_profile_path {
                 println!("Loaded profile: {}", source.display());
+            } else if controller_selection.is_some() {
+                println!("Controller selection updated");
             }
         }
         return Ok(ExitCode::SUCCESS);
@@ -500,14 +515,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     )
                 }
                 discovery::Event::Reload(reload, current_filter) => {
-                    if let Some(next) = reload.load() {
-                        let filter = reload.controller_filter(&next, current_filter);
-                        runtime = next;
-                        if let Some(status) = status {
-                            status.update(None, runtime.gyro.is_some());
+                    if let Some(update) = reload.resolve(current_filter) {
+                        if let Some(next) = update.profile {
+                            runtime = next;
+                            if let Some(status) = status {
+                                status.update(None, runtime.gyro.is_some());
+                            }
                         }
                         reload.applied();
-                        return Ok(Some(filter));
+                        return Ok(Some(update.filter));
                     }
                     Ok(None)
                 }
@@ -593,15 +609,18 @@ fn serve_session(
                     return Ok(ControlFlow::Continue(()));
                 }
                 SessionEvent::Reload(reload) => {
-                    let Some(next) = reload.load() else {
+                    let current_filter = bridge.controller_filter();
+                    let Some(update) = reload.resolve(current_filter) else {
                         return Ok(ControlFlow::Continue(()));
                     };
-                    let current_filter = bridge.controller_filter();
-                    let filter = reload.controller_filter(&next, current_filter);
-                    if filter != current_filter {
-                        switch = Some((filter, next, reload));
+                    if update.filter != current_filter {
+                        switch = Some((update, reload));
                         return Ok(ControlFlow::Break(()));
                     }
+                    let Some(next) = update.profile else {
+                        reload.applied();
+                        return Ok(ControlFlow::Continue(()));
+                    };
                     if let (Some(mouse), Some(current), Some(next)) =
                         (&mut mouse, runtime.gyro, next.gyro)
                         && (gyro_mouse::Options {
@@ -661,7 +680,7 @@ fn serve_session(
         output.emit(events)
     });
     let result = result.and(release.map(|_| ()));
-    if let Some((filter, next, request)) = switch {
+    if let Some((update, request)) = switch {
         if let Err(err) = &result {
             request.rejected(err);
         } else {
@@ -670,12 +689,14 @@ fn serve_session(
             drop(output);
             drop(mouse);
             drop(rumble);
-            *runtime = next;
+            if let Some(next) = update.profile {
+                *runtime = next;
+            }
             if let Some(status) = status {
                 status.update(None, runtime.gyro.is_some());
             }
             request.applied();
-            return Ok(Some(filter));
+            return Ok(Some(update.filter));
         }
     }
     if let Some(status) = status {
