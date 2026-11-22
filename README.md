@@ -104,6 +104,12 @@ sticks. The radial curve preserves direction, center, and full travel.
 Exponent 1 is linear. Values below 1 amplify small movement and values
 above 1 reduce it. The accepted range is 0.25–4.
 
+Use repeatable `--remap-button SOURCE=TARGET` options to change virtual
+gamepad buttons, for example `--remap-button cross=circle --remap-button circle=cross`.
+Rules use physical button names and apply simultaneously. Gyro bindings
+continue to read physical buttons. Remapping L2 or R2 changes its digital
+button. Analog trigger travel is forwarded independently.
+
 ## Experimental gyro mouse
 
 On Linux, enable relative pointer output from a wired DualSense Edge:

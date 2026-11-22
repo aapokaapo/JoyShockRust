@@ -36,6 +36,10 @@ impl Buttons {
         self.0 |= 1 << button as u32;
     }
 
+    pub fn remove(&mut self, button: Button) {
+        self.0 &= !(1 << button as u32);
+    }
+
     pub const fn contains(self, button: Button) -> bool {
         self.0 & (1 << button as u32) != 0
     }

@@ -151,6 +151,18 @@ should be about one quarter, before any Steam filtering. Try a diagonal and
 verify its direction stays the same. Full travel and return to center should
 match the linear mode. Compare with a separate run using `--stick-curve 1`.
 
+The user reported that the stick response curve worked as expected.
+
+## Button remap acceptance
+
+Run `cargo run --locked -p joyshockrust-linux -- --remap-button cross=circle --remap-button circle=cross`.
+In Steam's **Test Device Inputs**, press and release each button. Confirm
+that physical Cross appears as virtual Circle and physical Circle as virtual
+Cross. Hold both, then release one at a time. Verify each virtual button
+releases independently. To test a shared target, rerun with only
+`--remap-button cross=circle` and verify the virtual Circle stays held
+until both physical buttons have been released.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

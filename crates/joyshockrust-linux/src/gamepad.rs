@@ -6,6 +6,38 @@ use evdev::{
 };
 use joyshockrust_core::{Button, Controls, DPad, Stick};
 
+#[derive(Default)]
+pub struct ButtonRemaps(Vec<(Button, Button)>);
+
+impl ButtonRemaps {
+    pub fn add(&mut self, spec: &str) -> Result<(), &'static str> {
+        let (source, target) = spec.split_once('=').ok_or("expected SOURCE=TARGET")?;
+        let source = super::gyro_gate::button_by_name(source).ok_or("unknown source button")?;
+        let target = super::gyro_gate::button_by_name(target).ok_or("unknown target button")?;
+        if !BUTTONS.iter().any(|&(button, _)| button == target) {
+            return Err("target button is unavailable on the virtual gamepad");
+        }
+        if self.0.iter().any(|&(button, _)| button == source) {
+            return Err("source button already has a remap");
+        }
+        self.0.push((source, target));
+        Ok(())
+    }
+
+    pub fn apply(&self, mut controls: Controls) -> Controls {
+        let physical = controls.buttons;
+        for &(source, _) in &self.0 {
+            controls.buttons.remove(source);
+        }
+        for &(source, target) in &self.0 {
+            if physical.contains(source) {
+                controls.buttons.insert(target);
+            }
+        }
+        controls
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct StickCurve(f32);
 
@@ -149,6 +181,42 @@ fn axes(controls: Controls) -> [i32; AXES.len()] {
 mod tests {
     use super::*;
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+    #[test]
+    fn remaps_swap_buttons_without_chaining() {
+        let mut remaps = ButtonRemaps::default();
+        remaps.add("cross=circle").unwrap();
+        remaps.add("circle=cross").unwrap();
+        let mut raw = Controls::default();
+        raw.buttons.insert(Button::South);
+        let virtual_buttons = remaps.apply(raw).buttons;
+        assert!(!virtual_buttons.contains(Button::South));
+        assert!(virtual_buttons.contains(Button::East));
+        assert_eq!(remaps.apply(Controls::default()), Controls::default());
+        assert!(remaps.add("cross=r1").is_err());
+        assert!(remaps.add("l1=fn-left").is_err());
+    }
+
+    #[test]
+    fn remap_keeps_virtual_button_pressed_until_all_sources_release() {
+        let mut remaps = ButtonRemaps::default();
+        remaps.add("cross=circle").unwrap();
+        let mut state = GamepadState::default();
+        let mut changes = Vec::new();
+        let mut emit = |events: &[InputEvent]| {
+            changes.extend(events.iter().map(|event| (event.code(), event.value())));
+            Ok(())
+        };
+        let mut raw = Controls::default();
+        raw.buttons.insert(Button::South);
+        state.publish(remaps.apply(raw), &mut emit).unwrap();
+        raw.buttons.insert(Button::East);
+        state.publish(remaps.apply(raw), &mut emit).unwrap();
+        raw.buttons.remove(Button::South);
+        state.publish(remaps.apply(raw), &mut emit).unwrap();
+        state.publish(Controls::default(), &mut emit).unwrap();
+        assert_eq!(changes, [(Key::BTN_EAST.0, 1), (Key::BTN_EAST.0, 0)]);
+    }
 
     #[test]
     fn stick_curve_preserves_direction_and_shapes_both_sticks() {

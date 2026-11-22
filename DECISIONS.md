@@ -71,3 +71,5 @@ Double-tap gyro toggling counts complete short taps. Each press must be shorter 
 The gyro chord holds aim active while two distinct digital buttons are down. Button order is irrelevant. It uses the same report-boundary gate as a single hold. [Gyro acceptance](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
 
 The optional stick curve raises the radial magnitude to a power inside the unit circle and scales both components together. Center, full travel and diagonal corners retain their original values. The curve affects virtual gamepad output after HID decoding. [Stick curve acceptance](TESTING_AND_PERFORMANCE.md#stick-response-curve-acceptance)
+
+Button remaps act on the physical button snapshot and publish a single virtual state. Rules apply simultaneously, so swaps work without chaining. Output stays pressed while any mapped or passthrough source is held. Analog axes and physical gyro bindings keep their own input state. [Remap acceptance](TESTING_AND_PERFORMANCE.md#button-remap-acceptance)
