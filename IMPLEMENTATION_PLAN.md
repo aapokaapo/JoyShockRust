@@ -175,7 +175,9 @@ active connection. Synthetic tests cover output suppression and reset.
 
 Discovery applies controller selection changes from live profiles and
 closes the existing virtual devices before opening a new controller.
-The process handles a single active controller session.
+The process handles a single active controller session. Status shows
+the effective filter while waiting, and a headless integration test
+verifies it after file reload and preset load.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
 ## Change control

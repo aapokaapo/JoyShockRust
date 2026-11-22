@@ -304,7 +304,10 @@ Query the running service with `$HOME/.local/bin/joyshockrust-linux --status`.
 The command prints `controller=waiting` or `controller=connected` and
 `gyro_configured=true` or `gyro_configured=false`. The `transport` field
 reports `usb`, `bluetooth` or `none`. The `model` field reports
-`dualsense`, `dualsense_edge` or `none`. The gyro field describes
+`dualsense`, `dualsense_edge` or `none`. The `selected_transport` and
+`selected_model` fields show the effective filter even when the bridge
+is waiting. `controller_id_configured` shows whether the filter requires
+an individual HID ID. The gyro field describes
 the loaded profile. A hold or toggle binding can still suppress mouse output.
 The `battery_state` and `battery_percent` fields report the controller's
 latest battery reading. The percentage is an estimate in coarse steps.

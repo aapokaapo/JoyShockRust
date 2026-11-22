@@ -589,6 +589,9 @@ Repeat by loading a preset with `--load-profile PATH`. A preset that
 omits `[bridge]` should preserve the current selection. Test a
 mapping-only reload while connected and verify the virtual gamepad stays
 present. Use `--status` to inspect the active model and session counters.
+Check `selected_transport`, `selected_model` and
+`controller_id_configured` immediately after each successful reload,
+including while the service waits for the newly selected controller.
 
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.

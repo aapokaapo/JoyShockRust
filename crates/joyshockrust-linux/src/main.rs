@@ -430,6 +430,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         rumble: rumble_enabled || configured_bridge.rumble,
         ..configured_bridge
     };
+    if let Some(status) = status {
+        status.set_filter(bridge.controller_filter());
+    }
     if let Some(target) = benchmark_target {
         let (mut input, identity) = if let Some(path) = path {
             discovery::open_controller(&path, bridge.controller_filter())

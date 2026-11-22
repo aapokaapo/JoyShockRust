@@ -323,3 +323,9 @@ selection changes in the running process. It ends the active output
 session before scanning for the new selection. Gamepad and rumble
 settings still apply at startup. CLI transport overrides survive reloads.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
+
+Updated 2026-11-22. Status version 1 includes the effective model and
+transport filter and whether an individual controller ID is required.
+The status payload omits the actual HID ID. Discovery updates the
+filter snapshot between sessions, before it serves the next query.
+[Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)

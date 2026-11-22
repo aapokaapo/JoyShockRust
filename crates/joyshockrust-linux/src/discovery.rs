@@ -150,6 +150,9 @@ pub fn run(
     let mut disconnected = HashSet::new();
     let mut waiting = false;
     loop {
+        if let Some(status) = status {
+            status.set_filter(filter);
+        }
         if let Some((candidate, mut input)) = find_controller(filter, &mut disconnected)? {
             let Candidate {
                 path,
