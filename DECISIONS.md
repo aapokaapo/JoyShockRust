@@ -283,6 +283,13 @@ Other failures propagate. This covers detach races before the read loop
 starts, including factory calibration reads.
 [Linux hidraw poll](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hidraw.c#L263-L274)
 
+Updated 2026-11-22. The optional bridge model setting narrows the
+transport filter to standard DualSense or DualSense Edge. Discovery
+applies the filter at enumeration and validates the opened descriptor.
+The default accepts both models. Model changes use the same
+restart boundary as transport changes.
+[Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
+
 Updated 2026-11-22. The common DualSense payload supplies two contact slots.
 Grid bindings are opt-in in version 1 profiles. Either active slot can
 hold a touch binding. The mechanical click selects the first active slot's

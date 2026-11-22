@@ -153,6 +153,11 @@ Auto-discovery also recovers when a controller disconnects during
 session setup. A synthetic descriptor test checks that setup errors
 still propagate while the controller descriptor is live.
 
+Profiles can constrain discovery, manual sessions, live benchmarks and
+game calibration to a selected DualSense model. The bridge continues
+to run one controller session at a time.
+[Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
+
 Process-lifetime counters expose started and ended controller sessions.
 They allow repeated hotplug runs to verify transitions alongside the
 per-session input and output counters.

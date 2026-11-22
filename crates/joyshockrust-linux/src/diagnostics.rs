@@ -3,18 +3,22 @@ use std::{
     path::Path,
 };
 
-use crate::discovery::{self, Selection};
+use crate::discovery::{self, ControllerFilter, Selection};
 
 pub fn run(path: Option<&Path>, selection: Selection, mut output: impl Write) -> io::Result<()> {
+    let filter = ControllerFilter {
+        transport: selection,
+        ..ControllerFilter::default()
+    };
     if let Some(path) = path {
-        check_controller(path, selection, &mut output)?;
+        check_controller(path, filter, &mut output)?;
     } else {
-        let nodes = discovery::controller_nodes(selection)?;
+        let nodes = discovery::controller_nodes(filter)?;
         if nodes.is_empty() {
-            writeln!(output, "No {} hidraw nodes found.", selection.description())?;
+            writeln!(output, "No {filter} hidraw nodes found.")?;
         }
         for node in &nodes {
-            check_controller(&node.path, selection, &mut output)?;
+            check_controller(&node.path, filter, &mut output)?;
         }
     }
     // Opening the builder checks the same permissions as startup. The
@@ -26,8 +30,12 @@ pub fn run(path: Option<&Path>, selection: Selection, mut output: impl Write) ->
     }
 }
 
-fn check_controller(path: &Path, selection: Selection, output: &mut impl Write) -> io::Result<()> {
-    match discovery::open_controller(path, selection) {
+fn check_controller(
+    path: &Path,
+    filter: ControllerFilter,
+    output: &mut impl Write,
+) -> io::Result<()> {
+    match discovery::open_controller(path, filter) {
         Ok((_, identity)) => writeln!(
             output,
             "{}: {} {}, readable",

@@ -155,6 +155,12 @@ changes during a session when the bridge settings stay the same. The
 existing transport and gamepad flags override their profile values.
 `--rumble` enables rumble for the run.
 
+Set `model = "dualsense"` or `model = "dualsense-edge"` in `[bridge]`
+to select a controller model. If the chosen model is absent, automatic
+discovery waits for it. The default `model = "any"` accepts either model.
+The model selection also applies to benchmarks and game calibration
+that use the profile.
+
 ### Touchpad regions
 
 Add a `[touchpad]` grid to a version 1 profile for DualSense or DualSense

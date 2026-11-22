@@ -551,6 +551,13 @@ while connected and match while waiting. Reload the profile during a
 connection and check that both counts stay the same. A service restart
 starts a fresh count.
 
+With both DualSense models connected, set `[bridge].model` to
+`"dualsense"` and restart the service. Check that `--status` shows
+`model=dualsense`. Disconnect the standard DualSense and check that the
+service waits while the Edge remains connected. Reconnect the selected
+model, then repeat with `model = "dualsense-edge"`. With
+`transport = "auto"`, try each model over both USB and Bluetooth.
+
 With gyro enabled, also disconnect during the interval between the
 `Connected` log line and virtual device setup. If setup fails after
 the detach, expect a disconnect diagnostic and the same process to

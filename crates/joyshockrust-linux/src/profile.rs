@@ -11,7 +11,7 @@ use std::{
 use serde::Deserialize;
 
 use crate::{
-    discovery::Selection,
+    discovery::{ControllerFilter, ModelSelection, Selection},
     game_calibration::GameCalibration,
     gamepad::{ButtonRemaps, OutputKind, StickCurve},
     gyro_gate::{self, Binding, DigitalInput, TriggerGate},
@@ -66,8 +66,18 @@ enum GyroBinding {
 #[serde(default, deny_unknown_fields)]
 pub struct BridgeOptions {
     pub transport: Selection,
+    pub model: ModelSelection,
     pub gamepad: OutputKind,
     pub rumble: bool,
+}
+
+impl BridgeOptions {
+    pub fn controller_filter(self) -> ControllerFilter {
+        ControllerFilter {
+            transport: self.transport,
+            model: self.model,
+        }
+    }
 }
 
 pub struct RuntimeOptions {
@@ -394,6 +404,7 @@ mod tests {
             version = 1
             [bridge]
             transport = "auto"
+            model = "dualsense-edge"
             gamepad = "xbox-series"
             rumble = true
         "#,
@@ -403,6 +414,7 @@ mod tests {
             profile.bridge.unwrap(),
             BridgeOptions {
                 transport: Selection::Auto,
+                model: ModelSelection::DualSenseEdge,
                 gamepad: OutputKind::XboxSeries,
                 rumble: true,
             }
@@ -419,11 +431,22 @@ mod tests {
         );
         for setting in [
             "transport = \"ethernet\"",
+            "model = \"other\"",
             "gamepad = \"sony\"",
             "rumble = \"true\"",
             "unknown = true",
         ] {
             assert!(parse(&format!("version = 1\n[bridge]\n{setting}")).is_err());
+        }
+        for (setting, model) in [
+            ("any", ModelSelection::Any),
+            ("dualsense", ModelSelection::DualSense),
+        ] {
+            let bridge = parse(&format!("version = 1\n[bridge]\nmodel = \"{setting}\""))
+                .unwrap()
+                .bridge
+                .unwrap();
+            assert_eq!(bridge.model, model);
         }
     }
 

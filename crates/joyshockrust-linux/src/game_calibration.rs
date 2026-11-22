@@ -116,10 +116,10 @@ fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dy
         |text| text.parse::<f64>().ok().filter(|&value| positive(value)),
     )?;
 
-    let transport = settings.bridge.unwrap_or_default().transport;
+    let filter = settings.bridge.unwrap_or_default().controller_filter();
     let (mut controller, identity) = match hidraw {
-        Some(path) => discovery::open_controller(path, transport)?,
-        None => discovery::open_first_controller(transport)?,
+        Some(path) => discovery::open_controller(path, filter)?,
+        None => discovery::open_first_controller(filter)?,
     };
     let mut output = gyro_mouse::open_output("JoyShockRust Game Calibration Mouse")?;
     let mut sweep = StickSweep::new((40.0 / in_game_sens).clamp(0.25, 10_000.0));

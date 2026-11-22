@@ -397,13 +397,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         transport: transport.unwrap_or(configured_bridge.transport),
         gamepad: gamepad_kind.unwrap_or(configured_bridge.gamepad),
         rumble: rumble_enabled || configured_bridge.rumble,
+        ..configured_bridge
     };
     if let Some(target) = benchmark_target {
         let (mut input, identity) = if let Some(path) = path {
-            discovery::open_controller(&path, bridge.transport)
+            discovery::open_controller(&path, bridge.controller_filter())
                 .map_err(|err| format!("could not use {}: {err}", path.display()))?
         } else {
-            discovery::open_first_controller(bridge.transport)?
+            discovery::open_first_controller(bridge.controller_filter())?
         };
         let mut measurement = benchmark::Benchmark::new(
             target,
@@ -429,8 +430,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             return Ok(ExitCode::FAILURE);
         }
     } else if let Some(path) = path {
-        let (mut input, identity) = discovery::open_controller(&path, bridge.transport)
-            .map_err(|err| format!("could not use {}: {err}", path.display()))?;
+        let (mut input, identity) =
+            discovery::open_controller(&path, bridge.controller_filter())
+                .map_err(|err| format!("could not use {}: {err}", path.display()))?;
         serve_session(
             &mut input,
             &mut runtime,
@@ -441,21 +443,26 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             None,
         )?;
     } else {
-        discovery::run(bridge.transport, reload, status, |event| match event {
-            discovery::Event::Connected(input, identity) => {
-                serve_session(input, &mut runtime, reload, status, identity, bridge, None)
-            }
-            discovery::Event::Reload(reload) => {
-                if let Some(next) = reload.load() {
-                    runtime = next;
-                    if let Some(status) = status {
-                        status.update(None, runtime.gyro.is_some());
-                    }
-                    reload.applied();
+        discovery::run(
+            bridge.controller_filter(),
+            reload,
+            status,
+            |event| match event {
+                discovery::Event::Connected(input, identity) => {
+                    serve_session(input, &mut runtime, reload, status, identity, bridge, None)
                 }
-                Ok(())
-            }
-        })?;
+                discovery::Event::Reload(reload) => {
+                    if let Some(next) = reload.load() {
+                        runtime = next;
+                        if let Some(status) = status {
+                            status.update(None, runtime.gyro.is_some());
+                        }
+                        reload.applied();
+                    }
+                    Ok(())
+                }
+            },
+        )?;
     }
     Ok(ExitCode::SUCCESS)
 }

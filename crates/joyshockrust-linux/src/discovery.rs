@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     ffi::OsStr,
+    fmt,
     fs::{File, OpenOptions},
     io,
     os::{
@@ -48,41 +49,68 @@ impl Selection {
                 | (Self::Bluetooth | Self::Auto, Transport::Bluetooth)
         )
     }
+}
 
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::Usb => "wired DualSense or DualSense Edge",
-            Self::Bluetooth => "Bluetooth DualSense or DualSense Edge",
-            Self::Auto => "DualSense or DualSense Edge over USB or Bluetooth",
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelSelection {
+    #[default]
+    Any,
+    #[serde(rename = "dualsense")]
+    DualSense,
+    #[serde(rename = "dualsense-edge")]
+    DualSenseEdge,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct ControllerFilter {
+    pub transport: Selection,
+    pub model: ModelSelection,
+}
+
+impl ControllerFilter {
+    fn accepts(self, identity: Identity) -> bool {
+        self.transport.accepts(identity.transport)
+            && match self.model {
+                ModelSelection::Any => true,
+                ModelSelection::DualSense => identity.model == DeviceModel::DualSense,
+                ModelSelection::DualSenseEdge => identity.model == DeviceModel::DualSenseEdge,
+            }
+    }
+}
+
+impl fmt::Display for ControllerFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let model = match self.model {
+            ModelSelection::Any => "DualSense or DualSense Edge",
+            ModelSelection::DualSense => "DualSense",
+            ModelSelection::DualSenseEdge => "DualSense Edge",
+        };
+        match self.transport {
+            Selection::Usb => write!(f, "wired {model}"),
+            Selection::Bluetooth => write!(f, "Bluetooth {model}"),
+            Selection::Auto => write!(f, "{model} over USB or Bluetooth"),
         }
     }
 }
 
-pub fn open_controller(path: &Path, selection: Selection) -> io::Result<(File, Identity)> {
+pub fn open_controller(path: &Path, filter: ControllerFilter) -> io::Result<(File, Identity)> {
     let input = OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_NONBLOCK)
         .open(path)?;
     let identity = hidraw::identity(&input)?
-        .filter(|identity| selection.accepts(identity.transport))
+        .filter(|&identity| filter.accepts(identity))
         .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Unsupported,
-                format!("expected a {}", selection.description()),
-            )
+            io::Error::new(io::ErrorKind::Unsupported, format!("expected a {filter}"))
         })?;
     Ok((input, identity))
 }
 
-pub fn open_first_controller(selection: Selection) -> io::Result<(File, Identity)> {
-    find_controller(selection, &mut HashSet::new())?
+pub fn open_first_controller(filter: ControllerFilter) -> io::Result<(File, Identity)> {
+    find_controller(filter, &mut HashSet::new())?
         .map(|(candidate, input)| (input, candidate.identity))
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("connect a {}", selection.description()),
-            )
-        })
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("connect a {filter}")))
 }
 
 pub enum Event<'a> {
@@ -91,7 +119,7 @@ pub enum Event<'a> {
 }
 
 pub fn run(
-    selection: Selection,
+    filter: ControllerFilter,
     reload: Option<&Reload>,
     status: Option<&StatusSocket>,
     mut handle: impl FnMut(Event<'_>) -> io::Result<()>,
@@ -106,7 +134,7 @@ pub fn run(
     let mut disconnected = HashSet::new();
     let mut waiting = false;
     loop {
-        if let Some((candidate, mut input)) = find_controller(selection, &mut disconnected)? {
+        if let Some((candidate, mut input)) = find_controller(filter, &mut disconnected)? {
             let Candidate {
                 path,
                 syspath,
@@ -132,7 +160,7 @@ pub fn run(
             disconnected.insert(syspath);
         } else {
             if !waiting {
-                eprintln!("Waiting for a {}", selection.description());
+                eprintln!("Waiting for a {filter}");
                 waiting = true;
             }
             loop {
@@ -188,14 +216,14 @@ pub struct Candidate {
 }
 
 fn find_controller(
-    selection: Selection,
+    filter: ControllerFilter,
     disconnected: &mut HashSet<PathBuf>,
 ) -> io::Result<Option<(Candidate, File)>> {
     Ok(first_available(
-        controller_nodes(selection)?,
+        controller_nodes(filter)?,
         disconnected,
         |candidate| {
-            let (file, actual) = open_controller(&candidate.path, selection)?;
+            let (file, actual) = open_controller(&candidate.path, filter)?;
             let node =
                 udev::Device::from_devnum(udev::DeviceType::Character, file.metadata()?.rdev())?;
             if actual != candidate.identity || node.syspath() != candidate.syspath {
@@ -235,7 +263,7 @@ fn first_available<T>(
     None
 }
 
-pub fn controller_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
+pub fn controller_nodes(filter: ControllerFilter) -> io::Result<Vec<Candidate>> {
     let mut enumerator = udev::Enumerator::new()?;
     enumerator.match_subsystem("hidraw")?;
     let mut nodes = Vec::new();
@@ -243,7 +271,7 @@ pub fn controller_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
         let Some(path) = device.devnode() else {
             continue;
         };
-        let usb = if selection.accepts(Transport::Usb) {
+        let usb = if filter.transport.accepts(Transport::Usb) {
             device
                 .parent_with_subsystem_devtype("usb", "usb_device")?
                 .and_then(|usb| {
@@ -260,7 +288,7 @@ pub fn controller_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
         };
         let identity = if usb.is_some() {
             usb
-        } else if selection.accepts(Transport::Bluetooth)
+        } else if filter.transport.accepts(Transport::Bluetooth)
             && let Some(hid) = device.parent_with_subsystem("hid")?
         {
             hid.property_value("HID_ID")
@@ -270,7 +298,7 @@ pub fn controller_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
         } else {
             None
         };
-        if let Some(identity) = identity {
+        if let Some(identity) = identity.filter(|&identity| filter.accepts(identity)) {
             nodes.push(Candidate {
                 path: path.to_path_buf(),
                 syspath: device.syspath().to_path_buf(),
@@ -311,6 +339,49 @@ mod tests {
             path: PathBuf::from(path),
             syspath: Path::new("/sys/devices").join(instance),
             identity: Identity { model, transport },
+        }
+    }
+
+    #[test]
+    fn controller_filter_combines_model_and_transport() {
+        let edge_usb = Identity {
+            model: DeviceModel::DualSenseEdge,
+            transport: Transport::Usb,
+        };
+        let edge_bt = Identity {
+            transport: Transport::Bluetooth,
+            ..edge_usb
+        };
+        let standard_usb = Identity {
+            model: DeviceModel::DualSense,
+            ..edge_usb
+        };
+        let standard_bt = Identity {
+            transport: Transport::Bluetooth,
+            ..standard_usb
+        };
+        let identities = [edge_usb, edge_bt, standard_usb, standard_bt];
+        for (filter, expected) in [
+            (ControllerFilter::default(), [true, false, true, false]),
+            (
+                ControllerFilter {
+                    transport: Selection::Auto,
+                    model: ModelSelection::DualSenseEdge,
+                },
+                [true, true, false, false],
+            ),
+            (
+                ControllerFilter {
+                    transport: Selection::Bluetooth,
+                    model: ModelSelection::DualSense,
+                },
+                [false, false, false, true],
+            ),
+        ] {
+            assert_eq!(
+                identities.map(|identity| filter.accepts(identity)),
+                expected
+            );
         }
     }
 

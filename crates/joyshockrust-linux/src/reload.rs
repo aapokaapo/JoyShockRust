@@ -427,6 +427,20 @@ mod tests {
         );
         assert_eq!(reload.outcome(), "rejected");
 
+        reload.bridge_at_startup = BridgeOptions {
+            model: crate::discovery::ModelSelection::DualSenseEdge,
+            ..BridgeOptions::default()
+        };
+        assert!(
+            Request {
+                reload: &reload,
+                client: None
+            }
+            .load()
+            .is_none()
+        );
+        assert_eq!(reload.outcome(), "rejected");
+
         reload.bridge_at_startup = BridgeOptions::default();
         assert!(
             Request {
