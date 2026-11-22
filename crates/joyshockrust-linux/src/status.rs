@@ -19,6 +19,13 @@ pub struct StatusSocket {
     listener: UnixListener,
     snapshot: Cell<Snapshot>,
     reports: Cell<ReportStats>,
+    sessions: Cell<SessionCounts>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SessionCounts {
+    started: u64,
+    ended: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -55,6 +62,7 @@ impl StatusSocket {
             listener,
             snapshot: Cell::default(),
             reports: Cell::default(),
+            sessions: Cell::default(),
         })
     }
 
@@ -65,6 +73,10 @@ impl StatusSocket {
     pub fn update(&self, identity: Option<Identity>, gyro_configured: bool) {
         let mut snapshot = self.snapshot.get();
         if snapshot.identity != identity {
+            let mut sessions = self.sessions.get();
+            sessions.ended += u64::from(snapshot.identity.is_some());
+            sessions.started += u64::from(identity.is_some());
+            self.sessions.set(sessions);
             snapshot = Snapshot::default();
             self.reports.set(ReportStats::default());
         }
@@ -136,14 +148,17 @@ impl StatusSocket {
             .rate_hz(Instant::now())
             .map(|rate| format!("{rate:.1}"));
         let rate = rate.as_deref().unwrap_or("none");
+        let sessions = self.sessions.get();
         let response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\n",
+            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\n",
             snapshot.gyro_configured,
             reports.decoded,
             reports.rejected,
             reports.full_batches,
             reports.gamepad_batches,
-            reports.mouse_batches
+            reports.mouse_batches,
+            sessions.started,
+            sessions.ended
         );
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
@@ -222,6 +237,7 @@ mod tests {
             listener,
             snapshot: Cell::default(),
             reports: Cell::default(),
+            sessions: Cell::default(),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
@@ -270,7 +286,7 @@ mod tests {
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         assert!(response.ends_with(
-            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\n"
+            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\n"
         ));
         let reports = status.reports.get();
         let (start, initial_count) = reports.baseline.unwrap();
@@ -294,6 +310,8 @@ mod tests {
         assert_eq!(reports.baseline, None);
         assert_eq!(reports.gamepad_batches, 0);
         assert_eq!(reports.mouse_batches, 0);
+        assert_eq!(status.sessions.get().started, 2);
+        assert_eq!(status.sessions.get().ended, 1);
     }
 
     #[test]
@@ -306,6 +324,7 @@ mod tests {
             listener,
             snapshot: Cell::default(),
             reports: Cell::default(),
+            sessions: Cell::default(),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
@@ -388,15 +407,18 @@ mod tests {
             listener,
             snapshot: Cell::default(),
             reports: Cell::default(),
+            sessions: Cell::default(),
         };
         let (_sender, input) = UnixStream::pair().unwrap();
 
-        for (identity, gyro, battery, expected) in [
+        for (identity, gyro, battery, expected, started, ended) in [
             (
                 None,
                 true,
                 None,
                 "version=1\ncontroller=waiting\ngyro_configured=true\nlast_reload=unavailable\ntransport=none\nmodel=none\nbattery_state=none\nbattery_percent=none\n",
+                0,
+                0,
             ),
             (
                 Some(Identity {
@@ -409,6 +431,8 @@ mod tests {
                     state: BatteryState::Charging,
                 }),
                 "version=1\ncontroller=connected\ngyro_configured=false\nlast_reload=unavailable\ntransport=bluetooth\nmodel=dualsense\nbattery_state=charging\nbattery_percent=65\n",
+                1,
+                0,
             ),
             (
                 Some(Identity {
@@ -418,6 +442,8 @@ mod tests {
                 true,
                 None,
                 "version=1\ncontroller=connected\ngyro_configured=true\nlast_reload=unavailable\ntransport=usb\nmodel=dualsense_edge\nbattery_state=none\nbattery_percent=none\n",
+                2,
+                1,
             ),
             (
                 Some(Identity {
@@ -430,12 +456,16 @@ mod tests {
                     state: BatteryState::NotCharging,
                 }),
                 "version=1\ncontroller=connected\ngyro_configured=true\nlast_reload=unavailable\ntransport=usb\nmodel=dualsense_edge\nbattery_state=not_charging\nbattery_percent=none\n",
+                2,
+                1,
             ),
             (
                 None,
                 true,
                 None,
                 "version=1\ncontroller=waiting\ngyro_configured=true\nlast_reload=unavailable\ntransport=none\nmodel=none\nbattery_state=none\nbattery_percent=none\n",
+                2,
+                2,
             ),
         ] {
             status.update(identity, !gyro);
@@ -454,9 +484,10 @@ mod tests {
             let mut response = String::new();
             client.read_to_string(&mut response).unwrap();
             assert_eq!(
-                response
-                    .strip_suffix("reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\n"),
-                Some(expected)
+                response,
+                format!(
+                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\n"
+                )
             );
         }
     }

@@ -149,6 +149,10 @@ rescans cover stale entries, multiple disconnected candidates and reuse
 of a hidraw node name by the same model and transport.
 [Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
 
+Process-lifetime counters expose started and ended controller sessions.
+They allow repeated hotplug runs to verify transitions alongside the
+per-session input and output counters.
+
 The status socket reports virtual gamepad and mouse batch counts for the
 active connection. Synthetic tests cover output suppression and reset.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)

@@ -544,6 +544,13 @@ connected and verify the bridge selects it after the active one disconnects.
 The udev selection tests cover reuse of an existing hidraw name by a new
 HID instance of the same model and bus.
 
+During the run, `controller_sessions_ended` should increase by one for
+each established session that ends, and `controller_sessions_started`
+by one when the next controller session starts. The counts differ by one
+while connected and match while waiting. Reload the profile during a
+connection and check that both counts stay the same. A service restart
+starts a fresh count.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

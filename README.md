@@ -286,6 +286,8 @@ The `report_full_batches` field counts batches that read all 32 report
 slots, including any parser rejections.
 `uinput_gamepad_batches` and `uinput_mouse_batches` count synchronized
 event batches successfully submitted by the bridge for this connection.
+`controller_sessions_started` and `controller_sessions_ended` count
+session transitions since the bridge process started.
 The `last_reload` field reports `not_attempted` on startup, then `applied`
 or `rejected` after the bridge handles a reload. A bridge started without a
 profile reports `unavailable`. To request the same reload directly, run

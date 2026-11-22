@@ -264,6 +264,12 @@ comes from the final process high-water mark and includes sample storage.
 The loop itself adds no resource queries.
 [Linux getrusage](https://man7.org/linux/man-pages/man2/getrusage.2.html)
 
+Updated 2026-11-22. The status socket counts controller sessions as they
+enter and leave the connected state. These counts persist across
+reconnects and reloads within the bridge process. They update only at
+session transitions.
+[Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
+
 Updated 2026-11-22. The common DualSense payload supplies two contact slots.
 Grid bindings are opt-in in version 1 profiles. Either active slot can
 hold a touch binding. The mechanical click selects the first active slot's
