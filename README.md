@@ -363,19 +363,28 @@ Supported button names are `cross`, `circle`, `square`, `triangle`,
 
 ## Game sensitivity calibration
 
-Set the game's mouse sensitivity and calibrate against a visible landmark.
-Enable raw mouse input in the game when available. Run the tool from a
-terminal, switch to the game within five seconds and count the turns made
-by the test movement. Include fractional turns, such as `1.25`.
+Use the right stick to turn the camera through whole rotations. Enable raw
+mouse input in the game when available. Stop the normal JoyShockRust bridge
+for the measurement so its gyro or gamepad output cannot affect the turn.
 
 ```sh
-joyshockrust-linux --calibrate-game 14400 2.0
+joyshockrust-linux --calibrate-game --profile /path/to/game.toml
 ```
 
-Here `14400` is the number of mouse counts to send and `2.0` is the game's
-mouse sensitivity. The tool prints two fields to copy into the existing
-`[gyro]` table. If you already know the number of turns, pass it as the
-last argument to calculate without opening a virtual mouse.
+1. Enter the game's mouse sensitivity at the terminal.
+2. Focus the game, aim at a landmark and press the controller's Options
+   button with the right stick centered.
+3. Tilt the right stick up and rotate it while counting full camera turns.
+   Use several turns for better precision. Return to the same landmark,
+   center the stick and press Options again.
+4. Return to the terminal and enter the number of complete turns. The command
+   prints and saves `real_world_calibration` and `in_game_sens` in the
+   profile's `[gyro]` table.
+
+The command uses the profile's transport. Append a `/dev/hidrawN` path
+to select one controller explicitly. The calibration mouse runs only
+for the measurement. For a known number of counts and measured turns,
+the calculator form remains available.
 
 ```sh
 joyshockrust-linux --calibrate-game 9000 2.0 1.25

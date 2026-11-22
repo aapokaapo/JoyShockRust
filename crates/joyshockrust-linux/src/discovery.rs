@@ -67,6 +67,17 @@ pub fn open_controller(path: &Path, selection: Selection) -> io::Result<(File, I
     Ok((input, identity))
 }
 
+pub fn open_first_controller(selection: Selection) -> io::Result<(File, Identity)> {
+    find_controller(selection, None)?
+        .map(|((_, identity), input)| (input, identity))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("connect a {}", selection.description()),
+            )
+        })
+}
+
 pub enum Event<'a> {
     Connected(&'a mut File, Identity),
     Reload(reload::Request<'a>),

@@ -204,3 +204,9 @@ The calibration command measures a known relative mouse displacement and
 computes `counts / (360 × measured turns) × in_game_sens`. It assumes the
 same mouse input settings used to measure and play.
 [JoyShockMapper scaling](https://github.com/Electronicks/JoyShockMapper/blob/e148efe0b6ff4ad2ce0fc8c2560fa1028097b1a7/JoyShockMapper/src/main.cpp#L1166-L1174) · [Calibration acceptance](TESTING_AND_PERFORMANCE.md#game-sensitivity-calibration-acceptance)
+
+Updated 2026-11-22. Stick calibration counts the signed horizontal mouse
+movement between two confirmations at the same on-screen landmark. The
+operator supplies the number of complete turns. The command edits only
+the two calibration fields and replaces the profile atomically after
+validating it. [Game calibration instructions](README.md#game-sensitivity-calibration)

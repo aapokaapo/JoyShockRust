@@ -101,8 +101,9 @@ session. The startup file remains available through the existing reload
 command. [Live gyro sensitivity acceptance](TESTING_AND_PERFORMANCE.md#live-gyro-sensitivity-acceptance)
 
 The profile scales gyro and Flick Stick with a per-game factor. The
-calibration CLI sends a known horizontal mouse displacement and derives
-the factor from the turn measured in the game. In-game validation is
+calibration CLI uses the controller’s right stick to drive a temporary
+mouse and calculates the factor from whole camera turns. It saves the
+result to the selected profile. In-game validation is
 pending. [Game calibration acceptance](TESTING_AND_PERFORMANCE.md#game-sensitivity-calibration-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI

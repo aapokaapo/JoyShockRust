@@ -32,6 +32,8 @@ mod systemd;
 use hidraw::Identity;
 #[cfg(target_os = "linux")]
 use joyshockrust_input::Transport;
+#[cfg(target_os = "linux")]
+use std::ops::ControlFlow;
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
@@ -49,6 +51,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
+        "       joyshockrust-linux --calibrate-game --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --calibrate-game COUNTS IN_GAME_SENS [MEASURED_TURNS]\n",
         "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
@@ -442,11 +445,11 @@ fn serve_session(
                     if let Some(rumble) = &mut rumble {
                         rumble.service(&mut output)?;
                     }
-                    return Ok(());
+                    return Ok(ControlFlow::Continue(()));
                 }
                 SessionEvent::Reload(reload) => {
                     let Some(next) = reload.load() else {
-                        return Ok(());
+                        return Ok(ControlFlow::Continue(()));
                     };
                     if let (Some(mouse), Some(current), Some(next)) =
                         (&mut mouse, runtime.gyro, next.gyro)
@@ -463,7 +466,7 @@ fn serve_session(
                             Ok(next_mouse) => mouse = next_mouse,
                             Err(err) => {
                                 reload.rejected(&err);
-                                return Ok(());
+                                return Ok(ControlFlow::Continue(()));
                             }
                         }
                     }
@@ -475,7 +478,7 @@ fn serve_session(
                         status.update(Some(identity), runtime.gyro.is_some());
                     }
                     reload.applied();
-                    return Ok(());
+                    return Ok(ControlFlow::Continue(()));
                 }
             };
             if let Some(status) = status {
@@ -496,7 +499,7 @@ fn serve_session(
             if let Some(mouse) = &mut mouse {
                 mouse.publish(report)?;
             }
-            Ok(())
+            Ok(ControlFlow::Continue(()))
         },
     );
     if let Some(status) = status {
@@ -528,7 +531,7 @@ fn forward_reports(
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
     feedback: Option<std::os::fd::BorrowedFd<'_>>,
-    mut publish: impl FnMut(SessionEvent<'_>) -> std::io::Result<()>,
+    mut publish: impl FnMut(SessionEvent<'_>) -> std::io::Result<ControlFlow<()>>,
 ) -> std::io::Result<()> {
     use joyshockrust_input::parse_report;
     use nix::poll::PollFlags;
@@ -543,8 +546,10 @@ fn forward_reports(
     loop {
         let (ready, request, feedback_ready) =
             reload::wait(input.as_fd(), reload, status, feedback)?;
-        if let Some(request) = request {
-            publish(SessionEvent::Reload(request))?;
+        if let Some(request) = request
+            && publish(SessionEvent::Reload(request))?.is_break()
+        {
+            return Ok(());
         }
         if ready.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Ok(());
@@ -553,8 +558,9 @@ fn forward_reports(
         {
             return Err(io::Error::other("virtual force feedback descriptor lost"));
         }
-        if feedback_ready.contains(PollFlags::POLLIN) {
-            publish(SessionEvent::Feedback)?;
+        if feedback_ready.contains(PollFlags::POLLIN) && publish(SessionEvent::Feedback)?.is_break()
+        {
+            return Ok(());
         }
         if !ready.contains(PollFlags::POLLIN) {
             continue;
@@ -574,8 +580,9 @@ fn forward_reports(
             };
             if let Ok(report) =
                 parse_report(identity.model, identity.transport, &report[..len], None)
+                && publish(SessionEvent::Report(report))?.is_break()
             {
-                publish(SessionEvent::Report(report))?;
+                return Ok(());
             }
         }
     }
@@ -655,7 +662,7 @@ mod tests {
             if presses.len() == 2 {
                 return Err(io::ErrorKind::BrokenPipe.into());
             }
-            Ok(())
+            Ok(super::ControlFlow::Continue(()))
         });
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(presses, [true, false]);

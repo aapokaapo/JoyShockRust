@@ -112,6 +112,46 @@ pub fn install(source: &Path, destination: &Path) -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
+pub fn save_game_calibration(
+    path: &Path,
+    real_world_calibration: f64,
+    in_game_sens: f64,
+) -> Result<(), Box<dyn Error>> {
+    let source = fs::read_to_string(path)?;
+    let rendered = render_game_calibration(&source, real_world_calibration, in_game_sens)?;
+    replace_file(path, rendered.as_bytes())?;
+    Ok(())
+}
+
+fn render_game_calibration(
+    source: &str,
+    real_world_calibration: f64,
+    in_game_sens: f64,
+) -> Result<String, Box<dyn Error>> {
+    parse(source)?;
+    let mut document = source.parse::<toml_edit::DocumentMut>()?;
+    let gyro = document
+        .entry("gyro")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_like_mut()
+        .ok_or("expected a [gyro] table")?;
+    for (key, number) in [
+        ("real_world_calibration", real_world_calibration),
+        ("in_game_sens", in_game_sens),
+    ] {
+        let mut value = toml_edit::Value::from(number);
+        if let Some(existing) = gyro.get_mut(key).and_then(toml_edit::Item::as_value_mut) {
+            *value.decor_mut() = existing.decor().clone();
+            *existing = value;
+        } else {
+            gyro.insert(key, toml_edit::Item::Value(value));
+        }
+    }
+    let rendered = document.to_string();
+    parse(&rendered)?;
+    Ok(rendered)
+}
+
 fn replace_file(destination: &Path, content: &[u8]) -> io::Result<()> {
     match fs::symlink_metadata(destination) {
         Ok(metadata) if !metadata.file_type().is_file() => {
@@ -273,6 +313,27 @@ mod tests {
         ] {
             assert!(parse(&format!("version = 1\n[bridge]\n{setting}")).is_err());
         }
+    }
+
+    #[test]
+    fn recorded_game_calibration_preserves_profile_comments_and_other_values() {
+        let source = concat!(
+            "# My profile\nversion = 1\n",
+            "[gyro]\nsensitivity_x = 1.5 # horizontal\n",
+            "real_world_calibration = 42.0 # old measurement\n",
+            "[gyro.binding]\nmode = \"hold\"\ninput = \"l2\"\n",
+        );
+        let rendered = render_game_calibration(source, 40.0, 2.0).unwrap();
+        assert!(rendered.contains("# My profile\nversion = 1"));
+        assert!(rendered.contains("sensitivity_x = 1.5 # horizontal"));
+        assert!(rendered.contains("real_world_calibration = 40.0 # old measurement"));
+        assert!(rendered.contains("in_game_sens = 2.0"));
+        assert!(rendered.contains("[gyro.binding]\nmode = \"hold\"\ninput = \"l2\""));
+        assert!(
+            render_game_calibration("version = 1\ngyro = { sensitivity_x = 2 }", 40.0, 2.0).is_ok()
+        );
+        assert!(render_game_calibration("version = 1", 40.0, 2.0).is_ok());
+        assert!(render_game_calibration(source, 0.0, 2.0).is_err());
     }
 
     #[test]

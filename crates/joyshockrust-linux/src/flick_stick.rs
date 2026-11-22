@@ -40,6 +40,11 @@ impl FlickStick {
         }
     }
 
+    pub fn is_settled(&self, stick: Stick) -> bool {
+        stick.x * stick.x + stick.y * stick.y <= RELEASE_RADIUS * RELEASE_RADIUS
+            && self.remaining_time.is_zero()
+    }
+
     pub fn advance(&mut self, stick: Stick, ticks: u32) -> i32 {
         let delta = match self.timebase.observe(ticks) {
             TimestampUpdate::FirstSample => Duration::ZERO,
