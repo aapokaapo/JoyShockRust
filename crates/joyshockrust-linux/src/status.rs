@@ -42,7 +42,7 @@ impl StatusSocket {
         });
     }
 
-    pub fn respond(&self) -> io::Result<()> {
+    pub fn respond(&self, last_reload: &str) -> io::Result<()> {
         let snapshot = self.snapshot.get();
         let controller = if snapshot.connected {
             "connected"
@@ -59,7 +59,7 @@ impl StatusSocket {
                     // Disconnected or slow clients must not interrupt input.
                     let _ = write!(
                         stream,
-                        "version=1\ncontroller={controller}\ngyro_configured={}\n",
+                        "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\n",
                         snapshot.gyro_configured
                     );
                 }
@@ -127,12 +127,12 @@ mod tests {
             (
                 false,
                 true,
-                "version=1\ncontroller=waiting\ngyro_configured=true\n",
+                "version=1\ncontroller=waiting\ngyro_configured=true\nlast_reload=unavailable\n",
             ),
             (
                 true,
                 false,
-                "version=1\ncontroller=connected\ngyro_configured=false\n",
+                "version=1\ncontroller=connected\ngyro_configured=false\nlast_reload=unavailable\n",
             ),
         ] {
             status.update(connected, gyro);

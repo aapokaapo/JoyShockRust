@@ -258,8 +258,16 @@ plugging the Edge in, and after unplugging it. Expect `controller=waiting`,
 `controller=connected` and `controller=waiting`, respectively. Check that
 `gyro_configured` matches the profile's gyro section. A successful reload
 that adds or removes the section changes the field. An invalid reload
-preserves it. After stopping the service, the status command should fail
-to connect.
+preserves it. After the journal confirms the reload result, check that
+`last_reload` is `applied` or `rejected`, respectively. After stopping the
+service, the status command should fail to connect. The user confirmed that
+the USB status switched from waiting to connected on Fedora.
+
+To check startup error handling, set the profile version to 2 and restart.
+Expect the start command to fail and the service status to show exit code
+78. Verify in the journal that the service stays stopped beyond the normal
+restart delay. Restore the version to 1, start the service again and check
+that `last_reload=not_attempted`.
 
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.

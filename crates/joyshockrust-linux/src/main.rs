@@ -23,8 +23,8 @@ mod status;
 mod systemd;
 
 #[cfg(target_os = "linux")]
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use std::{env, path::PathBuf};
+fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
+    use std::{env, path::PathBuf, process::ExitCode};
 
     use gyro_gate::{Binding, TriggerGate};
     use joyshockrust_core::Button;
@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(arg) = args.next() {
         if arg == "--help" {
             println!("{USAGE}");
-            return Ok(());
+            return Ok(ExitCode::SUCCESS);
         }
         if arg == "--gyro-mouse" && !gyro_mouse {
             gyro_mouse = true;
@@ -168,14 +168,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("--status takes only an optional socket path".into());
         }
         status::query(path.as_deref(), std::io::stdout().lock())?;
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
     if diagnose {
         if profile_path.is_some() || status_path.is_some() || mapping_options {
             return Err("--diagnose takes only an optional hidraw path".into());
         }
         diagnostics::run(path.as_deref(), std::io::stdout().lock())?;
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
     let (mut runtime, reload) = if let Some((profile_path, check_only)) = profile_path {
         if mapping_options {
@@ -184,11 +184,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if check_only && (path.is_some() || status_path.is_some()) {
             return Err("--check-profile takes only a profile path".into());
         }
-        let profile = profile::load(&profile_path)
-            .map_err(|err| format!("{}: {err}", profile_path.display()))?;
+        let profile = match profile::load(&profile_path) {
+            Ok(profile) => profile,
+            Err(err) => {
+                eprintln!("{}: {err}", profile_path.display());
+                // EX_CONFIG tells the systemd unit to wait for a profile fix.
+                return Ok(ExitCode::from(78));
+            }
+        };
         if check_only {
             println!("Valid profile: {}", profile_path.display());
-            return Ok(());
+            return Ok(ExitCode::SUCCESS);
         }
         (profile, Some(reload::Reload::new(profile_path)?))
     } else {
@@ -234,7 +240,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })?;
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(target_os = "linux")]
@@ -282,7 +288,7 @@ fn serve_session(
                     match open_mouse(input, next.gyro) {
                         Ok(next_mouse) => mouse = next_mouse,
                         Err(err) => {
-                            eprintln!("Profile reload rejected: {err}");
+                            reload.rejected(&err);
                             return Ok(());
                         }
                     }

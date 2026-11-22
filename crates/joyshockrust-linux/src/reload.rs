@@ -1,4 +1,6 @@
 use std::{
+    cell::Cell,
+    fmt::Display,
     io,
     os::fd::{AsFd, BorrowedFd},
     path::PathBuf,
@@ -21,6 +23,14 @@ use crate::{
 pub struct Reload {
     path: PathBuf,
     signal: SignalFd,
+    outcome: Cell<Outcome>,
+}
+
+#[derive(Clone, Copy)]
+enum Outcome {
+    NotAttempted,
+    Applied,
+    Rejected,
 }
 
 impl Reload {
@@ -30,21 +40,38 @@ impl Reload {
         signals.thread_block()?;
         let signal =
             SignalFd::with_flags(&signals, SfdFlags::SFD_CLOEXEC | SfdFlags::SFD_NONBLOCK)?;
-        Ok(Self { path, signal })
+        Ok(Self {
+            path,
+            signal,
+            outcome: Cell::new(Outcome::NotAttempted),
+        })
     }
 
     pub fn load(&self) -> Option<RuntimeOptions> {
         match profile::load(&self.path) {
             Ok(profile) => Some(profile),
             Err(err) => {
-                eprintln!("Profile reload rejected ({}): {err}", self.path.display());
+                self.rejected(err);
                 None
             }
         }
     }
 
     pub fn applied(&self) {
+        self.outcome.set(Outcome::Applied);
         eprintln!("Profile reloaded: {}", self.path.display());
+    }
+    pub fn rejected(&self, err: impl Display) {
+        self.outcome.set(Outcome::Rejected);
+        eprintln!("Profile reload rejected ({}): {err}", self.path.display());
+    }
+
+    fn outcome(&self) -> &'static str {
+        match self.outcome.get() {
+            Outcome::NotAttempted => "not_attempted",
+            Outcome::Applied => "applied",
+            Outcome::Rejected => "rejected",
+        }
     }
 }
 
@@ -91,7 +118,7 @@ pub fn wait(
             return Err(io::Error::other("status socket lost"));
         }
         if flags.contains(PollFlags::POLLIN) {
-            status.respond()?;
+            status.respond(reload.map_or("unavailable", Reload::outcome))?;
         }
     }
     Ok((

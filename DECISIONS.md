@@ -96,3 +96,9 @@ Updated 2026-11-22. The user unit uses `Type=notify`. The bridge sends
 `READY=1` after binding the status socket and starting the udev monitor, so a
 status query can connect as soon as the service start command completes.
 [systemd startup notification](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#Type=)
+
+Updated 2026-11-22. An invalid or unreadable startup profile exits with
+`EX_CONFIG` (78), which the user unit excludes from automatic retries.
+The version 1 snapshot includes the most recent reload result. The process
+records success only after applying the profile, and a rejected reload keeps
+the previous settings. [systemd restart settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#RestartPreventExitStatus=)
