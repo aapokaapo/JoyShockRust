@@ -33,8 +33,8 @@ Development is in **Phase 4**, controller mappings. The USB parser replays a
 300-report capture. The Linux virtual gamepad, USB reconnect, gyro mouse
 startup, and digital hold and toggle gates have user-reported hardware tests.
 The analog trigger gate also passed the user's hardware check. Tap/hold and
-double-tap have also passed the user's hardware check. General timed mappings,
-Flick Stick, profiles and the control plane remain open.
+double-tap have also passed the user's hardware check. An experimental Flick Stick mode is ready for hardware testing. General timed
+mappings, profiles and the control plane remain open.
 
 See the [implementation plan](IMPLEMENTATION_PLAN.md), [test evidence](TESTING_AND_PERFORMANCE.md)
 and [source analysis](docs/REFERENCE_ANALYSIS.md).
@@ -157,3 +157,13 @@ Supported button names are `cross`, `circle`, `square`, `triangle`,
 `paddle-right`. L2 and R2 use their digital button states.
 
 [USB gyro test](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
+
+## Experimental Flick Stick
+
+Add `--flick-stick 4` with `--gyro-mouse` to use the right stick for
+horizontal mouse turns. The argument sets relative counts per degree and
+accepts values from 0.01 to 100. Flicking from center turns toward the stick
+angle over 100 ms. Rotating the held stick follows its angle changes.
+The virtual gamepad's right-stick axes are centered while this mode is
+enabled. Gyro gating still controls gyro input independently.
+See the [Flick Stick test](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance).

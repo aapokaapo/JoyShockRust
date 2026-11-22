@@ -183,6 +183,20 @@ and R1 should show its ordinary virtual state. Release L1 while holding R1
 and check that Cross returns to Triangle. Release and press R1 again to
 switch Cross to Square. Finally release all buttons and confirm they are up.
 
+The user reported that the Square/Triangle correction and layer behavior
+worked as expected after the generic gamepad face-button fix.
+
+## Flick Stick acceptance
+
+Run with `--gyro-mouse --gyro-hold l2 --flick-stick 4` and keep L2 released
+to isolate the stick. Start with the right stick centered. In a game that
+accepts relative mouse motion, flick right and left separately. Confirm that
+the camera turns in the expected direction and the turn finishes after you
+recenter. Hold the stick near the outside and rotate it across the rear
+axis. Confirm the camera follows smoothly without a full-turn jump. Set
+the counts-per-degree value for the game's sensitivity before measuring
+the angles. Confirm the left stick still drives the virtual gamepad.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

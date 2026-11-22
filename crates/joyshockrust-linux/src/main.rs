@@ -1,6 +1,8 @@
 #[cfg(target_os = "linux")]
 mod discovery;
 #[cfg(target_os = "linux")]
+mod flick_stick;
+#[cfg(target_os = "linux")]
 mod gamepad;
 #[cfg(target_os = "linux")]
 mod gyro_gate;
@@ -19,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     const USAGE: &str = concat!(
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
-        "[--gyro-mouse [--calibrate-gyro] [BINDING]] [/dev/hidrawN]\n",
+        "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
         "--gyro-double-tap BUTTON | --gyro-chord BUTTON,BUTTON | --gyro-hold-l2 | ",
         "--gyro-trigger SIDE[:PRESS:RELEASE]",
@@ -82,6 +84,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => Binding::Toggle(button),
                 }
             };
+        } else if arg == "--flick-stick" {
+            if options.flick_stick.is_some() {
+                return Err("select only one Flick Stick sensitivity".into());
+            }
+            let value = args
+                .next()
+                .ok_or("expected counts per degree after --flick-stick")?;
+            let scale = value
+                .to_str()
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|scale| (0.01..=100.0).contains(scale))
+                .ok_or("Flick Stick sensitivity must be between 0.01 and 100 counts per degree")?;
+            options.flick_stick = Some(scale);
         } else if arg == "--stick-curve" {
             if stick_curve.is_some() {
                 return Err("select only one stick curve".into());
@@ -108,7 +123,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err(USAGE.into());
         }
     }
-    if (options.calibrate || !matches!(options.binding, Binding::Always)) && !gyro_mouse {
+    if (options.calibrate
+        || options.flick_stick.is_some()
+        || !matches!(options.binding, Binding::Always))
+        && !gyro_mouse
+    {
         return Err("gyro options require --gyro-mouse".into());
     }
     let options = gyro_mouse.then_some(options);
@@ -145,7 +164,11 @@ fn serve_session(
     let mut state = gamepad::GamepadState::default();
     let mut layer_state = gamepad::RemapState::default();
     let result = forward_reports(input, |report| {
-        let controls = stick_curve.map_or(report.controls, |curve| curve.apply(report.controls));
+        let mut controls =
+            stick_curve.map_or(report.controls, |curve| curve.apply(report.controls));
+        if options.is_some_and(|options| options.flick_stick.is_some()) {
+            controls.right_stick = Default::default();
+        }
         state.publish(remaps.apply(controls, &mut layer_state), |events| {
             output.emit(events)
         })?;

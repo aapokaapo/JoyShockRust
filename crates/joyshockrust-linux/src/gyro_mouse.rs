@@ -15,18 +15,23 @@ use joyshockrust_motion::{
     Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
 };
 
-use super::gyro_gate::{Binding, GyroGate};
+use super::{
+    flick_stick::FlickStick,
+    gyro_gate::{Binding, GyroGate},
+};
 
 pub struct GyroMouse {
     aim: GyroAim,
     output: VirtualDevice,
     gate: GyroGate,
+    flick: Option<FlickStick>,
 }
 
 #[derive(Clone, Copy, Default)]
 pub struct Options {
     pub calibrate: bool,
     pub binding: Binding,
+    pub flick_stick: Option<f64>,
 }
 
 impl GyroMouse {
@@ -49,13 +54,17 @@ impl GyroMouse {
             aim: GyroAim::new(factory, options.calibrate),
             output,
             gate: GyroGate::new(options.binding),
+            flick: options.flick_stick.map(FlickStick::new),
         })
     }
 
     pub fn publish(&mut self, report: InputReport) -> io::Result<()> {
         let was_calibrating = self.aim.calibration.is_some();
         let enabled = self.gate.enabled(&report.controls, Instant::now);
-        let movement = self.aim.advance(report.imu, enabled);
+        let mut movement = self.aim.advance(report.imu, enabled);
+        if !was_calibrating && let Some(flick) = &mut self.flick {
+            movement[0] += flick.advance(report.controls.right_stick, report.imu.device_ticks);
+        }
         if was_calibrating && self.aim.calibration.is_none() {
             eprintln!("Gyro rest calibration complete");
         }
