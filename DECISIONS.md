@@ -53,3 +53,5 @@ Automatic mode subscribes to udev hidraw events before enumerating and filters c
 ## Phase 3 first increment
 
 Recorded 2026-11-22. The pure engine integrates calibrated device-axis angular velocity into aim deltas and estimates gravity by correcting the gyro prediction with near-1 g acceleration. The sensor factory conversion and Linux mouse output stay outside the crate. Runtime bias estimation remains open. A stationary flag alone is insufficient for learning because it can also classify slow deliberate rotation as stationary. [Motion contract](MOTION_CONTRACT.md)
+
+The experimental USB path uses the SDL HIDAPI convention of subtracting the factory gyro bias and scaling by the endpoint spans. It requires a structurally valid feature report and keeps the default gamepad mode available separately. The Linux mouse accumulates fractional movement within each segment and clears it across gaps. Report validation and the conversion are synthetic-tested. Physical direction, gain and remaining drift need measurement. [Calibration sources](docs/REFERENCE_ANALYSIS.md#calibration-and-units)

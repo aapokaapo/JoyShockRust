@@ -38,7 +38,7 @@ The Linux bridge accepts a hidraw node explicitly or uses udev discovery with au
 ## Phase 3 — pure motion engine
 Implement deterministic IMU processing, calibration, sensor fusion and gyro-to-mouse with replay fixtures. **Exit:** calibrated gyro aiming verified on real hardware and replay tests.
 
-The first motion increment accepts calibrated IMU samples, applies a supplied gyro bias, and computes deterministic aim deltas and a gravity direction. Synthetic replay covers stationary bias, slow aim, rotation, invalid samples and timestamp gaps. Factory conversion and bias estimation, profile integration, Linux mouse output and physical validation remain open.
+The motion engine accepts calibrated IMU samples, applies a supplied gyro bias, and computes deterministic aim deltas and a gravity direction. The opt-in Linux gyro mouse reads USB factory calibration, applies the conversion, and submits relative uinput motion. Synthetic tests cover both the motion engine and the calibration-to-mouse calculation. Runtime bias estimation, profile integration and [physical gyro validation](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance) remain open.
 
 ## Phase 4 — mapping engine
 Add remapping, tap/hold/double-tap, chords, layers, trigger modes, stick curves and Flick Stick with deadline scheduler. **Exit:** deterministic state-machine tests and no unnecessary global polling.

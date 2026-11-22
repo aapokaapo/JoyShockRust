@@ -10,6 +10,7 @@ nix = { version = "0.29", features = ["ioctl", "poll"] }
 udev = "0.9.3"
 joyshockrust-core = { path = "../joyshockrust-core" }
 joyshockrust-input = { path = "../joyshockrust-input" }
+joyshockrust-motion = { path = "../joyshockrust-motion" }
 
 [lints.rust]
 unsafe_code = "deny"

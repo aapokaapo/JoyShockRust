@@ -3,6 +3,8 @@ mod discovery;
 #[cfg(target_os = "linux")]
 mod gamepad;
 #[cfg(target_os = "linux")]
+mod gyro_mouse;
+#[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod hidraw;
 
@@ -10,24 +12,51 @@ mod hidraw;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::{env, path::PathBuf};
 
-    let mut args = env::args_os().skip(1);
-    let path = match (args.next(), args.next()) {
-        (None, None) => return Ok(discovery::run(serve_session)?),
-        (Some(path), None) => PathBuf::from(path),
-        _ => return Err("usage: joyshockrust-linux [/dev/hidrawN]".into()),
-    };
-    let mut input = discovery::open_wired_edge(&path)
-        .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-    Ok(serve_session(&mut input)?)
+    const USAGE: &str = "usage: joyshockrust-linux [--gyro-mouse] [/dev/hidrawN]";
+    let mut gyro_mouse = false;
+    let mut path = None;
+    for arg in env::args_os().skip(1) {
+        if arg == "--help" {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        if arg == "--gyro-mouse" && !gyro_mouse {
+            gyro_mouse = true;
+        } else if path.is_none() && !arg.as_encoded_bytes().starts_with(b"-") {
+            path = Some(PathBuf::from(arg));
+        } else {
+            return Err(USAGE.into());
+        }
+    }
+    if let Some(path) = path {
+        let mut input = discovery::open_wired_edge(&path)
+            .map_err(|err| format!("could not use {}: {err}", path.display()))?;
+        serve_session(&mut input, gyro_mouse)?;
+    } else {
+        discovery::run(|input| serve_session(input, gyro_mouse))?;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
-fn serve_session(input: &mut std::fs::File) -> std::io::Result<()> {
+fn serve_session(input: &mut std::fs::File, gyro_mouse: bool) -> std::io::Result<()> {
+    let mut mouse = if gyro_mouse {
+        let mouse = gyro_mouse::GyroMouse::open(input)
+            .map_err(|err| std::io::Error::other(format!("could not start gyro mouse: {err}")))?;
+        eprintln!("JoyShockRust Gyro Mouse ready");
+        Some(mouse)
+    } else {
+        None
+    };
     let mut output = gamepad::open()
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
     let mut state = gamepad::GamepadState::default();
-    let result = forward_reports(input, |controls| {
-        state.publish(controls, |events| output.emit(events))
+    let result = forward_reports(input, |report| {
+        state.publish(report.controls, |events| output.emit(events))?;
+        if let Some(mouse) = &mut mouse {
+            mouse.publish(report.imu)?;
+        }
+        Ok(())
     });
     let release = state.publish(joyshockrust_core::Controls::default(), |events| {
         output.emit(events)
@@ -44,7 +73,7 @@ fn main() {
 #[cfg(target_os = "linux")]
 fn forward_reports(
     input: &mut std::fs::File,
-    mut publish: impl FnMut(joyshockrust_core::Controls) -> std::io::Result<()>,
+    mut publish: impl FnMut(joyshockrust_input::InputReport) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
     use nix::{
@@ -92,7 +121,7 @@ fn forward_reports(
                 &report[..len],
                 None,
             ) {
-                publish(report.controls)?;
+                publish(report)?;
             }
         }
     }
@@ -135,8 +164,8 @@ mod tests {
 
         let mut input = File::from(OwnedFd::from(receiver));
         let mut presses = Vec::new();
-        let result = super::forward_reports(&mut input, |controls| {
-            presses.push(controls.buttons.contains(Button::South));
+        let result = super::forward_reports(&mut input, |report| {
+            presses.push(report.controls.buttons.contains(Button::South));
             if presses.len() == 2 {
                 return Err(io::ErrorKind::BrokenPipe.into());
             }

@@ -7,8 +7,13 @@ use core::fmt;
 
 use joyshockrust_core::{Button, Buttons, Controls, DPad, Stick};
 
+mod calibration;
 mod timebase;
 
+pub use calibration::{
+    CalibratedImu, CalibrationReportError, DUALSENSE_USB_CALIBRATION_REPORT_ID,
+    DUALSENSE_USB_CALIBRATION_REPORT_LEN, UsbFactoryCalibration,
+};
 pub use timebase::{InvalidForwardLimit, Timebase, TimestampUpdate};
 
 /// The frame size including the numbered HID report ID.

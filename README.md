@@ -93,3 +93,18 @@ The bridge exposes **JoyShockRust Virtual Gamepad** with standard buttons,
 D-pad, sticks and analog triggers. It releases held controls when the input
 session ends. Games can still see the physical controller. See the
 [uinput and Steam acceptance tests](TESTING_AND_PERFORMANCE.md#virtual-gamepad-acceptance).
+
+## Experimental gyro mouse
+
+On Linux, enable relative pointer output from a wired DualSense Edge:
+
+```sh
+cargo run --locked -p joyshockrust-linux -- --gyro-mouse
+```
+
+The bridge reads the controller's USB factory calibration and creates
+**JoyShockRust Gyro Mouse** alongside the virtual gamepad. You can append
+`/dev/hidrawN` to select one device explicitly. The initial sensitivity is
+four relative counts per degree on both axes. Runtime gyro bias estimation
+and physical calibration validation are pending.
+[USB gyro test](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)

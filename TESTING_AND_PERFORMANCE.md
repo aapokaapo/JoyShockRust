@@ -48,6 +48,29 @@ Steam acceptance uses a wired DualSense Edge and the current build.
 Record the commit, Linux kernel, Steam client version and result for each
 step when running this acceptance test.
 
+## USB gyro mouse acceptance
+
+On Linux, use a readable wired DualSense Edge hidraw node and writable
+`/dev/uinput`. Close other gyro-to-mouse mappers and start the bridge:
+
+```sh
+cargo run --locked -p joyshockrust-linux -- --gyro-mouse
+```
+
+1. Connect the controller and check for `JoyShockRust Gyro Mouse ready`.
+   A factory calibration error indicates a failed feature read or an invalid
+   reply. Note the exact message and hidraw path.
+2. Set the controller down for 10 seconds and observe the pointer. Record
+   any drift. Rotate it slowly left/right and then up/down. Record the
+   pointer direction, continuity, and whether the other axis moved.
+3. Unplug and reconnect without restarting the bridge. Check that the
+   gyro mouse starts again and moves the pointer on rotation without an
+   initial jump. Check that the virtual gamepad still receives buttons.
+
+Record the commit, Linux kernel, controller firmware if known, and results.
+The test observes physical response. The synthetic suite separately covers
+calibration conversion, fractional mouse movement and timestamp gaps.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 
