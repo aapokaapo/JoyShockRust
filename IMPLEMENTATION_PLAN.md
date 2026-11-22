@@ -8,7 +8,7 @@ Review both JSM repositories and Linux hid-playstation for scheduling, protocol,
 Source review is complete as of 2026-11-22. Phase 0 hardware evidence is pending. The exit requires an annotated wired DualSense Edge capture, factory calibration response, and observed interface, permissions and coexistence behavior. An approved Phase 1 can start with synthetic tests while capture collection is pending. Captured-fixture acceptance remains required.
 
 ## Phase 1 — minimal workspace and parser
-The offline parser milestone is implemented with synthetic tests as of 2026-11-22. Captured USB replay is pending. The root Cargo workspace uses stable Rust, edition 2024. See the [source-backed USB layout](docs/REFERENCE_ANALYSIS.md#dualsense-edge-usb-input).
+The offline parser milestone covers synthetic replay and the 300-report stationary USB fixture added in `d7da53b`, reviewed 2026-11-22. Captures of individual controls and motion remain pending. The root Cargo workspace uses stable Rust, edition 2024. See the [source-backed USB layout](docs/REFERENCE_ANALYSIS.md#dualsense-edge-usb-input).
 
 | Crate | Initial contents |
 |---|---|
@@ -32,6 +32,8 @@ Document the future motion boundary before adding fusion. Define calibrated inpu
 
 ## Phase 2 — end-to-end USB vertical slice
 Discover hidraw via udev, open/read events, process buttons/sticks and create uinput virtual gamepad/mouse; clean disconnection. **Exit:** physical USB controller produces verified virtual events; no stuck buttons.
+
+The first increment accepts a hidraw node explicitly, checks the USB bus and Edge VID/PID through the opened descriptor, and forwards standard gamepad controls to a uniquely named uinput device. It waits for input readiness and discards the virtual device after releasing held controls on disconnect. Udev discovery, automatic reconnection, and a physical input-to-output test remain open.
 
 ## Phase 3 — pure motion engine
 Implement deterministic IMU processing, calibration, sensor fusion and gyro-to-mouse with replay fixtures. **Exit:** calibrated gyro aiming verified on real hardware and replay tests.

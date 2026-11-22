@@ -1,4 +1,5 @@
 use core::time::Duration;
+use std::{fs, path::Path};
 
 use joyshockrust_core::{Button, Buttons, Controls, DPad, Stick};
 use joyshockrust_input::{
@@ -17,6 +18,72 @@ fn neutral_frame() -> [u8; DUALSENSE_EDGE_USB_REPORT_LEN] {
 
 fn decode(bytes: &[u8]) -> Result<InputReport, ParseError> {
     parse_report(DeviceModel::DualSenseEdge, Transport::Usb, bytes, None)
+}
+
+#[test]
+fn replays_captured_dualsense_edge_usb() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dualsense_edge_usb.bin");
+    let capture = fs::read(&path)
+        .unwrap_or_else(|err| panic!("could not read USB capture {}: {err}", path.display()));
+    let (frames, remainder) = capture.as_chunks::<DUALSENSE_EDGE_USB_REPORT_LEN>();
+    assert!(
+        frames.len() >= 2 && remainder.is_empty(),
+        "expected at least two complete 64-byte reports, got {} bytes",
+        capture.len()
+    );
+
+    // This stationary capture averages about 1 ms per sample. Allow up to 2 ms.
+    let mut timebase = Timebase::new(6_000).unwrap();
+    for (index, bytes) in frames.iter().enumerate() {
+        let report = decode(bytes).unwrap_or_else(|err| panic!("frame {index}: {err}"));
+        let timestamp = timebase.observe(report.imu.device_ticks);
+        match (index, timestamp) {
+            (0, TimestampUpdate::FirstSample) => {}
+            (_, TimestampUpdate::Advanced { delta, .. }) if !delta.is_zero() => {}
+            _ => panic!("frame {index}: expected a forward device timestamp, got {timestamp:?}"),
+        }
+
+        let controls = report.controls;
+        assert_eq!(controls.buttons, Buttons::default(), "frame {index}");
+        assert_eq!(controls.dpad, DPad::Neutral, "frame {index}");
+        for axis in [
+            controls.left_stick.x,
+            controls.left_stick.y,
+            controls.right_stick.x,
+            controls.right_stick.y,
+        ] {
+            assert!(axis.abs() <= 0.05, "frame {index}: stick {axis}");
+        }
+        for trigger in [controls.left_trigger, controls.right_trigger] {
+            assert_eq!(trigger, 0.0, "frame {index}: trigger");
+        }
+
+        // Use SDL's nominal fallback scales from the reference analysis to
+        // sanity-check this stationary capture before factory calibration.
+        const GYRO_COUNTS_PER_DPS: f64 = 16.0;
+        const ACCEL_COUNTS_PER_G: f64 = 8192.0;
+        let gyro = report
+            .imu
+            .gyro_counts
+            .map(|count| f64::from(count) / GYRO_COUNTS_PER_DPS);
+        assert!(
+            gyro.into_iter().all(|axis| axis.abs() <= 10.0),
+            "frame {index}: stationary gyro {gyro:?} deg/s"
+        );
+        let accel = report
+            .imu
+            .accel_counts
+            .map(|count| f64::from(count) / ACCEL_COUNTS_PER_G);
+        let gravity = accel
+            .into_iter()
+            .map(|axis| axis * axis)
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            (0.8..=1.2).contains(&gravity),
+            "frame {index}: stationary acceleration {gravity} g"
+        );
+    }
 }
 
 #[test]
