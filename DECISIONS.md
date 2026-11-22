@@ -73,3 +73,5 @@ The gyro chord holds aim active while two distinct digital buttons are down. But
 The optional stick curve raises the radial magnitude to a power inside the unit circle and scales both components together. Center, full travel and diagonal corners retain their original values. The curve affects virtual gamepad output after HID decoding. [Stick curve acceptance](TESTING_AND_PERFORMANCE.md#stick-response-curve-acceptance)
 
 Button remaps act on the physical button snapshot and publish a single virtual state. Rules apply simultaneously, so swaps work without chaining. Output stays pressed while any mapped or passthrough source is held. Analog axes and physical gyro bindings keep their own input state. [Remap acceptance](TESTING_AND_PERFORMANCE.md#button-remap-acceptance)
+
+An optional physical modifier enables the alternate remap layer while held. Each input report rebuilds the target button state, so entering or leaving the layer while a source is held updates both the old and new virtual buttons in the same event batch. The modifier can still be forwarded as a normal gamepad button. [Layer acceptance](TESTING_AND_PERFORMANCE.md#remap-layer-acceptance)

@@ -163,6 +163,16 @@ releases independently. To test a shared target, rerun with only
 `--remap-button cross=circle` and verify the virtual Circle stays held
 until both physical buttons have been released.
 
+The user reported that virtual button remapping worked as expected.
+
+## Remap layer acceptance
+
+Run `cargo run --locked -p joyshockrust-linux -- --remap-button cross=circle --remap-layer l1`.
+In Steam's **Test Device Inputs** for **JoyShockRust Virtual Gamepad**, hold
+Cross. While keeping it held, press L1 and confirm virtual Cross releases
+as Circle presses. Release L1 and confirm Circle releases and Cross returns.
+Release Cross and confirm both are up. L1 should also show its usual state.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

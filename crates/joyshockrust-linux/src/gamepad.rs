@@ -7,7 +7,10 @@ use evdev::{
 use joyshockrust_core::{Button, Controls, DPad, Stick};
 
 #[derive(Default)]
-pub struct ButtonRemaps(Vec<(Button, Button)>);
+pub struct ButtonRemaps {
+    rules: Vec<(Button, Button)>,
+    layer: Option<Button>,
+}
 
 impl ButtonRemaps {
     pub fn add(&mut self, spec: &str) -> Result<(), &'static str> {
@@ -17,19 +20,38 @@ impl ButtonRemaps {
         if !BUTTONS.iter().any(|&(button, _)| button == target) {
             return Err("target button is unavailable on the virtual gamepad");
         }
-        if self.0.iter().any(|&(button, _)| button == source) {
+        if self.rules.iter().any(|&(button, _)| button == source) {
             return Err("source button already has a remap");
         }
-        self.0.push((source, target));
+        self.rules.push((source, target));
+        Ok(())
+    }
+
+    pub fn set_layer(&mut self, name: &str) -> Result<(), &'static str> {
+        if self.layer.is_some() {
+            return Err("select only one remap layer button");
+        }
+        let button = super::gyro_gate::button_by_name(name).ok_or("unknown remap layer button")?;
+        self.layer = Some(button);
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.layer.is_some() && self.rules.is_empty() {
+            return Err("--remap-layer requires at least one --remap-button");
+        }
         Ok(())
     }
 
     pub fn apply(&self, mut controls: Controls) -> Controls {
         let physical = controls.buttons;
-        for &(source, _) in &self.0 {
+        if self.layer.is_some_and(|button| !physical.contains(button)) {
+            return controls;
+        }
+        for &(source, _) in &self.rules {
             controls.buttons.remove(source);
         }
-        for &(source, target) in &self.0 {
+        for &(source, target) in &self.rules {
             if physical.contains(source) {
                 controls.buttons.insert(target);
             }
@@ -181,6 +203,53 @@ fn axes(controls: Controls) -> [i32; AXES.len()] {
 mod tests {
     use super::*;
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+    #[test]
+    fn layer_switch_releases_and_rebinds_held_buttons_in_one_batch() {
+        let mut remaps = ButtonRemaps::default();
+        remaps.set_layer("l1").unwrap();
+        assert!(remaps.validate().is_err());
+        assert!(remaps.set_layer("r1").is_err());
+        remaps.add("cross=circle").unwrap();
+        remaps.validate().unwrap();
+
+        let mut base = Controls::default();
+        base.buttons.insert(Button::South);
+        let mut layered = base;
+        layered.buttons.insert(Button::LeftShoulder);
+        let mut gamepad = GamepadState::default();
+        let mut batches = Vec::new();
+        for controls in [base, layered, base, Controls::default()] {
+            gamepad
+                .publish(remaps.apply(controls), |events| {
+                    batches.push(
+                        events
+                            .iter()
+                            .map(|e| (e.code(), e.value()))
+                            .collect::<Vec<_>>(),
+                    );
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            batches,
+            [
+                vec![(Key::BTN_SOUTH.0, 1)],
+                vec![
+                    (Key::BTN_SOUTH.0, 0),
+                    (Key::BTN_EAST.0, 1),
+                    (Key::BTN_TL.0, 1)
+                ],
+                vec![
+                    (Key::BTN_SOUTH.0, 1),
+                    (Key::BTN_EAST.0, 0),
+                    (Key::BTN_TL.0, 0)
+                ],
+                vec![(Key::BTN_SOUTH.0, 0)],
+            ]
+        );
+    }
 
     #[test]
     fn remaps_swap_buttons_without_chaining() {
