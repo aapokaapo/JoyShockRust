@@ -235,20 +235,25 @@ gamepad returns. Finally stop the service and check that its virtual
 devices are gone. The user's Fedora run of `ac0df46` verified startup
 while disconnected, device detection, and gyro mouse recreation at reconnect.
 
-## Xbox 360 output acceptance
+## Xbox output acceptance
 
 Stop the user service if it is active, then run
-`cargo run --locked -p joyshockrust-linux -- --gamepad xbox360` with a
+`cargo run --locked -p joyshockrust-linux -- --gamepad xbox-series` with a
 DualSense Edge connected by USB. Open Steam's Test Device Inputs for the
 virtual controller. Check Cross/A, Circle/B, Square/X and Triangle/Y, the
-D-pad, both sticks and both analog triggers. Unplug and reconnect to
+D-pad, both sticks and both analog triggers. In consumers that expose Xbox
+Share, check that clicking the DualSense Edge touchpad presses Share.
+Unplug and reconnect to
 verify the device returns with the same identity. In a Proton game, record
 the game, Proton version, Steam Input setting and whether a single press
 performs one action. The physical controller is still visible to games.
 
-For a kernel-level assertion of the virtual device ID and Cross events, run
-`cargo test --locked -p joyshockrust-linux uinput_xbox360_identity_and_cross_press -- --ignored`
+For a kernel-level assertion of the virtual device ID, trigger range and
+Cross events, run
+`cargo test --locked -p joyshockrust-linux uinput_xbox_series_identity_and_cross_press -- --ignored`
 with the evdev permissions described in [Virtual gamepad acceptance](#virtual-gamepad-acceptance).
+For Xbox 360 compatibility, repeat with `--gamepad xbox360` and the
+`uinput_xbox360_identity_and_cross_press` test.
 
 ## Profile reload acceptance
 

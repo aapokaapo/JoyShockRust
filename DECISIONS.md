@@ -120,3 +120,8 @@ Updated 2026-11-22. The optional Xbox 360 output advertises USB input ID
 state and event batching with the default virtual gamepad. The output
 identity is chosen when the bridge starts and stays fixed across profile
 reloads. [Linux xpad device ID](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/joystick/xpad.c#L153-L156) · [Linux xpad event layout](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/joystick/xpad.c#L908-L956)
+
+Updated 2026-11-22. Xbox Series X|S output advertises wired USB input ID
+`045e:0b12` and input version `0507`. It follows xpad's 0–1023 analog
+trigger range and emits `KEY_RECORD` for Share from the DualSense Edge
+touchpad click. [Linux xpad device ID](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/joystick/xpad.c#L165-L167) · [Linux xpad axis ranges](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/joystick/xpad.c#L1913-L1929) · [Linux SDL controller database](https://github.com/mdqinc/SDL_GameControllerDB/blob/4e87e3c6c2574f49e1cdf8526b6f829b61e5ccb3/gamecontrollerdb.txt#L1933)

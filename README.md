@@ -177,12 +177,13 @@ D-pad, sticks and analog triggers. It releases held controls when the input
 session ends. Games can still see the physical controller. See the
 [uinput and Steam acceptance tests](TESTING_AND_PERFORMANCE.md#virtual-gamepad-acceptance).
 
-For compatibility testing, pass `--gamepad xbox360` to expose
-**JoyShockRust Virtual Xbox 360 Gamepad**. It advertises the wired Xbox 360
-input ID and uses analog-only virtual triggers. Physical trigger buttons
-still work with gyro bindings and as remap sources. The option can be used
-with a TOML profile and applies for the entire bridge run. Steam Input and
-Proton recognition still need hardware testing.
+For modern Xbox output, pass `--gamepad xbox-series` to expose
+**JoyShockRust Virtual Xbox Series X|S Gamepad**. It advertises the wired
+Xbox Series input ID, scales analog triggers to 0–1023, and maps the
+DualSense Edge touchpad click to Xbox Share. Use `--gamepad xbox360` when
+testing Xbox 360 compatibility. Both modes support TOML profiles, including
+bindings that use the physical trigger buttons. The output mode applies
+for the entire bridge run. Steam Input and Proton need hardware testing.
 
 Add `--stick-curve 2` to soften small movements on both virtual gamepad
 sticks. The radial curve preserves direction, center, and full travel.

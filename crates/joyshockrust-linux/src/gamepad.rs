@@ -91,7 +91,10 @@ fn parse_rule(spec: &str) -> Result<(Button, Button), &'static str> {
     let (source, target) = spec.split_once('=').ok_or("expected SOURCE=TARGET")?;
     let source = super::gyro_gate::button_by_name(source).ok_or("unknown source button")?;
     let target = super::gyro_gate::button_by_name(target).ok_or("unknown target button")?;
-    if !BUTTONS.iter().any(|&(button, _)| button == target) {
+    if !OutputKind::Generic
+        .buttons()
+        .any(|(button, _)| button == target)
+    {
         return Err("target button is unavailable on the virtual gamepad");
     }
     Ok((source, target))
@@ -140,7 +143,7 @@ impl StickCurve {
     }
 }
 
-const BUTTONS: [(Button, Key); 13] = [
+const BUTTONS: [(Button, Key); 11] = [
     (Button::South, Key::BTN_SOUTH),
     (Button::East, Key::BTN_EAST),
     // SDL maps generic gamepads by the Linux BTN_X/BTN_Y aliases rather
@@ -154,13 +157,15 @@ const BUTTONS: [(Button, Key); 13] = [
     (Button::LeftStick, Key::BTN_THUMBL),
     (Button::RightStick, Key::BTN_THUMBR),
     (Button::Home, Key::BTN_MODE),
-    // The generic gamepad also advertises digital trigger buttons.
+];
+const DIGITAL_TRIGGERS: [(Button, Key); 2] = [
     (Button::LeftTrigger, Key::BTN_TL2),
     (Button::RightTrigger, Key::BTN_TR2),
 ];
 
 const STICK_SCALE: i32 = 32_767;
 const TRIGGER_SCALE: i32 = 255;
+const SERIES_TRIGGER_SCALE: i32 = 1023;
 const AXES: [(Axis, i32, i32); 8] = [
     (Axis::ABS_X, -STICK_SCALE, STICK_SCALE),
     (Axis::ABS_Y, -STICK_SCALE, STICK_SCALE),
@@ -177,6 +182,7 @@ pub enum OutputKind {
     #[default]
     Generic,
     Xbox360,
+    XboxSeries,
 }
 
 impl OutputKind {
@@ -190,13 +196,26 @@ impl OutputKind {
                 "JoyShockRust Virtual Xbox 360 Gamepad",
                 InputId::new(BusType::BUS_USB, 0x045e, 0x028e, 0x0114),
             ),
+            Self::XboxSeries => (
+                "JoyShockRust Virtual Xbox Series X|S Gamepad",
+                InputId::new(BusType::BUS_USB, 0x045e, 0x0b12, 0x0507),
+            ),
         }
     }
 
-    fn buttons(self) -> &'static [(Button, Key)] {
+    fn buttons(self) -> impl Iterator<Item = (Button, Key)> {
+        let extra: &[_] = match self {
+            Self::Generic => &DIGITAL_TRIGGERS,
+            Self::Xbox360 => &[],
+            Self::XboxSeries => &[(Button::TouchpadClick, Key::KEY_RECORD)],
+        };
+        BUTTONS.iter().chain(extra).copied()
+    }
+
+    fn trigger_scale(self) -> i32 {
         match self {
-            Self::Generic => &BUTTONS,
-            Self::Xbox360 => &BUTTONS[..BUTTONS.len() - 2],
+            Self::Generic | Self::Xbox360 => TRIGGER_SCALE,
+            Self::XboxSeries => SERIES_TRIGGER_SCALE,
         }
     }
 }
@@ -205,14 +224,17 @@ pub fn open(kind: OutputKind) -> io::Result<VirtualDevice> {
     let (name, id) = kind.identity();
     let keys = kind
         .buttons()
-        .iter()
-        .map(|&(_, code)| code)
+        .map(|(_, code)| code)
         .collect::<AttributeSet<Key>>();
     let mut builder = VirtualDevice::builder()?
         .name(name)
         .input_id(id)
         .with_keys(&keys)?;
     for (code, min, max) in AXES {
+        let max = match code {
+            Axis::ABS_Z | Axis::ABS_RZ => kind.trigger_scale(),
+            _ => max,
+        };
         builder = builder.with_absolute_axis(&UinputAbsSetup::new(
             code,
             AbsInfo::new(0, min, max, 0, 0, 0),
@@ -240,16 +262,22 @@ impl GamepadState {
         next: Controls,
         mut emit: impl FnMut(&[InputEvent]) -> io::Result<()>,
     ) -> io::Result<()> {
-        let mut changes = [InputEvent::new(0, 0, 0); BUTTONS.len() + AXES.len()];
+        let mut changes =
+            [InputEvent::new(0, 0, 0); BUTTONS.len() + DIGITAL_TRIGGERS.len() + AXES.len()];
         let mut count = 0;
-        for &(button, code) in self.kind.buttons() {
+        for (button, code) in self.kind.buttons() {
             let pressed = next.buttons.contains(button);
             if pressed != self.current.buttons.contains(button) {
                 changes[count] = InputEvent::new(EventType::KEY.0, code.0, i32::from(pressed));
                 count += 1;
             }
         }
-        for (((code, _, _), old), new) in AXES.into_iter().zip(axes(self.current)).zip(axes(next)) {
+        let trigger_scale = self.kind.trigger_scale();
+        for (((code, _, _), old), new) in AXES
+            .into_iter()
+            .zip(axes(self.current, trigger_scale))
+            .zip(axes(next, trigger_scale))
+        {
             if old != new {
                 changes[count] = InputEvent::new(EventType::ABSOLUTE.0, code.0, new);
                 count += 1;
@@ -263,7 +291,7 @@ impl GamepadState {
     }
 }
 
-fn axes(controls: Controls) -> [i32; AXES.len()] {
+fn axes(controls: Controls, trigger_scale: i32) -> [i32; AXES.len()] {
     let (x, y) = match controls.dpad {
         DPad::Neutral => (0, 0),
         DPad::Up => (0, -1),
@@ -276,7 +304,7 @@ fn axes(controls: Controls) -> [i32; AXES.len()] {
         DPad::UpLeft => (-1, -1),
     };
     let stick = |axis: f32| (axis * STICK_SCALE as f32).round() as i32;
-    let trigger = |axis: f32| (axis * TRIGGER_SCALE as f32).round() as i32;
+    let trigger = |axis: f32| (axis * trigger_scale as f32).round() as i32;
     [
         stick(controls.left_stick.x),
         stick(controls.left_stick.y),
@@ -470,7 +498,7 @@ mod tests {
         let result = StickCurve::parse("2").unwrap().apply(controls);
         assert!((result.left_stick.x - 0.15).abs() < 1e-6);
         assert!((result.left_stick.y + 0.2).abs() < 1e-6);
-        assert_eq!(axes(result)[2], -8192);
+        assert_eq!(axes(result, TRIGGER_SCALE)[2], -8192);
         assert_eq!(result.left_trigger, controls.left_trigger);
         assert_eq!(result.dpad, controls.dpad);
         assert_eq!(StickCurve::parse("1").unwrap().apply(controls), controls);
@@ -500,6 +528,12 @@ mod tests {
     #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
     fn uinput_xbox360_identity_and_cross_press() {
         assert_uinput_gamepad(OutputKind::Xbox360);
+    }
+
+    #[test]
+    #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
+    fn uinput_xbox_series_identity_and_cross_press() {
+        assert_uinput_gamepad(OutputKind::XboxSeries);
     }
 
     fn assert_uinput_gamepad(kind: OutputKind) {
@@ -546,12 +580,17 @@ mod tests {
             keys.contains(Key::BTN_TL2),
             matches!(kind, OutputKind::Generic)
         );
-        assert!(
-            observer
-                .supported_absolute_axes()
-                .unwrap()
-                .contains(Axis::ABS_Z)
+        assert_eq!(
+            keys.contains(Key::KEY_RECORD),
+            matches!(kind, OutputKind::XboxSeries)
         );
+        let trigger_axes: Vec<_> = observer
+            .get_absinfo()
+            .unwrap()
+            .filter(|(code, _)| matches!(*code, Axis::ABS_Z | Axis::ABS_RZ))
+            .map(|(_, info)| (info.minimum(), info.maximum()))
+            .collect();
+        assert_eq!(trigger_axes, [(0, kind.trigger_scale()); 2]);
         observer.set_nonblocking(true).unwrap();
 
         let mut report = [0; 64];
@@ -617,6 +656,43 @@ mod tests {
                 (EventType::KEY, Key::BTN_NORTH.0, 1),
                 (EventType::KEY, Key::BTN_WEST.0, 1),
                 (EventType::ABSOLUTE, Axis::ABS_Z.0, 255),
+            ]
+        );
+    }
+
+    #[test]
+    fn xbox_series_reports_share_and_scales_both_triggers() {
+        let mut gamepad = GamepadState::new(OutputKind::XboxSeries);
+        let mut frame = [0; 64];
+        frame[..11].copy_from_slice(&[1, 128, 128, 128, 128, 255, 128, 0, 8, 0x0c, 0x02]);
+        let controls = parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None)
+            .unwrap()
+            .controls;
+        let mut batches = Vec::new();
+        let mut capture = |events: &[InputEvent]| {
+            batches.push(
+                events
+                    .iter()
+                    .map(|event| (event.event_type(), event.code(), event.value()))
+                    .collect::<Vec<_>>(),
+            );
+            Ok(())
+        };
+        gamepad.publish(controls, &mut capture).unwrap();
+        gamepad.publish(Controls::default(), &mut capture).unwrap();
+        assert_eq!(
+            batches,
+            [
+                vec![
+                    (EventType::KEY, Key::KEY_RECORD.0, 1),
+                    (EventType::ABSOLUTE, Axis::ABS_Z.0, 1023),
+                    (EventType::ABSOLUTE, Axis::ABS_RZ.0, 514),
+                ],
+                vec![
+                    (EventType::KEY, Key::KEY_RECORD.0, 0),
+                    (EventType::ABSOLUTE, Axis::ABS_Z.0, 0),
+                    (EventType::ABSOLUTE, Axis::ABS_RZ.0, 0),
+                ],
             ]
         );
     }

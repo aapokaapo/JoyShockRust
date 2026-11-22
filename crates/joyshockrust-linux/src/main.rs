@@ -36,7 +36,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --diagnose [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
-        "bridge options: [--gamepad generic|xbox360] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
+        "bridge options: [--gamepad generic|xbox360|xbox-series] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -146,11 +146,12 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         } else if arg == "--gamepad" && gamepad_kind.is_none() {
             let value = args
                 .next()
-                .ok_or("expected generic or xbox360 after --gamepad")?;
+                .ok_or("expected generic, xbox360 or xbox-series after --gamepad")?;
             gamepad_kind = Some(match value.to_str() {
                 Some("generic") => gamepad::OutputKind::Generic,
                 Some("xbox360") => gamepad::OutputKind::Xbox360,
-                _ => return Err("expected generic or xbox360 after --gamepad".into()),
+                Some("xbox-series") => gamepad::OutputKind::XboxSeries,
+                _ => return Err("expected generic, xbox360 or xbox-series after --gamepad".into()),
             });
         } else if arg == "--flick-stick" {
             if options.flick_stick.is_some() {

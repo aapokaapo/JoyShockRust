@@ -62,10 +62,10 @@ The first Phase 5 increment loads a versioned TOML profile at startup and valida
 ## Phase 6 — compatibility and transports
 Bluetooth DualSense Edge, DualSense, additional controllers, virtual output compatibility, optional game-launch visibility helpers. **Exit:** per-device and per-game compatibility evidence.
 
-The first step adds an opt-in Xbox 360-compatible uinput identity with the
-xpad button, hat and analog trigger layout. Automated coverage exercises
-USB report mapping to that layout. Steam Input and Proton tests remain
-pending. [Xbox 360 output acceptance](TESTING_AND_PERFORMANCE.md#xbox-360-output-acceptance)
+Opt-in Xbox Series X|S and Xbox 360 uinput identities use xpad button, hat
+and analog trigger layouts. Automated coverage exercises USB report mapping,
+including the Series trigger range and Share button. Steam Input and Proton
+tests remain pending. [Xbox output acceptance](TESTING_AND_PERFORMANCE.md#xbox-output-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.
