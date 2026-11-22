@@ -127,6 +127,12 @@ while rotating the controller. Aim should begin after 200 ms and stop on
 release. Repeat a long hold with aim already latched on. Aim should stay on
 after that release. Reconnect and confirm a fresh session starts off.
 
+For double-tap, run with `--gyro-mouse --gyro-double-tap r3`. Confirm one
+tap leaves aim unchanged. Two short taps within 300 ms should toggle once.
+Wait more than 300 ms between taps and press for 200 ms or longer in separate
+attempts. Both should leave aim unchanged. Reconnect with R3 held, release
+it, and confirm that aim is still off.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

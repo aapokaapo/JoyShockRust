@@ -19,7 +19,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     const USAGE: &str = concat!(
         "usage: joyshockrust-linux [--gyro-mouse [--calibrate-gyro] [BINDING]] [/dev/hidrawN]\n",
-        "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | --gyro-hold-l2 | ",
+        "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
+        "--gyro-double-tap BUTTON | --gyro-hold-l2 | ",
         "--gyro-trigger SIDE[:PRESS:RELEASE]",
     );
     let mut gyro_mouse = false;
@@ -42,6 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | "--gyro-hold"
                     | "--gyro-toggle"
                     | "--gyro-tap-hold"
+                    | "--gyro-double-tap"
                     | "--gyro-trigger"
             )
         ) {
@@ -69,6 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match arg.to_str() {
                     Some("--gyro-hold") => Binding::Hold(button),
                     Some("--gyro-tap-hold") => Binding::TapHold(button),
+                    Some("--gyro-double-tap") => Binding::DoubleTap(button),
                     _ => Binding::Toggle(button),
                 }
             };

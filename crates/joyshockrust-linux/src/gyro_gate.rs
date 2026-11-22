@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use joyshockrust_core::{Button, Controls};
 
 const HOLD_TIME: Duration = Duration::from_millis(200);
+const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
 
 #[derive(Clone, Copy, Default)]
 pub enum Binding {
@@ -11,6 +12,7 @@ pub enum Binding {
     Hold(Button),
     Toggle(Button),
     TapHold(Button),
+    DoubleTap(Button),
     AnalogTrigger(TriggerGate),
 }
 
@@ -70,6 +72,7 @@ pub struct GyroGate {
     previous_pressed: Option<bool>,
     active: bool,
     hold_deadline: Option<Instant>,
+    second_tap_deadline: Option<Instant>,
 }
 
 impl GyroGate {
@@ -79,6 +82,7 @@ impl GyroGate {
             previous_pressed: None,
             active: false,
             hold_deadline: None,
+            second_tap_deadline: None,
         }
     }
 
@@ -95,6 +99,7 @@ impl GyroGate {
                 self.active
             }
             Binding::TapHold(button) => self.tap_hold(buttons.contains(button), clock()),
+            Binding::DoubleTap(button) => self.double_tap(buttons.contains(button), clock()),
             Binding::AnalogTrigger(trigger) => {
                 let travel = trigger.travel(controls);
                 self.active = if self.active {
@@ -108,22 +113,41 @@ impl GyroGate {
     }
 
     fn tap_hold(&mut self, pressed: bool, now: Instant) -> bool {
-        let previous = self.previous_pressed.replace(pressed);
+        let deadline = self.press_deadline(pressed, now);
         if pressed {
-            if previous == Some(false) {
-                self.hold_deadline = Some(now + HOLD_TIME);
-            }
-            self.active || self.hold_deadline.is_some_and(|deadline| now >= deadline)
+            self.active || deadline.is_some_and(|deadline| now >= deadline)
         } else {
-            if self
-                .hold_deadline
-                .take()
-                .is_some_and(|deadline| now < deadline)
-            {
+            if deadline.is_some_and(|deadline| now < deadline) {
                 self.active = !self.active;
             }
             self.active
         }
+    }
+
+    fn double_tap(&mut self, pressed: bool, now: Instant) -> bool {
+        let press_deadline = self.press_deadline(pressed, now);
+        if let Some(deadline) = press_deadline.filter(|_| !pressed) {
+            let pending = self.second_tap_deadline.take();
+            if now < deadline {
+                if pending.is_some_and(|deadline| now <= deadline) {
+                    self.active = !self.active;
+                } else {
+                    self.second_tap_deadline = Some(now + DOUBLE_TAP_WINDOW);
+                }
+            }
+        }
+        self.active
+    }
+
+    fn press_deadline(&mut self, pressed: bool, now: Instant) -> Option<Instant> {
+        let previous = self.previous_pressed.replace(pressed);
+        if !pressed {
+            return self.hold_deadline.take();
+        }
+        if previous == Some(false) {
+            self.hold_deadline = Some(now + HOLD_TIME);
+        }
+        self.hold_deadline
     }
 }
 
@@ -216,6 +240,58 @@ mod tests {
         assert!(!gate.enabled(&down, || start));
         assert!(!gate.enabled(&down, || start + HOLD_TIME));
         assert!(!gate.enabled(&Controls::default(), || start + HOLD_TIME));
+    }
+
+    #[test]
+    fn double_tap_changes_state_on_second_release_once_per_pair() {
+        let mut gate = GyroGate::new(Binding::DoubleTap(Button::RightStick));
+        let up = Controls::default();
+        let down = pressed(Button::RightStick);
+        let start = Instant::now();
+        for (controls, ms, enabled) in [
+            (&up, 0, false),
+            (&down, 10, false),
+            (&up, 50, false),
+            (&down, 200, false),
+            (&down, 300, false),
+            (&up, 350, true), // inclusive 300 ms release-to-release cutoff
+            (&up, 351, true),
+            (&down, 400, true),
+            (&up, 450, true),
+            (&down, 500, true),
+            (&up, 550, false),
+        ] {
+            assert_eq!(
+                gate.enabled(controls, || start + Duration::from_millis(ms)),
+                enabled,
+                "{ms}"
+            );
+        }
+    }
+
+    #[test]
+    fn long_presses_and_expired_taps_do_not_complete_a_pair() {
+        let mut gate = GyroGate::new(Binding::DoubleTap(Button::RightStick));
+        let up = Controls::default();
+        let down = pressed(Button::RightStick);
+        let start = Instant::now();
+        for (controls, ms) in [
+            (&down, 0), // held when connecting
+            (&up, 10),
+            (&down, 20),
+            (&up, 40),
+            (&down, 330),
+            (&up, 341), // 301 ms after first release, starts a fresh pair
+            (&down, 400),
+            (&up, 600), // 200 ms hold, cancels the pending pair
+            (&down, 610),
+            (&up, 620),
+        ] {
+            assert!(
+                !gate.enabled(controls, || start + Duration::from_millis(ms)),
+                "{ms}"
+            );
+        }
     }
 
     #[test]

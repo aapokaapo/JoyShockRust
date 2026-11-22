@@ -124,6 +124,8 @@ threshold below the press threshold. Select one binding per session.
 Any binding can be combined with `--calibrate-gyro`. Use
 `--gyro-tap-hold r3` to toggle on a tap or enable aim temporarily on a
 hold of at least 200 ms. Releasing a long hold restores the latched state.
+Use `--gyro-double-tap r3` to toggle only after two short taps. Each tap
+must be shorter than 200 ms and the releases at most 300 ms apart.
 
 Supported button names are `cross`, `circle`, `square`, `triangle`,
 `l1`, `r1`, `l2`, `r2`, `l3`, `r3`, `create`, `options`, `ps`,
