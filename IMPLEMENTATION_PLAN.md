@@ -183,8 +183,9 @@ retaining the current mappings and other filters.
 
 Keyboard profiles map digital buttons and D-pad directions to tap, hold
 and double-tap keys. Analog trigger travel can drive the same gestures
-with independent press and release thresholds per binding. Deadline and
-output handling have synthetic coverage. The bridge supports keyboard and mouse profiles with the
+with independent press and release thresholds per binding. Gestures can
+also target mouse buttons through a dedicated virtual pointer. Deadline
+and output handling have synthetic coverage. The bridge supports keyboard and mouse profiles with the
 virtual gamepad disabled. Analog stick bindings support direction keys,
 a radial deadzone and an outer key with separate engage and release
 thresholds. The outer key supports hold, toggle, and keep-sprint profiles.

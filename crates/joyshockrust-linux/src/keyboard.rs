@@ -63,6 +63,30 @@ fn keyboard_key(name: &str) -> Result<KeyCode, String> {
         .map_err(|_| format!("unknown keyboard key {name}"))
 }
 
+fn is_mouse_button(key: KeyCode) -> bool {
+    matches!(
+        key,
+        KeyCode::BTN_LEFT
+            | KeyCode::BTN_RIGHT
+            | KeyCode::BTN_MIDDLE
+            | KeyCode::BTN_SIDE
+            | KeyCode::BTN_EXTRA
+    )
+}
+
+fn parse_gesture_key(name: Option<String>) -> Result<Option<KeyCode>, String> {
+    name.as_deref()
+        .map(|name| {
+            if let Ok(button) = name.parse::<KeyCode>()
+                && is_mouse_button(button)
+            {
+                return Ok(button);
+            }
+            keyboard_key(name)
+        })
+        .transpose()
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Source {
     Button(Button),
@@ -133,9 +157,9 @@ impl Settings {
             }
             let binding = Binding {
                 source,
-                tap: parse_key(raw.tap)?,
-                hold: parse_key(raw.hold)?,
-                double_tap: parse_key(raw.double_tap)?,
+                tap: parse_gesture_key(raw.tap)?,
+                hold: parse_gesture_key(raw.hold)?,
+                double_tap: parse_gesture_key(raw.double_tap)?,
             };
             if binding.tap.is_none() && binding.hold.is_none() && binding.double_tap.is_none() {
                 return Err(format!(
@@ -360,7 +384,41 @@ fn key_event(key: KeyCode, value: i32) -> InputEvent {
 
 pub struct Keyboard {
     state: State,
-    output: VirtualDevice,
+    outputs: Outputs,
+}
+
+struct Outputs {
+    keyboard: Option<VirtualDevice>,
+    mouse: Option<VirtualDevice>,
+    keys: Vec<InputEvent>,
+    buttons: Vec<InputEvent>,
+}
+
+impl Outputs {
+    fn emit(&mut self, events: &[InputEvent]) -> io::Result<()> {
+        match (&mut self.keyboard, &mut self.mouse) {
+            (Some(keyboard), Some(mouse)) => {
+                self.keys.clear();
+                self.buttons.clear();
+                for &event in events {
+                    if is_mouse_button(KeyCode(event.code())) {
+                        self.buttons.push(event);
+                    } else {
+                        self.keys.push(event);
+                    }
+                }
+                if !self.keys.is_empty() {
+                    keyboard.emit(&self.keys)?;
+                }
+                if !self.buttons.is_empty() {
+                    mouse.emit(&self.buttons)?;
+                }
+                Ok(())
+            }
+            (Some(device), None) | (None, Some(device)) => device.emit(events),
+            (None, None) => unreachable!("mapping has an output device"),
+        }
+    }
 }
 
 impl Keyboard {
@@ -370,24 +428,50 @@ impl Keyboard {
         else {
             return Ok(None);
         };
-        let mut keys: AttributeSet<KeyCode> = config.keys().collect();
-        // Advertise the standard key range used by udev to recognize a keyboard.
-        for code in KeyCode::KEY_ESC.0..=KeyCode::KEY_D.0 {
-            keys.insert(KeyCode(code));
+        let mut keys = AttributeSet::<KeyCode>::new();
+        let mut buttons = AttributeSet::<KeyCode>::new();
+        for key in config.keys() {
+            if is_mouse_button(key) {
+                buttons.insert(key);
+            } else {
+                keys.insert(key);
+            }
         }
-        let output = VirtualDevice::builder()?
-            .name("JoyShockRust Virtual Keyboard")
-            .with_keys(&keys)?
-            .build()?;
+        let key_count = keys.iter().count();
+        let button_count = buttons.iter().count();
+        let keyboard = if key_count > 0 {
+            // Advertise the standard key range used by udev to recognize a keyboard.
+            for code in KeyCode::KEY_ESC.0..=KeyCode::KEY_D.0 {
+                keys.insert(KeyCode(code));
+            }
+            Some(
+                VirtualDevice::builder()?
+                    .name("JoyShockRust Virtual Keyboard")
+                    .with_keys(&keys)?
+                    .build()?,
+            )
+        } else {
+            None
+        };
+        let mouse = (button_count > 0)
+            .then(|| {
+                crate::gyro_mouse::open_output_with_buttons("JoyShockRust Button Mouse", buttons)
+            })
+            .transpose()?;
         Ok(Some(Self {
             state: State::new(config),
-            output,
+            outputs: Outputs {
+                keyboard,
+                mouse,
+                keys: Vec::with_capacity(key_count),
+                buttons: Vec::with_capacity(button_count),
+            },
         }))
     }
 
     pub fn publish(&mut self, controls: Controls, now: Instant) -> io::Result<Option<Instant>> {
         self.state
-            .update(controls, now, |events| self.output.emit(events))
+            .update(controls, now, |events| self.outputs.emit(events))
     }
 
     pub fn tick(&mut self, now: Instant) -> io::Result<Option<Instant>> {
@@ -395,8 +479,11 @@ impl Keyboard {
     }
 
     pub fn release(&mut self) -> io::Result<()> {
-        for key in self.state.held.iter() {
-            self.output.emit(&[key_event(key, 0)])?;
+        let events = &mut self.state.events;
+        events.clear();
+        events.extend(self.state.held.iter().map(|key| key_event(key, 0)));
+        if !events.is_empty() {
+            self.outputs.emit(events)?;
         }
         self.state.held = AttributeSet::new();
         Ok(())
@@ -860,6 +947,52 @@ mod tests {
             format!("{binding}{}", binding.replace("'r2'", "'r2:0.45:0.35'")),
         ] {
             assert!(crate::profile::parse(&format!("version = 1\n{invalid}")).is_err());
+        }
+    }
+
+    #[test]
+    fn mouse_button_gestures_share_the_keyboard_deadline_path() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            trigger = "r2:0.6:0.4"
+            hold = "BTN_LEFT"
+            [[keyboard.bindings]]
+            button = "cross"
+            tap = "BTN_RIGHT"
+            [[keyboard.bindings]]
+            button = "l1"
+            hold = "KEY_W"
+            "#,
+        );
+        let mut state = State::new(&config);
+        let start = Instant::now();
+        let left = KeyCode::BTN_LEFT.0;
+        let right = KeyCode::BTN_RIGHT.0;
+        let w = KeyCode::KEY_W.0;
+        let mut controls = Controls::default();
+        controls.buttons.insert(Button::LeftShoulder);
+        for (ms, trigger, cross, events, deadline) in [
+            (0, 0.6, true, &[(w, 1), (left, 1)][..], None),
+            (20, 0.5, false, &[(right, 1)][..], Some(50)),
+            (30, 0.4, false, &[(left, 0)][..], Some(50)),
+            (50, 0.4, false, &[(right, 0)][..], None),
+        ] {
+            controls.right_trigger = trigger;
+            if cross {
+                controls.buttons.insert(Button::South);
+            } else {
+                controls.buttons.remove(Button::South);
+            }
+            let mut actual = Vec::new();
+            let next = state
+                .update(controls, start + Duration::from_millis(ms), |batch| {
+                    actual.extend(batch.iter().map(|event| (event.code(), event.value())));
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(actual, events);
+            assert_eq!(next, deadline.map(|ms| start + Duration::from_millis(ms)));
         }
     }
 }

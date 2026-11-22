@@ -223,6 +223,20 @@ trigger = "l2:0.35:0.25"
 hold = "KEY_Q"
 ```
 
+Button and trigger gestures also accept `BTN_LEFT`, `BTN_RIGHT`,
+`BTN_MIDDLE`, `BTN_SIDE` and `BTN_EXTRA`. For example, hold the left
+mouse button while pulling R2 past its configured threshold.
+
+```toml
+[[keyboard.bindings]]
+trigger = "r2:0.6:0.4"
+hold = "BTN_LEFT"
+```
+
+These gestures are sent by **JoyShockRust Button Mouse**, which also
+works in profiles with gyro disabled. Gyro and Flick Stick movement
+continue through **JoyShockRust Gyro Mouse** when enabled.
+
 Use `[[keyboard.sticks]]` to bind an analog stick. This example uses
 `KEY_LEFTSHIFT` in the outer zone and keeps the current WASD direction
 held while entering or leaving that zone.

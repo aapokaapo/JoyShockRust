@@ -361,4 +361,9 @@ Keyboard trigger bindings use normalized travel and share the gyro
 trigger gate's threshold behavior. Each distinct threshold pair tracks
 its own pressed state and feeds the existing keyboard gesture logic.
 Digital L2 and R2 bindings continue to read their report bits.
+
+Keyboard and trigger gestures can also target the five standard mouse
+buttons. Mouse button bindings use a dedicated virtual pointer so they
+work without gyro and can be reloaded without rebuilding gyro state.
+Each virtual device receives only its own event batch.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)

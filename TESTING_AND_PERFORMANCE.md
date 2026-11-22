@@ -641,6 +641,12 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
    `hold = "KEY_Q"`. Slowly squeeze L2 until Q activates, back off
    slightly without releasing Q, and then release L2 fully to clear Q.
    Confirm R2 alone leaves Q released. Repeat over Bluetooth.
+8. Add `trigger = "r2:0.6:0.4"` and `hold = "BTN_LEFT"` in a new
+   keyboard binding. Confirm **JoyShockRust Button Mouse** sends a left
+   press at the threshold and a release as R2 backs off. With gyro
+   enabled, move the pointer while holding R2 and check that a desktop
+   drag works. Switch profiles or disconnect while R2 is held and
+   confirm the mouse button releases.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a
