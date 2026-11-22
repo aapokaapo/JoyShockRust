@@ -121,7 +121,11 @@ mod tests {
     #[test]
     #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
     fn uinput_cross_press_and_release() {
-        use std::os::fd::AsFd;
+        use std::{
+            os::fd::AsFd,
+            thread,
+            time::{Duration, Instant},
+        };
 
         use evdev::{Device, SynchronizationCode};
         use nix::poll::{PollFd, PollFlags, poll};
@@ -133,7 +137,25 @@ mod tests {
             .next()
             .expect("virtual gamepad event node")
             .expect("read the event node path");
-        let mut observer = Device::open(&node).expect("open the virtual gamepad's evdev node");
+        // The kernel can expose the event node before udev applies its ACL.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut observer = loop {
+            match Device::open(&node) {
+                Ok(observer) => break observer,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::PermissionDenied | io::ErrorKind::NotFound
+                    ) && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(err) => panic!(
+                    "could not read virtual gamepad {}: {err}. See the uinput permissions in TESTING_AND_PERFORMANCE.md",
+                    node.display()
+                ),
+            }
+        };
         assert_eq!(observer.name(), Some("JoyShockRust Virtual Gamepad"));
         observer.set_nonblocking(true).unwrap();
 

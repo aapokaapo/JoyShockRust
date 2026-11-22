@@ -38,7 +38,13 @@ velocity thresholds. It is informational and leaves aim integration intact.
 Identical initial state, configuration and ordered samples must produce identical results on a defined build/numeric environment. No system-clock reads, RNG, I/O, threads or hidden global state. Explicitly define behavior for duplicate/out-of-order timestamps, long gaps, wraparound and invalid samples. Bit-identical cross-architecture floating-point output is not initially promised.
 
 ## Calibration
-Support manual stationary calibration with quality gates, robust noise estimation, persistent profile format owned by config crate, and bounded auto-bias learning. Do not allow automatic calibration to erase genuine slow aim movement. Provide synthetic traces for stationary drift, slow intentional motion, fast motion, gravity changes, vibration and report gaps.
+`StationaryCalibration` estimates residual bias from factory-converted samples
+while the user keeps the controller still. It needs at least one second and
+64 samples of stable gyro and accelerometer readings. A gap above 50 ms,
+invalid reading or motion outside the quality limits discards the window.
+Once accepted, the bias is fixed for the session. The Linux adapter withholds
+pointer output during calibration and starts a new window after reconnect.
+Bias persistence and bounded auto-bias learning remain planned.
 
 ## Performance
 No steady-state heap allocations. Benchmarks must cover high sample rates and worst-case input sequences; mathematical accuracy and stability are more important than micro-optimizations.

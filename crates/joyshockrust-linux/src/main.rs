@@ -12,8 +12,10 @@ mod hidraw;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::{env, path::PathBuf};
 
-    const USAGE: &str = "usage: joyshockrust-linux [--gyro-mouse] [/dev/hidrawN]";
+    const USAGE: &str =
+        "usage: joyshockrust-linux [--gyro-mouse [--calibrate-gyro]] [/dev/hidrawN]";
     let mut gyro_mouse = false;
+    let mut calibrate_gyro = false;
     let mut path = None;
     for arg in env::args_os().skip(1) {
         if arg == "--help" {
@@ -22,28 +24,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if arg == "--gyro-mouse" && !gyro_mouse {
             gyro_mouse = true;
+        } else if arg == "--calibrate-gyro" && !calibrate_gyro {
+            calibrate_gyro = true;
         } else if path.is_none() && !arg.as_encoded_bytes().starts_with(b"-") {
             path = Some(PathBuf::from(arg));
         } else {
             return Err(USAGE.into());
         }
     }
+    if calibrate_gyro && !gyro_mouse {
+        return Err("--calibrate-gyro requires --gyro-mouse".into());
+    }
     if let Some(path) = path {
         let mut input = discovery::open_wired_edge(&path)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-        serve_session(&mut input, gyro_mouse)?;
+        serve_session(&mut input, gyro_mouse, calibrate_gyro)?;
     } else {
-        discovery::run(|input| serve_session(input, gyro_mouse))?;
+        discovery::run(|input| serve_session(input, gyro_mouse, calibrate_gyro))?;
     }
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
-fn serve_session(input: &mut std::fs::File, gyro_mouse: bool) -> std::io::Result<()> {
+fn serve_session(
+    input: &mut std::fs::File,
+    gyro_mouse: bool,
+    calibrate_gyro: bool,
+) -> std::io::Result<()> {
     let mut mouse = if gyro_mouse {
-        let mouse = gyro_mouse::GyroMouse::open(input)
+        let mouse = gyro_mouse::GyroMouse::open(input, calibrate_gyro)
             .map_err(|err| std::io::Error::other(format!("could not start gyro mouse: {err}")))?;
         eprintln!("JoyShockRust Gyro Mouse ready");
+        if calibrate_gyro {
+            eprintln!("Set the controller down and keep it still for gyro calibration");
+        }
         Some(mouse)
     } else {
         None

@@ -105,6 +105,8 @@ cargo run --locked -p joyshockrust-linux -- --gyro-mouse
 The bridge reads the controller's USB factory calibration and creates
 **JoyShockRust Gyro Mouse** alongside the virtual gamepad. You can append
 `/dev/hidrawN` to select one device explicitly. The initial sensitivity is
-four relative counts per degree on both axes. Runtime gyro bias estimation
-and physical calibration validation are pending.
+four relative counts per degree on both axes. To measure residual gyro bias,
+add `--calibrate-gyro`, put the controller on a stable surface, and wait for
+`Gyro rest calibration complete`. Pointer output starts when the calibration
+window completes. The bias is measured again on each USB reconnect.
 [USB gyro test](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)

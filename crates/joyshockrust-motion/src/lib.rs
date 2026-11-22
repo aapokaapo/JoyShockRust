@@ -20,6 +20,9 @@ const MAX_BIAS_DPS: f32 = 10.0;
 const MAX_SENSITIVITY: f32 = 10_000.0;
 const GRAVITY_CORRECTION_SECONDS: f64 = 0.5;
 
+mod stationary_calibration;
+pub use stationary_calibration::StationaryCalibration;
+
 #[derive(Debug, Clone, Copy)]
 pub struct ImuSample {
     pub timestamp_ns: u64,

@@ -31,6 +31,15 @@ press and release, each followed by `SYN_REPORT`. Run on Linux with writable
 cargo test --locked -p joyshockrust-linux uinput_cross_press_and_release -- --ignored
 ```
 
+If the test reports `Permission denied` on the virtual `/dev/input/eventN`
+node, run the test executable via `sudo` on an x86-64 Fedora development
+machine. Cargo still runs and builds as your normal user.
+
+```sh
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER=sudo \
+  cargo test --locked -p joyshockrust-linux uinput_cross_press_and_release -- --ignored
+```
+
 Steam acceptance uses a wired DualSense Edge and the current build.
 
 1. Unplug the controller and start `cargo run --locked -p joyshockrust-linux`.
@@ -47,6 +56,11 @@ Steam acceptance uses a wired DualSense Edge and the current build.
 
 Record the commit, Linux kernel, Steam client version and result for each
 step when running this acceptance test.
+
+On 2026-11-22, the user reported that step 4 passed on Fedora with a wired
+DualSense Edge. The separate uinput round-trip test also passed on Fedora
+using the sudo test runner (1 passed, 0 failed). The unprivileged run ended
+with a permission error while opening the virtual evdev node.
 
 ## USB gyro mouse acceptance
 
@@ -75,6 +89,17 @@ On Fedora with commit `647dcf6`, the user reported that the pointer stayed
 still at rest, that both pointer axes were inverted, and that USB reconnect
 restored pointer control without a jump. The bridge also printed duplicate
 waiting messages. The axis sign and wait logging fixes need a hardware retest.
+
+On Fedora with commit `6be09fa`, the USB reconnect log showed one waiting
+message and the gyro mouse started again. Pointer direction was not recorded
+for that run.
+
+To test residual bias calibration, add `--calibrate-gyro` to the command.
+Keep the controller moving briefly, then set it down. Confirm the pointer
+stays still during calibration and the completion message appears after
+at least a second of stable input. After completion, check for drift and
+confirm that slow deliberate rotation still moves the pointer. Repeat after
+USB reconnect to verify that a fresh calibration is requested.
 
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
