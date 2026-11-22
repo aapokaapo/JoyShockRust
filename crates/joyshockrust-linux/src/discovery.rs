@@ -4,14 +4,17 @@ use std::{
     fs::{File, OpenOptions},
     io,
     os::{
-        fd::AsFd,
+        fd::{AsFd, BorrowedFd},
         unix::fs::{MetadataExt, OpenOptionsExt},
     },
     path::{Path, PathBuf},
 };
 
 use joyshockrust_input::{DeviceModel, Transport};
-use nix::poll::PollFlags;
+use nix::{
+    errno::Errno,
+    poll::{PollFd, PollFlags, PollTimeout, poll},
+};
 
 use super::{
     hidraw::{self, Identity},
@@ -116,7 +119,8 @@ pub fn run(
                 transport_name(identity.transport),
                 identity.model_name()
             );
-            handle(Event::Connected(&mut input, identity))?;
+            let result = handle(Event::Connected(&mut input, identity));
+            finish_session(input.as_fd(), result)?;
             eprintln!(
                 "Disconnected: {} ({}) {}",
                 path.display(),
@@ -149,6 +153,29 @@ pub fn run(
                     break;
                 }
             }
+        }
+    }
+}
+
+fn finish_session(input: BorrowedFd<'_>, result: io::Result<()>) -> io::Result<()> {
+    let Err(error) = result else {
+        return Ok(());
+    };
+    // The setup path can fail before the report loop sees the detach.
+    // Check the physical descriptor without reading pending input.
+    let mut descriptor = [PollFd::new(input, PollFlags::empty())];
+    loop {
+        match poll(&mut descriptor, PollTimeout::ZERO) {
+            Err(Errno::EINTR) => continue,
+            Ok(_)
+                if descriptor[0].revents().is_some_and(|flags| {
+                    flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR)
+                }) =>
+            {
+                eprintln!("Controller session interrupted by disconnect: {error}");
+                return Ok(());
+            }
+            _ => return Err(error),
         }
     }
 }
@@ -256,7 +283,23 @@ pub fn controller_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
 
 #[cfg(test)]
 mod tests {
+    use std::{io::Write, os::unix::net::UnixStream};
+
     use super::*;
+
+    #[test]
+    fn failed_session_recovers_only_after_a_physical_disconnect() {
+        let (mut sender, input) = UnixStream::pair().unwrap();
+        sender.write_all(&[1]).unwrap();
+        let startup_error = || io::Error::new(io::ErrorKind::PermissionDenied, "test setup error");
+
+        let error = finish_session(input.as_fd(), Err(startup_error())).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "test setup error");
+
+        drop(sender);
+        assert!(finish_session(input.as_fd(), Err(startup_error())).is_ok());
+    }
 
     fn candidate(
         path: &str,

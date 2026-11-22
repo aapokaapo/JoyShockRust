@@ -551,6 +551,12 @@ while connected and match while waiting. Reload the profile during a
 connection and check that both counts stay the same. A service restart
 starts a fresh count.
 
+With gyro enabled, also disconnect during the interval between the
+`Connected` log line and virtual device setup. If setup fails after
+the detach, expect a disconnect diagnostic and the same process to
+return to discovery. After reconnect, verify gamepad and gyro output
+resume. The descriptor-based recovery is covered synthetically.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

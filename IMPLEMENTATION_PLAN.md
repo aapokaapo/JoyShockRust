@@ -149,6 +149,10 @@ rescans cover stale entries, multiple disconnected candidates and reuse
 of a hidraw node name by the same model and transport.
 [Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
 
+Auto-discovery also recovers when a controller disconnects during
+session setup. A synthetic descriptor test checks that setup errors
+still propagate while the controller descriptor is live.
+
 Process-lifetime counters expose started and ended controller sessions.
 They allow repeated hotplug runs to verify transitions alongside the
 per-session input and output counters.

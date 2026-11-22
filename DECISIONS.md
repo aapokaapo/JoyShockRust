@@ -276,6 +276,13 @@ gyro integration with synthetic event sinks. Release builds use the
 standard allocator.
 [Allocation counter](https://docs.rs/allocation-counter/0.8.1/allocation_counter/)
 
+Updated 2026-11-22. If a session in auto-discovery fails, the bridge polls
+the still-open physical HID descriptor once without waiting. A hangup or
+error flag permits reconnect recovery and the original error is logged.
+Other failures propagate. This covers detach races before the read loop
+starts, including factory calibration reads.
+[Linux hidraw poll](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hidraw.c#L263-L274)
+
 Updated 2026-11-22. The common DualSense payload supplies two contact slots.
 Grid bindings are opt-in in version 1 profiles. Either active slot can
 hold a touch binding. The mechanical click selects the first active slot's
