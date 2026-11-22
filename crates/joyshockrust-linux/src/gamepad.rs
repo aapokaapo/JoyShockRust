@@ -135,8 +135,10 @@ impl StickCurve {
 const BUTTONS: [(Button, Key); 13] = [
     (Button::South, Key::BTN_SOUTH),
     (Button::East, Key::BTN_EAST),
-    (Button::West, Key::BTN_WEST),
-    (Button::North, Key::BTN_NORTH),
+    // SDL maps generic gamepads by the Linux BTN_X/BTN_Y aliases rather
+    // than using the Sony-specific positional mapping.
+    (Button::West, Key::BTN_NORTH), // BTN_X
+    (Button::North, Key::BTN_WEST), // BTN_Y
     (Button::LeftShoulder, Key::BTN_TL),
     (Button::RightShoulder, Key::BTN_TR),
     (Button::LeftTrigger, Key::BTN_TL2),
@@ -243,6 +245,28 @@ fn axes(controls: Controls) -> [i32; AXES.len()] {
 mod tests {
     use super::*;
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+    #[test]
+    fn usb_square_and_triangle_emit_generic_gamepad_x_and_y() {
+        let mut state = GamepadState::default();
+        let mut events = Vec::new();
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[1..=4].fill(128);
+        for buttons in [0x18, 0x08, 0x88, 0x08] {
+            frame[8] = buttons;
+            let report =
+                parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap();
+            state
+                .publish(report.controls, |batch| {
+                    events.extend(batch.iter().map(|event| (event.code(), event.value())));
+                    Ok(())
+                })
+                .unwrap();
+        }
+        // Explicit Linux BTN_X and BTN_Y values guard against alias confusion.
+        assert_eq!(events, [(0x133, 1), (0x133, 0), (0x134, 1), (0x134, 0)]);
+    }
 
     #[test]
     fn active_layer_stays_selected_until_its_modifier_is_released() {
