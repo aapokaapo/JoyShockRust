@@ -97,7 +97,8 @@ mouse. The optional `[gyro.binding]` table takes `mode` and `input`. Modes are
 and `trigger`. Input names a digital button, a chord, or an analog trigger,
 depending on the mode. The [gyro-except-L2 profile](profiles/gyro-except-l2.toml)
 keeps gyro aim enabled until the digital L2 button is pressed.
-The profile is loaded at startup. Choose the profile or the equivalent CLI
+The profile is loaded at startup. Send SIGHUP to the running bridge PID
+to reload it. Invalid edits leave the last valid configuration active. Choose the profile or the equivalent CLI
 mapping flags for that run. You can still pass a hidraw path with `--profile`.
 
 ## Device diagnostics
@@ -128,7 +129,10 @@ journalctl --user -u joyshockrust.service -f
 
 The service uses the user manager's configuration directory. Edit
 `joyshockrust/profile.toml` there and run
-`systemctl --user restart joyshockrust.service` to load the changes.
+`systemctl --user reload joyshockrust.service` to load the changes. The
+journal reports `Profile reloaded` or `Profile reload rejected`. Reload
+keeps the virtual gamepad. Changing gyro settings may recreate the mouse
+and restart its calibration.
 Use `systemctl --user enable joyshockrust.service` to start it with the
 user manager, or `systemctl --user stop joyshockrust.service` to stop it.
 The service needs the same hidraw and uinput access as a manual run.

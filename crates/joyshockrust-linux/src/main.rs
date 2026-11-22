@@ -15,6 +15,8 @@ mod gyro_mouse;
 mod hidraw;
 #[cfg(target_os = "linux")]
 mod profile;
+#[cfg(target_os = "linux")]
+mod reload;
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -153,11 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         diagnostics::run(path.as_deref(), std::io::stdout().lock())?;
         return Ok(());
     }
-    let profile::RuntimeOptions {
-        gyro: options,
-        stick_curve,
-        remaps,
-    } = if let Some((profile_path, check_only)) = profile_path {
+    let (mut runtime, reload) = if let Some((profile_path, check_only)) = profile_path {
         if gyro_mouse || stick_curve.is_some() || !remaps.is_empty() {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
@@ -170,53 +168,101 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Valid profile: {}", profile_path.display());
             return Ok(());
         }
-        profile
+        (profile, Some(reload::Reload::new(profile_path)?))
     } else {
-        profile::RuntimeOptions {
-            gyro: gyro_mouse.then_some(options),
-            stick_curve,
-            remaps,
-        }
+        (
+            profile::RuntimeOptions {
+                gyro: gyro_mouse.then_some(options),
+                stick_curve,
+                remaps,
+            },
+            None,
+        )
     };
+    let reload = reload.as_ref();
     if let Some(path) = path {
         let mut input = discovery::open_wired_edge(&path)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-        serve_session(&mut input, options, stick_curve, &remaps)?;
+        serve_session(&mut input, &mut runtime, reload)?;
     } else {
-        discovery::run(|input| serve_session(input, options, stick_curve, &remaps))?;
+        discovery::run(reload, |event| match event {
+            discovery::Event::Connected(input) => serve_session(input, &mut runtime, reload),
+            discovery::Event::Reload(reload) => {
+                if let Some(next) = reload.load() {
+                    runtime = next;
+                    reload.applied();
+                }
+                Ok(())
+            }
+        })?;
     }
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
+fn open_mouse(
+    input: &std::fs::File,
+    options: Option<gyro_mouse::Options>,
+) -> std::io::Result<Option<gyro_mouse::GyroMouse>> {
+    let Some(options) = options else {
+        return Ok(None);
+    };
+    let mouse = gyro_mouse::GyroMouse::open(input, options)
+        .map_err(|err| std::io::Error::other(format!("could not start gyro mouse: {err}")))?;
+    eprintln!("JoyShockRust Gyro Mouse ready");
+    if options.calibrate {
+        eprintln!("Set the controller down and keep it still for gyro calibration");
+    }
+    Ok(Some(mouse))
+}
+
+#[cfg(target_os = "linux")]
 fn serve_session(
     input: &mut std::fs::File,
-    options: Option<gyro_mouse::Options>,
-    stick_curve: Option<gamepad::StickCurve>,
-    remaps: &gamepad::ButtonRemaps,
+    runtime: &mut profile::RuntimeOptions,
+    reload: Option<&reload::Reload>,
 ) -> std::io::Result<()> {
-    let mut mouse = if let Some(options) = options {
-        let mouse = gyro_mouse::GyroMouse::open(input, options)
-            .map_err(|err| std::io::Error::other(format!("could not start gyro mouse: {err}")))?;
-        eprintln!("JoyShockRust Gyro Mouse ready");
-        if options.calibrate {
-            eprintln!("Set the controller down and keep it still for gyro calibration");
-        }
-        Some(mouse)
-    } else {
-        None
-    };
+    let mut mouse = open_mouse(input, runtime.gyro)?;
+    let reload_input = reload.map(|_| input.try_clone()).transpose()?;
     let mut output = gamepad::open()
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
     let mut state = gamepad::GamepadState::default();
     let mut layer_state = gamepad::RemapState::default();
-    let result = forward_reports(input, |report| {
-        let mut controls =
-            stick_curve.map_or(report.controls, |curve| curve.apply(report.controls));
-        if options.is_some_and(|options| options.flick_stick.is_some()) {
+    let result = forward_reports(input, reload, |event| {
+        let report = match event {
+            SessionEvent::Report(report) => report,
+            SessionEvent::Reload(reload) => {
+                let Some(next) = reload.load() else {
+                    return Ok(());
+                };
+                if runtime.gyro != next.gyro {
+                    let input = reload_input.as_ref().expect("reload descriptor");
+                    match open_mouse(input, next.gyro) {
+                        Ok(next_mouse) => mouse = next_mouse,
+                        Err(err) => {
+                            eprintln!("Profile reload rejected: {err}");
+                            return Ok(());
+                        }
+                    }
+                }
+                if runtime.remaps != next.remaps {
+                    layer_state = gamepad::RemapState::default();
+                }
+                *runtime = next;
+                reload.applied();
+                return Ok(());
+            }
+        };
+        let mut controls = runtime
+            .stick_curve
+            .map_or(report.controls, |curve| curve.apply(report.controls));
+        if runtime
+            .gyro
+            .is_some_and(|options| options.flick_stick.is_some())
+        {
             controls.right_stick = Default::default();
         }
-        state.publish(remaps.apply(controls, &mut layer_state), |events| {
+        state.publish(runtime.remaps.apply(controls, &mut layer_state), |events| {
             output.emit(events)
         })?;
         if let Some(mouse) = &mut mouse {
@@ -237,15 +283,19 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
+enum SessionEvent<'a> {
+    Report(joyshockrust_input::InputReport),
+    Reload(&'a reload::Reload),
+}
+
+#[cfg(target_os = "linux")]
 fn forward_reports(
     input: &mut std::fs::File,
-    mut publish: impl FnMut(joyshockrust_input::InputReport) -> std::io::Result<()>,
+    reload: Option<&reload::Reload>,
+    mut publish: impl FnMut(SessionEvent<'_>) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
-    use nix::{
-        errno::Errno,
-        poll::{PollFd, PollFlags, PollTimeout, poll},
-    };
+    use nix::poll::PollFlags;
     use std::{
         io::{self, Read},
         os::fd::AsFd,
@@ -255,13 +305,10 @@ fn forward_reports(
     // length validation when a node delivers a report larger than 64 bytes.
     let mut report = [0; 16_384];
     loop {
-        let mut fds = [PollFd::new(input.as_fd(), PollFlags::POLLIN)];
-        match poll(&mut fds, PollTimeout::NONE) {
-            Ok(_) => {}
-            Err(Errno::EINTR) => continue,
-            Err(err) => return Err(err.into()),
+        let (ready, requested) = reload::wait(input.as_fd(), reload)?;
+        if let Some(reload) = reload.filter(|_| requested) {
+            publish(SessionEvent::Reload(reload))?;
         }
-        let ready = fds[0].revents().unwrap_or_else(PollFlags::empty);
         if ready.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Ok(());
         }
@@ -287,7 +334,7 @@ fn forward_reports(
                 &report[..len],
                 None,
             ) {
-                publish(report)?;
+                publish(SessionEvent::Report(report))?;
             }
         }
     }
@@ -309,7 +356,7 @@ mod tests {
         let (sender, receiver) = UnixStream::pair().unwrap();
         drop(sender);
         let mut input = File::from(OwnedFd::from(receiver));
-        super::forward_reports(&mut input, |_| {
+        super::forward_reports(&mut input, None, |_| {
             panic!("disconnected input published controls")
         })
         .unwrap();
@@ -330,7 +377,10 @@ mod tests {
 
         let mut input = File::from(OwnedFd::from(receiver));
         let mut presses = Vec::new();
-        let result = super::forward_reports(&mut input, |report| {
+        let result = super::forward_reports(&mut input, None, |event| {
+            let super::SessionEvent::Report(report) = event else {
+                unreachable!()
+            };
             presses.push(report.controls.buttons.contains(Button::South));
             if presses.len() == 2 {
                 return Err(io::ErrorKind::BrokenPipe.into());

@@ -27,7 +27,7 @@ pub struct GyroMouse {
     flick: Option<FlickStick>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub struct Options {
     pub calibrate: bool,
     pub binding: Binding,

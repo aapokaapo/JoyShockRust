@@ -5,7 +5,7 @@ use joyshockrust_core::{Button, Controls};
 const HOLD_TIME: Duration = Duration::from_millis(200);
 const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub enum Binding {
     #[default]
     Always,
@@ -18,14 +18,14 @@ pub enum Binding {
     AnalogTrigger(TriggerGate),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct TriggerGate {
     side: TriggerSide,
     press: f32,
     release: f32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum TriggerSide {
     Left,
     Right,

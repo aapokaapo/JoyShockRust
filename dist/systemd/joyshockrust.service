@@ -4,6 +4,7 @@ Description=JoyShockRust USB controller bridge
 [Service]
 Type=exec
 ExecStart=%h/.local/bin/joyshockrust-linux --profile %E/joyshockrust/profile.toml
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2s
 

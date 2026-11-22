@@ -87,3 +87,5 @@ Recorded 2026-11-22. TOML profiles have a required schema version and reject unk
 Device diagnostics shares automatic USB Edge enumeration and fd identity verification with normal startup. It checks uinput access by opening the builder and exits before creating a device. [Diagnostic acceptance](TESTING_AND_PERFORMANCE.md#device-diagnostics-acceptance)
 
 The optional systemd user unit starts the installed bridge in discovery mode with a startup profile under the user manager's configuration directory. It preserves the operator's user identity and reports startup and reconnect status through the journal. [User service acceptance](TESTING_AND_PERFORMANCE.md#user-service-acceptance)
+
+Profiles can be reloaded with SIGHUP. Linux polls a signalfd alongside hidraw or udev readiness, and the session validates new settings between report batches. Rejection preserves the previous profile. A mapping change resets layer selection, and gyro option changes prepare a replacement mouse before dropping the current one. [Reload acceptance](TESTING_AND_PERFORMANCE.md#profile-reload-acceptance)

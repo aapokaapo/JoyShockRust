@@ -231,9 +231,21 @@ With USB disconnected, check that the service is active and its journal
 reports that it is waiting. Connect the Edge, check the journal for the
 connection, and verify the profile drives the virtual gamepad in Steam.
 Unplug and reconnect while the service is active and check that the virtual
-gamepad returns. Restart the service after editing the profile and verify
-the new settings. Finally stop the service and check that its virtual
-devices are gone.
+gamepad returns. Finally stop the service and check that its virtual
+devices are gone. The user's Fedora run of `ac0df46` verified startup
+while disconnected, device detection, and gyro mouse recreation at reconnect.
+
+## Profile reload acceptance
+
+Install the updated executable and unit. Reload the systemd user manager
+and restart the service once so the new executable is running. With USB
+connected, edit the profile to change a gamepad mapping, then run
+`systemctl --user reload joyshockrust.service`. Check the journal for
+`Profile reloaded` and verify the mapping in Steam on the existing virtual
+gamepad. Change the profile version to an unsupported value and reload
+again. Confirm that the journal reports rejection and the last working
+mapping remains active. Restore the version when done. The same reload
+command works when USB is unplugged.
 
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.

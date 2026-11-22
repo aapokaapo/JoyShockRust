@@ -6,12 +6,13 @@ use evdev::{
 };
 use joyshockrust_core::{Button, Buttons, Controls, DPad, Stick};
 
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 pub struct ButtonRemaps {
     base: Vec<(Button, Button)>,
     layers: Vec<RemapLayer>,
 }
 
+#[derive(PartialEq)]
 struct RemapLayer {
     modifier: Button,
     rules: Vec<(Button, Button)>,

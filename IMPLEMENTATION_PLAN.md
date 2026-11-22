@@ -57,7 +57,7 @@ Digital holds and toggles passed the user's hardware check. The next increment a
 ## Phase 5 — config, IPC, CLI and systemd
 Versioned TOML, snapshots, Unix socket protocol, diagnostics, udev permissions, systemd user service. **Exit:** live reload at sample boundaries and service restart/reconnect tested.
 
-The first Phase 5 increment loads a versioned TOML profile at startup and validates it before opening devices. An offline profile check and a device diagnostics command are available. Diagnostics reports udev candidates and open errors for hidraw and uinput. A systemd user unit can launch a startup profile. Its lifecycle needs a user-session hardware test. Live reload, IPC and profile persistence remain open.
+The first Phase 5 increment loads a versioned TOML profile at startup and validates it before opening devices. An offline profile check and a device diagnostics command are available. Diagnostics reports udev candidates and open errors for hidraw and uinput. A systemd user unit can launch a startup profile. The user verified startup and USB reconnect in a Fedora user session. SIGHUP reload validates the profile before replacing settings and applies them between report batches. IPC, profile persistence and physical reload validation remain open.
 
 ## Phase 6 — compatibility and transports
 Bluetooth DualSense Edge, DualSense, additional controllers, virtual output compatibility, optional game-launch visibility helpers. **Exit:** per-device and per-game compatibility evidence.
