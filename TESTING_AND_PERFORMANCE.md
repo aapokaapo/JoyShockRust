@@ -552,7 +552,9 @@ connection and check that both counts stay the same. A service restart
 starts a fresh count.
 
 With both DualSense models connected, set `[bridge].model` to
-`"dualsense"` and restart the service. Check that `--status` shows
+`"dualsense"`. Run `joyshockrust-linux --diagnose --profile PATH` and
+check that the Edge is listed as `excluded by profile`. Restart the
+service and check that `--status` shows
 `model=dualsense`. Disconnect the standard DualSense and check that the
 service waits while the Edge remains connected. Reconnect the selected
 model, then repeat with `model = "dualsense-edge"`. With

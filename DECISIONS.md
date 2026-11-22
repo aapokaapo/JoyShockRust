@@ -290,6 +290,11 @@ The default accepts both models. Model changes use the same
 restart boundary as transport changes.
 [Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
 
+Updated 2026-11-22. Profile-aware diagnostics enumerate supported HID
+controllers, show the same model and transport filter as startup, and
+probe access for matching nodes. Excluded inventory entries are identified
+from udev metadata. [Device diagnostics](README.md#device-diagnostics)
+
 Updated 2026-11-22. The common DualSense payload supplies two contact slots.
 Grid bindings are opt-in in version 1 profiles. Either active slot can
 hold a touch binding. The mechanical click selects the first active slot's

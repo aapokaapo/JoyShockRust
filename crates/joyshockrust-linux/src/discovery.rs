@@ -69,7 +69,7 @@ pub struct ControllerFilter {
 }
 
 impl ControllerFilter {
-    fn accepts(self, identity: Identity) -> bool {
+    pub fn accepts(self, identity: Identity) -> bool {
         self.transport.accepts(identity.transport)
             && match self.model {
                 ModelSelection::Any => true,
@@ -212,7 +212,7 @@ fn finish_session(input: BorrowedFd<'_>, result: io::Result<()>) -> io::Result<(
 pub struct Candidate {
     pub path: PathBuf,
     syspath: PathBuf,
-    identity: Identity,
+    pub identity: Identity,
 }
 
 fn find_controller(

@@ -14,6 +14,29 @@ fn invalid_startup_profile_exits_with_config_status() {
 }
 
 #[test]
+fn diagnostics_loads_the_profile_and_allows_a_transport_override() {
+    let profile =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml");
+    let output = Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
+        .args(["--diagnose", "--bluetooth", "--profile"])
+        .arg(profile)
+        .arg("/dev/null")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("Controller filter: Bluetooth DualSense or DualSense Edge\n"));
+    assert!(stdout.lines().any(|line| line.starts_with("/dev/uinput: ")));
+
+    let invalid = Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
+        .args(["--diagnose", "--profile", "/dev/null"])
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(78));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("missing field `version`"));
+}
+
+#[test]
 fn installing_a_profile_preserves_source_bytes_and_rejects_invalid_replacements() {
     use std::{
         fs,

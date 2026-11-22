@@ -50,7 +50,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "usage: joyshockrust-linux --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
-        "       joyshockrust-linux --diagnose [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
+        "       joyshockrust-linux --diagnose [--profile PATH] [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
@@ -318,12 +318,34 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         return Ok(ExitCode::SUCCESS);
     }
     if diagnose {
-        if profile_path.is_some() || bridge_options || mapping_options {
-            return Err("--diagnose takes a transport option and an optional hidraw path".into());
+        if bridge_options
+            || mapping_options
+            || profile_path
+                .as_ref()
+                .is_some_and(|(_, mode)| *mode != ProfileMode::Run)
+        {
+            return Err(
+                "--diagnose accepts an optional profile, transport option and hidraw path".into(),
+            );
+        }
+        let mut filter = if let Some((profile_path, _)) = &profile_path {
+            match profile::load(profile_path) {
+                Ok(profile) => profile.bridge.unwrap_or_default().controller_filter(),
+                Err(err) => {
+                    eprintln!("{}: {err}", profile_path.display());
+                    return Ok(ExitCode::from(78));
+                }
+            }
+        } else {
+            discovery::ControllerFilter::default()
+        };
+        if let Some(transport) = transport {
+            filter.transport = transport;
         }
         diagnostics::run(
             path.as_deref(),
-            transport.unwrap_or_default(),
+            filter,
+            profile_path.is_some(),
             std::io::stdout().lock(),
         )?;
         return Ok(ExitCode::SUCCESS);

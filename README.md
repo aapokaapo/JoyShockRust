@@ -233,6 +233,12 @@ DualSense Edge hidraw nodes and check access to them and `/dev/uinput`.
 Append a hidraw path to check that node directly. The command opens the
 devices as the current user and exits without creating virtual outputs.
 
+Use `--diagnose --profile PATH` to check a specific profile before
+starting or restarting the bridge. It prints the effective controller
+filter and labels supported controllers outside that filter as
+`excluded by profile`. An optional `--bluetooth` or
+`--auto-transport` overrides the profile's transport for this check.
+
 Use `--benchmark-reports COUNT` for a bounded live bridge benchmark. It
 reports processing, host and device report interval percentiles plus
 timestamp discontinuity counts after handling the requested count.

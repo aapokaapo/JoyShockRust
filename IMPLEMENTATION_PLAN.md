@@ -155,7 +155,8 @@ still propagate while the controller descriptor is live.
 
 Profiles can constrain discovery, manual sessions, live benchmarks and
 game calibration to a selected DualSense model. The bridge continues
-to run one controller session at a time.
+to run one controller session at a time. Profile-aware diagnostics show
+which attached devices are excluded by the configured filter.
 [Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
 
 Process-lifetime counters expose started and ended controller sessions.
