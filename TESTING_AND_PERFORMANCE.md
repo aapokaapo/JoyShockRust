@@ -172,14 +172,17 @@ Run:
 ```sh
 cargo run --locked -p joyshockrust-linux -- \
   --remap-button cross=triangle \
-  --layer-remap l1:cross=circle --layer-remap r1:cross=square
+  --layer-remap l1:cross=circle --layer-remap l1:l3=r3 \
+  --layer-remap r1:cross=square
 ```
 
 In Steam's **Test Device Inputs**, hold physical Cross throughout. It should
 start as virtual Triangle. Hold L1 to switch to Circle and then hold R1 as
 well to switch to Square. Release R1 for Circle, then release L1 for
 Triangle. Release Cross and confirm all four face buttons are up. L1 and
-R1 should also show their usual states.
+R1 should also show their usual states. Press physical L3 with only L1 held
+and verify it maps to R3. Press L3 with both modifiers held and verify it
+outputs L3 because the R1 layer exclusively takes over.
 
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.

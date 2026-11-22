@@ -48,12 +48,13 @@ impl ButtonRemaps {
         let physical = controls.buttons;
         let mut remaining = physical;
         let mut targets = Buttons::default();
-        let active_layers = self
+        let active_layer = self
             .layers
             .iter()
             .rev()
-            .filter(|layer| physical.contains(layer.modifier));
-        for &(source, target) in active_layers
+            .find(|layer| physical.contains(layer.modifier));
+        for &(source, target) in active_layer
+            .into_iter()
             .flat_map(|layer| &layer.rules)
             .chain(&self.base)
         {
@@ -230,7 +231,7 @@ mod tests {
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
 
     #[test]
-    fn independent_layers_override_only_their_own_sources() {
+    fn only_one_held_layer_overrides_base_rules() {
         let mut remaps = ButtonRemaps::default();
         remaps.add("cross=triangle").unwrap();
         remaps.add("options=create").unwrap();
@@ -260,8 +261,8 @@ mod tests {
                 assert_eq!(mapped.contains(face), face == expected);
             }
             assert!(mapped.contains(Button::Select));
-            assert_eq!(mapped.contains(Button::RightStick), left);
-            assert_eq!(mapped.contains(Button::LeftStick), !left);
+            assert_eq!(mapped.contains(Button::RightStick), left && !right);
+            assert_eq!(mapped.contains(Button::LeftStick), !left || right);
         }
     }
 
