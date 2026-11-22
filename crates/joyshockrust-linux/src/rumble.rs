@@ -1,4 +1,5 @@
 use std::{
+    env,
     ffi::OsStr,
     fs::{File, OpenOptions},
     io,
@@ -15,6 +16,7 @@ pub const EFFECT_SLOTS: usize = 16;
 pub struct Rumble {
     physical: Device,
     effects: [Option<FFEffect>; EFFECT_SLOTS],
+    trace: bool,
 }
 
 impl Rumble {
@@ -61,6 +63,8 @@ impl Rumble {
                     return Ok(Self {
                         physical,
                         effects: Default::default(),
+                        trace: env::var_os("JOYSHOCKRUST_RUMBLE_TRACE")
+                            .is_some_and(|value| value == "1"),
                     });
                 }
                 Ok(_) => {}
@@ -103,21 +107,33 @@ impl Rumble {
                         Err(err) if err.raw_os_error() == Some(libc::EINVAL) => continue,
                         Err(err) => return Err(err),
                     };
+                    let id = request.effect_id();
                     let data = request.effect();
-                    let result = match self.effects.get_mut(request.effect_id() as usize) {
+                    let result = match self.effects.get_mut(id as usize) {
                         Some(slot) if matches!(data.kind, FFEffectKind::Rumble { .. }) => {
                             match slot {
-                                Some(effect) => effect.update(data),
-                                None => self
-                                    .physical
-                                    .upload_ff_effect(data)
-                                    .map(|effect| *slot = Some(effect)),
+                                Some(effect) => effect.update(data).map(|()| effect.id()),
+                                None => self.physical.upload_ff_effect(data).map(|effect| {
+                                    let physical_id = effect.id();
+                                    *slot = Some(effect);
+                                    physical_id
+                                }),
                             }
                         }
                         _ => Err(io::Error::from_raw_os_error(libc::EINVAL)),
                     };
-                    if let Err(err) = result {
-                        request.set_retval(-err.raw_os_error().unwrap_or(libc::EIO));
+                    match result {
+                        Ok(physical_id) if self.trace => eprintln!(
+                            "Rumble upload accepted: virtual={id} physical={physical_id} length={}ms {:?}",
+                            data.replay.length, data.kind,
+                        ),
+                        Err(err) => {
+                            if self.trace {
+                                eprintln!("Rumble upload failed: virtual={id}: {err}");
+                            }
+                            request.set_retval(-err.raw_os_error().unwrap_or(libc::EIO));
+                        }
+                        Ok(_) => {}
                     }
                 }
                 EventSummary::UInput(event, UInputCode::UI_FF_ERASE, _) => {
@@ -136,9 +152,21 @@ impl Rumble {
                 EventSummary::ForceFeedback(_, id, count) if count >= 0 => {
                     if let Some(effect) =
                         self.effects.get_mut(id.0 as usize).and_then(Option::as_mut)
-                        && let Err(err) = effect.play(count)
                     {
-                        eprintln!("Could not forward rumble playback: {err}");
+                        match effect.play(count) {
+                            Ok(()) if self.trace => eprintln!(
+                                "Rumble playback written: virtual={} physical={} count={count}",
+                                id.0,
+                                effect.id(),
+                            ),
+                            Err(err) => eprintln!("Could not forward rumble playback: {err}"),
+                            Ok(()) => {}
+                        }
+                    } else if self.trace {
+                        eprintln!(
+                            "Rumble playback has no uploaded effect: virtual={} count={count}",
+                            id.0
+                        );
                     }
                 }
                 _ => {}

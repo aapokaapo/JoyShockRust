@@ -305,9 +305,15 @@ Stop the user service if it is active. Run the bridge manually with
 `--auto-transport --gamepad xbox-series --rumble` and check for
 `Rumble forwarding ready`. In another terminal run
 `cargo run --locked -p joyshockrust-linux --example rumble_test`. Expect
-one 350 ms vibration pulse on the physical controller. The example opens
+one 750 ms vibration pulse on the physical controller. The example opens
 the JoyShockRust virtual event node and uploads, plays and stops the effect.
 Append `-- /dev/input/eventN` when several virtual gamepads are present.
+If the controller stays still, start the bridge with
+`JOYSHOCKRUST_RUMBLE_TRACE=1` and repeat. Save the upload and playback
+lines. Then run
+`cargo run --locked -p joyshockrust-linux --example rumble_test -- --physical /dev/input/eventN`
+with the physical node from `Rumble forwarding ready` and compare whether
+the same pulse is felt. A successful write confirms kernel acceptance.
 Check that vibration stops when the effect ends, the client exits or the
 controller disconnects. For in-game compatibility, record the game, Proton
 version and Steam Input setting.

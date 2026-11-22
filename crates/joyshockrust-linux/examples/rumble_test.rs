@@ -24,23 +24,32 @@ mod linux {
         time::Duration,
     };
 
-    use evdev::{Device, FFEffectCode, FFEffectData, FFEffectKind, FFReplay, FFTrigger};
+    use evdev::{BusType, Device, FFEffectCode, FFEffectData, FFEffectKind, FFReplay, FFTrigger};
+    use joyshockrust_input::DeviceModel;
 
-    const USAGE: &str = "usage: rumble_test [/dev/input/eventN]";
-    const PULSE_MS: u16 = 350;
+    const USAGE: &str =
+        "usage: rumble_test [/dev/input/eventN] | rumble_test --physical /dev/input/eventN";
+    const PULSE_MS: u16 = 750;
 
     pub fn run() -> io::Result<()> {
         let mut args = env::args_os().skip(1);
-        let path = match (args.next(), args.next()) {
-            (None, None) => find_gamepad()?,
-            (Some(arg), None) if arg == "--help" || arg == "-h" => {
+        let (path, physical) = match (args.next(), args.next(), args.next()) {
+            (None, None, None) => (find_gamepad()?, false),
+            (Some(arg), None, None) if arg == "--help" || arg == "-h" => {
                 println!("{USAGE}");
                 return Ok(());
             }
-            (Some(path), None) if !path.as_encoded_bytes().starts_with(b"-") => PathBuf::from(path),
+            (Some(path), None, None) if !path.as_encoded_bytes().starts_with(b"-") => {
+                (PathBuf::from(path), false)
+            }
+            (Some(arg), Some(path), None)
+                if arg == "--physical" && !path.as_encoded_bytes().starts_with(b"-") =>
+            {
+                (PathBuf::from(path), true)
+            }
             _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, USAGE)),
         };
-        test_gamepad(&path)
+        test_gamepad(&path, physical)
             .map_err(|err| io::Error::new(err.kind(), format!("{}: {err}", path.display())))
     }
 
@@ -79,23 +88,42 @@ mod linux {
         Ok(path)
     }
 
-    fn test_gamepad(path: &Path) -> io::Result<()> {
+    fn test_gamepad(path: &Path, physical: bool) -> io::Result<()> {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
         let node = udev::Device::from_devnum(udev::DeviceType::Character, file.metadata()?.rdev())?;
-        if !is_joyshockrust_gamepad(&node) {
+        if !physical && !is_joyshockrust_gamepad(&node) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "expected a JoyShockRust virtual gamepad",
             ));
         }
         let mut device = Device::from_fd(file.into())?;
+        if physical {
+            let id = device.input_id();
+            if !matches!(id.bus_type(), BusType::BUS_USB | BusType::BUS_BLUETOOTH)
+                || !matches!(
+                    DeviceModel::from_vid_pid(id.vendor(), id.product()),
+                    DeviceModel::DualSense | DeviceModel::DualSenseEdge
+                )
+                || node.parent_with_subsystem("hid")?.is_none()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "expected a physical DualSense or DualSense Edge event node",
+                ));
+            }
+        }
         if !device
             .supported_ff()
             .is_some_and(|effects| effects.contains(FFEffectCode::FF_RUMBLE))
         {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "virtual gamepad does not offer rumble; start the bridge with --rumble and check for Rumble forwarding ready",
+                if physical {
+                    "physical event node does not offer FF_RUMBLE"
+                } else {
+                    "virtual gamepad does not offer rumble; start the bridge with --rumble and check for Rumble forwarding ready"
+                },
             ));
         }
 
@@ -107,8 +135,8 @@ mod linux {
                 delay: 0,
             },
             kind: FFEffectKind::Rumble {
-                strong_magnitude: 32_768,
-                weak_magnitude: 24_576,
+                strong_magnitude: 49_152,
+                weak_magnitude: 36_864,
             },
         })?;
         println!(
@@ -118,7 +146,9 @@ mod linux {
         effect.play(1)?;
         thread::sleep(Duration::from_millis(u64::from(PULSE_MS)));
         effect.stop()?;
-        println!("Rumble request complete. Check for one short pulse on the physical controller.");
+        println!(
+            "The kernel accepted the playback write. Confirm whether the controller vibrated."
+        );
         Ok(())
     }
 }

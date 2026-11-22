@@ -212,7 +212,11 @@ cargo run --locked -p joyshockrust-linux --example rumble_test
 
 If several JoyShockRust virtual gamepads are present, append
 `-- /dev/input/eventN` to select the virtual event node. The test sends the
-effect and you verify the physical pulse.
+effect and you verify the physical pulse. If the pulse is missing, set
+`JOYSHOCKRUST_RUMBLE_TRACE=1` when starting the bridge to log uploads and
+playback writes. The example's `--physical /dev/input/eventN` option uses
+the physical node from `Rumble forwarding ready` to exercise the kernel
+driver directly.
 [Rumble forwarding acceptance](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance)
 
 Add `--stick-curve 2` to soften small movements on both virtual gamepad
