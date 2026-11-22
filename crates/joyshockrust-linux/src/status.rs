@@ -32,6 +32,7 @@ struct Snapshot {
 struct ReportStats {
     decoded: u64,
     rejected: u64,
+    full_batches: u64,
     baseline: Option<(Instant, u64)>,
 }
 
@@ -74,6 +75,7 @@ impl StatusSocket {
         let mut reports = self.reports.get();
         reports.decoded += decoded;
         reports.rejected += rejected;
+        reports.full_batches += u64::from(decoded + rejected == crate::REPORT_BATCH_LIMIT);
         if decoded > 0 && reports.baseline.is_none() {
             reports.baseline = Some((Instant::now(), reports.decoded));
         }
@@ -126,8 +128,8 @@ impl StatusSocket {
             .map(|rate| format!("{rate:.1}"));
         let rate = rate.as_deref().unwrap_or("none");
         let response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\n",
-            snapshot.gyro_configured, reports.decoded, reports.rejected
+            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\n",
+            snapshot.gyro_configured, reports.decoded, reports.rejected, reports.full_batches
         );
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
@@ -250,7 +252,9 @@ mod tests {
             .unwrap();
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
-        assert!(response.ends_with("reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\n"));
+        assert!(response.ends_with(
+            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\n"
+        ));
         let reports = status.reports.get();
         let (start, initial_count) = reports.baseline.unwrap();
         assert_eq!(initial_count, 2);
@@ -269,6 +273,88 @@ mod tests {
         assert_eq!(reports.decoded, 0);
         assert_eq!(reports.rejected, 0);
         assert_eq!(reports.baseline, None);
+    }
+
+    #[test]
+    fn status_queries_are_served_between_full_report_batches() {
+        let name = format!("joyshockrust-full-batches-test-{}", process::id());
+        let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+        let listener = UnixListener::bind_addr(&address).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let status = StatusSocket {
+            listener,
+            snapshot: Cell::default(),
+            reports: Cell::default(),
+        };
+        let identity = Identity {
+            model: DeviceModel::DualSenseEdge,
+            transport: Transport::Usb,
+        };
+        status.update(Some(identity), false);
+
+        const VALID_PER_BATCH: u8 = crate::REPORT_BATCH_LIMIT as u8 - 1;
+        const VALID_TOTAL: u8 = VALID_PER_BATCH * 3 + 4;
+        let (sender, receiver) = UnixDatagram::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        for counter in 0..VALID_TOTAL {
+            if counter < VALID_PER_BATCH * 3 && counter.is_multiple_of(VALID_PER_BATCH) {
+                sender.send(&[1; 65]).unwrap();
+            }
+            frame[7] = counter;
+            sender.send(&frame).unwrap();
+        }
+        let mut input = File::from(OwnedFd::from(receiver));
+        let mut published = 0;
+        let mut clients = Vec::new();
+        crate::forward_reports(
+            &mut input,
+            identity,
+            None,
+            Some(&status),
+            None,
+            None,
+            |event| {
+                let crate::SessionEvent::Report(report) = event else {
+                    unreachable!()
+                };
+                assert_eq!(report.counter, published);
+                published += 1;
+                if published == 1 || published == VALID_PER_BATCH + 1 {
+                    clients.push(UnixStream::connect_addr(&address)?);
+                }
+                Ok(if published == VALID_TOTAL {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(published, VALID_TOTAL);
+        assert_eq!(clients.len(), 2);
+        for (batch, mut client) in (1..=2).zip(clients) {
+            client
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            for expected in [
+                format!("reports_decoded={}", u64::from(VALID_PER_BATCH) * batch),
+                format!("reports_rejected={batch}"),
+                format!("report_full_batches={batch}"),
+            ] {
+                assert!(response.lines().any(|line| line == expected), "{response}");
+            }
+        }
+        let reports = status.reports.get();
+        assert_eq!(reports.decoded, u64::from(VALID_TOTAL));
+        assert_eq!(reports.rejected, 3);
+        assert_eq!(reports.full_batches, 3);
+        status.update(None, false);
+        assert_eq!(status.reports.get().full_batches, 0);
     }
 
     #[test]
@@ -341,14 +427,14 @@ mod tests {
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
             let (ready, requested, _) =
-                crate::reload::wait(input.as_fd(), None, Some(&status), None).unwrap();
+                crate::reload::wait(input.as_fd(), None, Some(&status), None, None).unwrap();
             assert!(ready.is_empty());
             assert!(requested.is_none());
             let mut response = String::new();
             client.read_to_string(&mut response).unwrap();
             assert_eq!(
                 response
-                    .strip_suffix("reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\n"),
+                    .strip_suffix("reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\n"),
                 Some(expected)
             );
         }

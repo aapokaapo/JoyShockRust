@@ -225,6 +225,33 @@ and sorts after closing the virtual devices. The interval distribution
 uses the same host timestamps. Normal runs skip benchmark timing and
 storage. [Live benchmarks](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
 
+Updated 2026-11-22. The benchmark classifies device timestamps with the
+shared input timebase and a 50 ms forward limit, matching the current
+motion defaults. It records device intervals after timing the report
+callback and preallocates sample storage for them. The timebase advances
+independently of the configured gyro, and diagnostics leave chronological
+report delivery intact. [DualSense sensor timestamp](docs/REFERENCE_ANALYSIS.md#dualsense-edge-usb-input)
+
+Updated 2026-11-22. Status counts read batches that consume all 32 report
+slots, using totals already accumulated by the readiness loop. Valid
+and rejected HID reports both count toward the batch budget. The metric
+observes userspace bursts and resets on disconnect.
+[hidraw read and queue behavior](docs/REFERENCE_ANALYSIS.md#readiness-permissions-and-coexistence)
+
+Updated 2026-11-22. Auto-discovery retains disconnected hidraw sysfs paths
+until a scan no longer lists them. Monitor events trigger a new scan.
+The open path checks the descriptor's model and transport and re-resolves
+its device number through udev to check the observed sysfs path. Linux
+assigns a new HID instance ID during device registration, so a replacement
+can be selected when it reuses the same hidraw name.
+[Linux HID device naming](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-core.c#L2943-L2952)
+
+Updated 2026-11-22. One-shot benchmarks use an absolute monotonic
+collection deadline. Poll derives its remaining wait from the deadline
+after interruptions, and timeout uses the normal virtual-output cleanup
+path. Ordinary bridge runs wait for readiness without a deadline.
+[Live benchmarks](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
+
 Updated 2026-11-22. The common DualSense payload supplies two contact slots.
 Grid bindings are opt-in in version 1 profiles. Either active slot can
 hold a touch binding. The mechanical click selects the first active slot's

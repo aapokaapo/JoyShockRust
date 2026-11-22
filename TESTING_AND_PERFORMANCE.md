@@ -517,6 +517,25 @@ The rate estimates how many HID reports the host decodes per second after
 the first successful read batch. The rejected count covers only
 reports that reached the parser and failed decoding.
 
+`report_full_batches` counts each pass through the readiness loop that
+read 32 reports. Both valid and rejected reports count
+toward the budget. An increasing count shows bursts reaching the
+userspace batch limit. Measuring the depth of the kernel queue or
+physical packet loss requires separate evidence. The count resets after a
+disconnect.
+
+## Rapid reconnect acceptance
+
+Start the bridge in auto-discovery mode and record its process ID.
+Disconnect and reconnect the same controller several times in quick
+succession, first over USB and then Bluetooth. Check that each established
+connection produces one virtual gamepad and that the process ID remains
+the same. With `--status`, verify that input counters begin again for
+each connection. If a second supported controller is present, leave it
+connected and verify the bridge selects it after the active one disconnects.
+The udev selection tests cover reuse of an existing hidraw name by a new
+HID instance of the same model and bus.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 
@@ -546,7 +565,24 @@ effects. Both distributions show p50, p95, p99 and max. The processing
 target of 0.5 ms corresponds to `processing_p99_ns=500000`. The benchmark
 measures the service's userspace work and reports parser rejections
 separately. To test an early disconnect, unplug or power off the controller
-before the target count. Expect a partial summary and a nonzero exit.
+before the target count. Expect `benchmark_end=disconnected`, a partial
+summary and a nonzero exit.
+
+Collection defaults to a 600-second limit after the bridge opens its
+virtual outputs. Set `--benchmark-timeout SECONDS` to use a different
+limit between 1 and 3600 seconds. To exercise the deadline on a connected
+controller, use `--benchmark-reports 100000 --benchmark-timeout 1`.
+Expect `benchmark_end=timeout`, the results collected so far and a
+nonzero exit. Successful runs print `benchmark_end=complete`.
+
+`device_interval_*_ns` uses the controller's IMU clock for the same run.
+It summarizes forward intervals of at most 50 ms, including continuous
+32-bit wraps. The benchmark counts repeated timestamps, backward or
+ambiguous timestamps, and gaps over 50 ms separately. Each gap starts a
+fresh device-clock segment. Compare this distribution with
+`host_interval_*_ns` to examine variation in both clocks. The counters
+describe timestamps on decoded reports. Determining physical packet loss
+requires separate evidence.
 
 ## Observability
 Counters for reports received/rejected, timestamp gaps, output writes, queue/backlog, reconnects and timer deadlines. Diagnostics must be buffered or collected outside the hot path; no synchronous per-sample logging.

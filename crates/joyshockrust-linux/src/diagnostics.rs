@@ -13,8 +13,8 @@ pub fn run(path: Option<&Path>, selection: Selection, mut output: impl Write) ->
         if nodes.is_empty() {
             writeln!(output, "No {} hidraw nodes found.", selection.description())?;
         }
-        for (node, _) in &nodes {
-            check_controller(node, selection, &mut output)?;
+        for node in &nodes {
+            check_controller(&node.path, selection, &mut output)?;
         }
     }
     // Opening the builder checks the same permissions as startup. The

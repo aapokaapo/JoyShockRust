@@ -41,7 +41,7 @@ use std::ops::ControlFlow;
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
-    use std::{env, path::PathBuf, process::ExitCode};
+    use std::{env, path::PathBuf, process::ExitCode, time::Duration};
 
     use gyro_gate::{Binding, TriggerGate};
     use joyshockrust_core::Button;
@@ -57,7 +57,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
         "       joyshockrust-linux --calibrate-game --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --calibrate-game COUNTS IN_GAME_SENS [MEASURED_TURNS]\n",
-        "       joyshockrust-linux --benchmark-reports COUNT [--profile PATH] [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
+        "       joyshockrust-linux --benchmark-reports COUNT [--benchmark-timeout SECONDS] [--profile PATH] [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
         "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
@@ -78,6 +78,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut profile_path = None;
     let mut diagnose = false;
     let mut benchmark_target = None;
+    let mut benchmark_timeout = None;
     let mut status_query = false;
     let mut reload_query = false;
     let mut load_profile_path = None;
@@ -161,6 +162,18 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     .and_then(|value| value.parse::<usize>().ok())
                     .filter(|count| (2..=benchmark::MAX_REPORTS).contains(count))
                     .ok_or("benchmark report count must be between 2 and 100000")?,
+            );
+        } else if arg == "--benchmark-timeout" && benchmark_timeout.is_none() {
+            let value = args
+                .next()
+                .ok_or("expected seconds after --benchmark-timeout")?;
+            benchmark_timeout = Some(
+                value
+                    .to_str()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|seconds| (1..=benchmark::MAX_TIMEOUT_SECONDS).contains(seconds))
+                    .map(Duration::from_secs)
+                    .ok_or("benchmark timeout must be between 1 and 3600 seconds")?,
             );
         } else if arg == "--status" && !status_query {
             status_query = true;
@@ -264,6 +277,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some() || rumble_enabled;
     let socket_commands =
         u8::from(status_query) + u8::from(reload_query) + u8::from(load_profile_path.is_some());
+    if benchmark_timeout.is_some() && benchmark_target.is_none() {
+        return Err("--benchmark-timeout requires --benchmark-reports".into());
+    }
     if benchmark_target.is_some()
         && (diagnose
             || socket_commands > 0
@@ -389,7 +405,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         } else {
             discovery::open_first_controller(bridge.transport)?
         };
-        let mut measurement = benchmark::Benchmark::new(target);
+        let mut measurement = benchmark::Benchmark::new(
+            target,
+            benchmark_timeout.unwrap_or(benchmark::DEFAULT_TIMEOUT),
+        );
         let result = serve_session(
             &mut input,
             &mut runtime,
@@ -399,10 +418,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             bridge,
             Some(&mut measurement),
         );
-        measurement.write(identity, std::io::stdout().lock())?;
+        measurement.write(identity, result.is_err(), std::io::stdout().lock())?;
         result?;
         if !measurement.complete() {
-            eprintln!("Controller disconnected before benchmark completed");
+            if measurement.timed_out {
+                eprintln!("Benchmark time limit reached before collecting all requested reports");
+            } else {
+                eprintln!("Controller disconnected before benchmark completed");
+            }
             return Ok(ExitCode::FAILURE);
         }
     } else if let Some(path) = path {
@@ -599,6 +622,9 @@ enum SessionEvent<'a> {
 }
 
 #[cfg(target_os = "linux")]
+const REPORT_BATCH_LIMIT: u64 = 32;
+
+#[cfg(target_os = "linux")]
 fn forward_reports(
     input: &mut std::fs::File,
     identity: Identity,
@@ -613,20 +639,30 @@ fn forward_reports(
     use std::{
         io::{self, Read},
         os::fd::AsFd,
+        time::Instant,
     };
 
     // One read consumes one complete HID report. A larger buffer preserves
     // length validation when a node delivers a larger report than expected.
     let mut report = [0; 16_384];
+    let deadline = measurement
+        .as_ref()
+        .map(|measurement| Instant::now() + measurement.timeout);
     loop {
         let (ready, request, feedback_ready) =
-            reload::wait(input.as_fd(), reload, status, feedback)?;
+            reload::wait(input.as_fd(), reload, status, feedback, deadline)?;
         if let Some(request) = request
             && publish(SessionEvent::Reload(request))?.is_break()
         {
             return Ok(());
         }
         if ready.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
+            return Ok(());
+        }
+        if let (Some(deadline), Some(measurement)) = (deadline, measurement.as_deref_mut())
+            && Instant::now() >= deadline
+        {
+            measurement.timed_out = true;
             return Ok(());
         }
         if feedback_ready.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL)
@@ -642,7 +678,7 @@ fn forward_reports(
         }
         let mut decoded = 0;
         let mut rejected = 0;
-        for _ in 0..32 {
+        for _ in 0..REPORT_BATCH_LIMIT {
             let len = match input.read(&mut report) {
                 Ok(0) => return Ok(()),
                 Ok(len) => len,
@@ -660,9 +696,9 @@ fn forward_reports(
                     decoded += 1;
                     let (progress, complete) = if let Some(measurement) = measurement.as_deref_mut()
                     {
-                        let started = std::time::Instant::now();
+                        let started = Instant::now();
                         let progress = publish(SessionEvent::Report(report))?;
-                        measurement.record(started, started.elapsed());
+                        measurement.record(started, started.elapsed(), report.imu.device_ticks);
                         (progress, measurement.complete())
                     } else {
                         (publish(SessionEvent::Report(report))?, false)
@@ -753,7 +789,8 @@ mod tests {
             sender.send(&valid).unwrap();
         }
         let mut input = File::from(OwnedFd::from(receiver));
-        let mut measurement = super::benchmark::Benchmark::new(2);
+        let mut measurement =
+            super::benchmark::Benchmark::new(2, super::benchmark::DEFAULT_TIMEOUT);
         let mut published = 0;
         super::forward_reports(
             &mut input,
@@ -772,6 +809,40 @@ mod tests {
         assert_eq!(published, 2);
         assert_eq!(measurement.rejected, 1);
         assert!(measurement.complete());
+    }
+
+    #[test]
+    fn benchmark_times_out_with_an_open_but_silent_input() {
+        use std::{sync::mpsc, thread, time::Duration};
+
+        let (sender, receiver) = UnixStream::pair().unwrap();
+        let (finish, guard) = mpsc::channel::<()>();
+        let watchdog = thread::spawn(move || {
+            // Close the stream if a regression leaves the test stuck in poll.
+            let _ = guard.recv_timeout(Duration::from_secs(1));
+            drop(sender);
+        });
+        let mut input = File::from(OwnedFd::from(receiver));
+        let mut measurement = super::benchmark::Benchmark::new(2, Duration::from_millis(20));
+        let result = super::forward_reports(
+            &mut input,
+            USB_EDGE,
+            None,
+            None,
+            None,
+            Some(&mut measurement),
+            |_| panic!("silent input produced an event"),
+        );
+        drop(finish);
+        watchdog.join().unwrap();
+        result.unwrap();
+        assert!(measurement.timed_out);
+        assert!(!measurement.complete());
+        let mut report = Vec::new();
+        measurement.write(USB_EDGE, false, &mut report).unwrap();
+        let report = String::from_utf8(report).unwrap();
+        assert!(report.lines().any(|line| line == "benchmark_end=timeout"));
+        assert!(report.lines().any(|line| line == "reports_measured=0"));
     }
 
     #[test]

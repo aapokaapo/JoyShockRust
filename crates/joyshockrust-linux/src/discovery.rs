@@ -1,8 +1,12 @@
 use std::{
+    collections::HashSet,
     ffi::OsStr,
     fs::{File, OpenOptions},
     io,
-    os::{fd::AsFd, unix::fs::OpenOptionsExt},
+    os::{
+        fd::AsFd,
+        unix::fs::{MetadataExt, OpenOptionsExt},
+    },
     path::{Path, PathBuf},
 };
 
@@ -68,8 +72,8 @@ pub fn open_controller(path: &Path, selection: Selection) -> io::Result<(File, I
 }
 
 pub fn open_first_controller(selection: Selection) -> io::Result<(File, Identity)> {
-    find_controller(selection, None)?
-        .map(|((_, identity), input)| (input, identity))
+    find_controller(selection, &mut HashSet::new())?
+        .map(|(candidate, input)| (input, candidate.identity))
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -96,12 +100,15 @@ pub fn run(
         .listen()?;
     // The startup profile, status listener and udev monitor are ready.
     systemd::notify_ready()?;
-    let mut disconnected = None;
+    let mut disconnected = HashSet::new();
     let mut waiting = false;
     loop {
-        if let Some(((path, identity), mut input)) =
-            find_controller(selection, disconnected.as_ref())?
-        {
+        if let Some((candidate, mut input)) = find_controller(selection, &mut disconnected)? {
+            let Candidate {
+                path,
+                syspath,
+                identity,
+            } = candidate;
             waiting = false;
             eprintln!(
                 "Connected: {} ({}) {}",
@@ -116,16 +123,17 @@ pub fn run(
                 transport_name(identity.transport),
                 identity.model_name()
             );
-            // Give udev a chance to settle before reopening the same path.
-            // A different already-connected controller can take over immediately.
-            disconnected = Some((path, identity));
+            // A stale enumeration entry may outlive the descriptor. A fresh
+            // HID instance can take over even if it reuses the same node name.
+            disconnected.insert(syspath);
         } else {
             if !waiting {
                 eprintln!("Waiting for a {}", selection.description());
                 waiting = true;
             }
             loop {
-                let (ready, request, _) = reload::wait(monitor.as_fd(), reload, status, None)?;
+                let (ready, request, _) =
+                    reload::wait(monitor.as_fd(), reload, status, None, None)?;
                 if ready.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
                     return Err(io::Error::other("udev monitor lost"));
                 }
@@ -135,7 +143,6 @@ pub fn run(
                 }
                 if ready.contains(PollFlags::POLLIN) {
                     for _ in monitor.iter().take(64) {}
-                    disconnected = None;
                     break;
                 }
                 if requested {
@@ -146,18 +153,25 @@ pub fn run(
     }
 }
 
-type Candidate = (PathBuf, Identity);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Candidate {
+    pub path: PathBuf,
+    syspath: PathBuf,
+    identity: Identity,
+}
 
 fn find_controller(
     selection: Selection,
-    skip: Option<&Candidate>,
+    disconnected: &mut HashSet<PathBuf>,
 ) -> io::Result<Option<(Candidate, File)>> {
     Ok(first_available(
         controller_nodes(selection)?,
-        skip,
-        |path, expected| {
-            let (file, actual) = open_controller(path, selection)?;
-            if actual != expected {
+        disconnected,
+        |candidate| {
+            let (file, actual) = open_controller(&candidate.path, selection)?;
+            let node =
+                udev::Device::from_devnum(udev::DeviceType::Character, file.metadata()?.rdev())?;
+            if actual != candidate.identity || node.syspath() != candidate.syspath {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     "HID node identity changed since discovery",
@@ -170,24 +184,25 @@ fn find_controller(
 
 fn first_available<T>(
     mut nodes: Vec<Candidate>,
-    skip: Option<&Candidate>,
-    mut open: impl FnMut(&Path, Identity) -> io::Result<T>,
+    disconnected: &mut HashSet<PathBuf>,
+    mut open: impl FnMut(&Candidate) -> io::Result<T>,
 ) -> Option<(Candidate, T)> {
-    nodes.sort_by_key(|(_, identity)| {
+    disconnected.retain(|syspath| nodes.iter().any(|node| &node.syspath == syspath));
+    nodes.sort_by_key(|candidate| {
+        let identity = candidate.identity;
         (
             identity.transport == Transport::Bluetooth,
             identity.model != DeviceModel::DualSenseEdge,
         )
     });
     for candidate in nodes {
-        if Some(&candidate) == skip {
+        if disconnected.contains(&candidate.syspath) {
             continue;
         }
-        let (path, identity) = &candidate;
-        match open(path, *identity) {
+        match open(&candidate) {
             Ok(input) => return Some((candidate, input)),
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => eprintln!("Could not use {}: {err}", path.display()),
+            Err(err) => eprintln!("Could not use {}: {err}", candidate.path.display()),
         }
     }
     None
@@ -216,17 +231,24 @@ pub fn controller_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
         } else {
             None
         };
-        if let Some(identity) = usb {
-            nodes.push((path.to_path_buf(), identity));
+        let identity = if usb.is_some() {
+            usb
         } else if selection.accepts(Transport::Bluetooth)
             && let Some(hid) = device.parent_with_subsystem("hid")?
-            && let Some(identity) = hid
-                .property_value("HID_ID")
+        {
+            hid.property_value("HID_ID")
                 .and_then(OsStr::to_str)
                 .and_then(Identity::from_hid_id)
                 .filter(|identity| identity.transport == Transport::Bluetooth)
-        {
-            nodes.push((path.to_path_buf(), identity));
+        } else {
+            None
+        };
+        if let Some(identity) = identity {
+            nodes.push(Candidate {
+                path: path.to_path_buf(),
+                syspath: device.syspath().to_path_buf(),
+                identity,
+            });
         }
     }
     Ok(nodes)
@@ -236,27 +258,50 @@ pub fn controller_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
 mod tests {
     use super::*;
 
-    fn candidate(path: &str, model: DeviceModel, transport: Transport) -> Candidate {
-        (PathBuf::from(path), Identity { model, transport })
+    fn candidate(
+        path: &str,
+        instance: &str,
+        model: DeviceModel,
+        transport: Transport,
+    ) -> Candidate {
+        Candidate {
+            path: PathBuf::from(path),
+            syspath: Path::new("/sys/devices").join(instance),
+            identity: Identity { model, transport },
+        }
     }
 
     #[test]
     fn auto_prefers_usb_then_edge_and_falls_back_to_bluetooth() {
         let bluetooth = candidate(
             "/dev/hidraw0",
+            "bt",
             DeviceModel::DualSenseEdge,
             Transport::Bluetooth,
         );
-        let usb = candidate("/dev/hidraw1", DeviceModel::DualSense, Transport::Usb);
-        let edge_usb = candidate("/dev/hidraw2", DeviceModel::DualSenseEdge, Transport::Usb);
+        let usb = candidate(
+            "/dev/hidraw1",
+            "usb",
+            DeviceModel::DualSense,
+            Transport::Usb,
+        );
+        let edge_usb = candidate(
+            "/dev/hidraw2",
+            "edge-usb",
+            DeviceModel::DualSenseEdge,
+            Transport::Usb,
+        );
         let candidates = [bluetooth.clone(), usb.clone(), edge_usb.clone()];
+        let mut disconnected = HashSet::new();
 
-        let selected = first_available(candidates.to_vec(), None, |_, _| Ok(()));
+        let selected = first_available(candidates.to_vec(), &mut disconnected, |_| Ok(()));
         assert_eq!(selected, Some((edge_usb.clone(), ())));
-        let next = first_available(candidates.to_vec(), Some(&edge_usb), |_, _| Ok(()));
+        disconnected.insert(edge_usb.syspath);
+        let next = first_available(candidates.to_vec(), &mut disconnected, |_| Ok(()));
         assert_eq!(next, Some((usb, ())));
-        let fallback = first_available(candidates.to_vec(), None, |_, identity| {
-            if identity.transport == Transport::Usb {
+        disconnected.clear();
+        let fallback = first_available(candidates.to_vec(), &mut disconnected, |candidate| {
+            if candidate.identity.transport == Transport::Usb {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
             Ok(())
@@ -265,20 +310,68 @@ mod tests {
     }
 
     #[test]
-    fn a_new_transport_or_model_can_reuse_the_path_of_the_disconnected_device() {
+    fn reused_node_name_accepts_a_fresh_instance_of_the_same_model() {
         let path = "/dev/hidraw0";
-        let disconnected = candidate(path, DeviceModel::DualSenseEdge, Transport::Bluetooth);
-        for new_device in [
-            candidate(path, DeviceModel::DualSenseEdge, Transport::Usb),
-            candidate(path, DeviceModel::DualSense, Transport::Bluetooth),
-        ] {
-            let selected =
-                first_available(vec![new_device.clone()], Some(&disconnected), |_, _| Ok(()));
-            assert_eq!(selected, Some((new_device, ())));
-        }
-        let selected = first_available(vec![disconnected.clone()], Some(&disconnected), |_, _| {
-            Ok(())
+        let old = candidate(
+            path,
+            "old",
+            DeviceModel::DualSenseEdge,
+            Transport::Bluetooth,
+        );
+        let mut disconnected = HashSet::from([old.syspath.clone()]);
+        let selected = first_available(vec![old.clone()], &mut disconnected, |_| {
+            panic!("stale node reopened")
         });
-        assert!(selected.is_none());
+        assert_eq!(selected, None::<(Candidate, ())>);
+
+        for (model, transport) in [
+            (DeviceModel::DualSenseEdge, Transport::Bluetooth),
+            (DeviceModel::DualSenseEdge, Transport::Usb),
+            (DeviceModel::DualSense, Transport::Bluetooth),
+        ] {
+            let new = candidate(path, "new", model, transport);
+            let selected = first_available(
+                vec![old.clone(), new.clone()],
+                &mut disconnected,
+                |candidate| {
+                    assert_eq!(candidate, &new);
+                    Ok(())
+                },
+            );
+            assert_eq!(selected, Some((new, ())));
+        }
+    }
+
+    #[test]
+    fn stale_instances_stay_skipped_across_rescans_until_they_disappear() {
+        let first = candidate(
+            "/dev/hidraw0",
+            "first",
+            DeviceModel::DualSenseEdge,
+            Transport::Usb,
+        );
+        let second = candidate(
+            "/dev/hidraw1",
+            "second",
+            DeviceModel::DualSense,
+            Transport::Usb,
+        );
+        let mut disconnected = HashSet::from([first.syspath.clone(), second.syspath.clone()]);
+
+        for nodes in [vec![first.clone(), second.clone()], vec![second.clone()]] {
+            let selected =
+                first_available(nodes, &mut disconnected, |_| panic!("stale node reopened"));
+            assert_eq!(selected, None::<(Candidate, ())>);
+        }
+        assert_eq!(disconnected, HashSet::from([second.syspath.clone()]));
+        let selected = first_available(
+            vec![first.clone(), second],
+            &mut disconnected,
+            |candidate| {
+                assert_eq!(candidate, &first);
+                Ok(())
+            },
+        );
+        assert_eq!(selected, Some((first, ())));
     }
 }

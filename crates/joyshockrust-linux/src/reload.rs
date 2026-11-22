@@ -13,7 +13,7 @@ use std::{
     },
     path::{Path, PathBuf},
     process,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use nix::{
@@ -272,6 +272,7 @@ pub fn wait<'a>(
     reload: Option<&'a Reload>,
     status: Option<&StatusSocket>,
     feedback: Option<BorrowedFd<'_>>,
+    deadline: Option<Instant>,
 ) -> io::Result<(PollFlags, Option<Request<'a>>, PollFlags)> {
     let listener = reload.and_then(|reload| reload.listener.as_ref());
     let load_socket = reload.and_then(|reload| reload.load_socket.as_ref());
@@ -300,7 +301,17 @@ pub fn wait<'a>(
         1
     };
     loop {
-        match poll(&mut descriptors[..len], PollTimeout::NONE) {
+        let timeout = if let Some(deadline) = deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok((PollFlags::empty(), None, PollFlags::empty()));
+            }
+            PollTimeout::try_from(remaining.as_nanos().div_ceil(1_000_000))
+                .unwrap_or(PollTimeout::MAX)
+        } else {
+            PollTimeout::NONE
+        };
+        match poll(&mut descriptors[..len], timeout) {
             Ok(_) => break,
             Err(Errno::EINTR) => continue,
             Err(err) => return Err(err.into()),
@@ -457,7 +468,7 @@ mod tests {
         client
             .send(b"version = 1\n[gyro]\nsensitivity_y = 2\n")
             .unwrap();
-        let (_, request, feedback) = wait(input.as_fd(), Some(&reload), None, None).unwrap();
+        let (_, request, feedback) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
         assert!(feedback.is_empty());
         let request = request.unwrap();
         assert!(request.load().unwrap().gyro.is_some());
@@ -492,14 +503,14 @@ mod tests {
                 .unwrap();
         }
 
-        let (ready, request, _) = wait(input.as_fd(), Some(&reload), None, None).unwrap();
+        let (ready, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
         assert!(ready.is_empty());
         assert!(request.unwrap().load().is_none());
         let mut response = String::new();
         first.read_to_string(&mut response).unwrap();
         assert_eq!(response, "rejected\n");
 
-        let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None).unwrap();
+        let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
         request.unwrap().applied();
         response.clear();
         second.read_to_string(&mut response).unwrap();

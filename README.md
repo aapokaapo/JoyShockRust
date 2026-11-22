@@ -228,8 +228,10 @@ Append a hidraw path to check that node directly. The command opens the
 devices as the current user and exits without creating virtual outputs.
 
 Use `--benchmark-reports COUNT` for a bounded live bridge benchmark. It
-reports processing and host report interval percentiles after handling
-the requested count. [Live benchmark instructions](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
+reports processing, host and device report interval percentiles plus
+timestamp discontinuity counts after handling the requested count.
+Use `--benchmark-timeout SECONDS` to set the report collection deadline.
+[Live benchmark instructions](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
 
 ## systemd user service
 
@@ -279,6 +281,8 @@ results for the current connection. The `report_rate_hz` field estimates
 decoded reports per second using host time after the first successful read
 batch. It shows `none` until at least a second has elapsed and a later
 batch has supplied a valid report. The counters reset to zero on disconnect.
+The `report_full_batches` field counts batches that read all 32 report
+slots, including any parser rejections.
 The `last_reload` field reports `not_attempted` on startup, then `applied`
 or `rejected` after the bridge handles a reload. A bridge started without a
 profile reports `unavailable`. To request the same reload directly, run

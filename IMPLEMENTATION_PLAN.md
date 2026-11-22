@@ -127,10 +127,25 @@ USB and Bluetooth measurements are pending.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
 
 One-shot benchmarks now measure processing time and host report intervals
-through the real bridge. USB and Bluetooth baselines, CPU and memory
+through the real bridge. The same run reports device-clock interval
+percentiles and counts repeated timestamps, out-of-order samples, gaps
+and continuous wraps. USB and Bluetooth baselines, CPU and memory
 measurements, and contention and reconnect experiments remain open.
 Desktop controls are deferred until the broader GUI work.
 [Live benchmarks](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
+
+The benchmark can also terminate at a collection deadline and report a
+partial result. Synthetic tests cover a silent but connected input.
+
+The service counts full read batches. A synthetic burst test checks that
+the readiness loop answers status queries between batches and preserves
+decoded report order despite malformed reports mixed into the burst.
+[Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
+
+Discovery now tracks disconnected HID instances by sysfs path. Synthetic
+rescans cover stale entries, multiple disconnected candidates and reuse
+of a hidraw node name by the same model and transport.
+[Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.
