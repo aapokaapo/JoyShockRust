@@ -171,8 +171,7 @@ application after hidraw discovery. [Rumble reconnect acceptance](TESTING_AND_PE
 Updated 2026-11-22. The optional version 1 `[bridge]` table stores transport,
 virtual gamepad mode and rumble settings. Existing profiles keep their
 defaults. Command-line transport and gamepad overrides are resolved at
-startup. Reload rejects changes to this table since the discovery loop
-and virtual-device capabilities are selected at startup.
+startup. Reload rejects changes to virtual-device capabilities.
 [Bridge profile settings](README.md#toml-profiles)
 
 Updated 2026-11-22. The common DualSense input payload supplies battery
@@ -286,8 +285,8 @@ starts, including factory calibration reads.
 Updated 2026-11-22. The optional bridge model setting narrows the
 transport filter to standard DualSense or DualSense Edge. Discovery
 applies the filter at enumeration and validates the opened descriptor.
-The default accepts both models. Model changes use the same
-restart boundary as transport changes.
+The default accepts both models. Model and transport share the
+controller selection boundary.
 [Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
 
 Updated 2026-11-22. Profile-aware diagnostics enumerate supported HID
@@ -318,3 +317,9 @@ Updated 2026-11-22. Gyro bindings can select a touch grid cell with
 gate uses the physical HID report and the same grid geometry as gamepad
 bindings. Profile validation resolves the cell even when it has no
 gamepad binding. [Touch region gyro input](README.md#touch-region-as-a-gyro-input)
+
+Updated 2026-11-22. Automatic discovery applies profile controller
+selection changes in the running process. It ends the active output
+session before scanning for the new selection. Gamepad and rumble
+settings still apply at startup. CLI transport overrides survive reloads.
+[Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)

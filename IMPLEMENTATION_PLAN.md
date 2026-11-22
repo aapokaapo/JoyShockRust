@@ -173,5 +173,10 @@ The status socket reports virtual gamepad and mouse batch counts for the
 active connection. Synthetic tests cover output suppression and reset.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
 
+Discovery applies controller selection changes from live profiles and
+closes the existing virtual devices before opening a new controller.
+The process handles a single active controller session.
+[Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
+
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

@@ -575,6 +575,21 @@ the detach, expect a disconnect diagnostic and the same process to
 return to discovery. After reconnect, verify gamepad and gyro output
 resume. The descriptor-based recovery is covered synthetically.
 
+## Live controller selection acceptance
+
+Use the discovery-mode user service and record its PID. Start with a
+profile that selects your first controller by model or ID. Change only
+the selection in `[bridge]` to the second controller and run
+`systemctl --user reload joyshockrust.service`. Verify the old virtual
+gamepad disappears, the process PID stays the same and the new gamepad
+responds only to the newly selected controller. Start with the second
+controller disconnected to verify the service waits for it.
+
+Repeat by loading a preset with `--load-profile PATH`. A preset that
+omits `[bridge]` should preserve the current selection. Test a
+mapping-only reload while connected and verify the virtual gamepad stays
+present. Use `--status` to inspect the active model and session counters.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

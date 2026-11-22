@@ -132,11 +132,11 @@ With the user service running, load a preset into the current session.
 
 This replaces the live mappings and gyro settings as a complete profile.
 The service replies after applying or rejecting it. The profile can omit
-`[bridge]` to keep the startup settings. The loaded preset remains active
+`[bridge]` to keep the current controller selection and output settings. The loaded preset remains active
 until another load, a reload of the startup profile or a service restart.
 Use `--install-profile` to persist a preset for the next start.
 
-A profile can also select the bridge's startup options. Add this table to
+A profile can also select the bridge's controller and output options. Add this table to
 the active service profile to use automatic transport selection, Xbox
 Series output and rumble.
 
@@ -149,10 +149,13 @@ rumble = true
 
 The transport options are `usb`, `bluetooth` and `auto`. The gamepad options
 are `generic`, `xbox360` and `xbox-series`. Profiles without this table use
-USB, generic output and rumble off. Restart JoyShockRust when changing
-`[bridge]` settings. The reload command still applies mapping and gyro
-changes during a session when the bridge settings stay the same. The
-existing transport and gamepad flags override their profile values.
+USB, generic output and rumble off. Restart JoyShockRust to change
+`gamepad` or `rumble`. With automatic discovery, reload the profile to
+change `transport`, `model` or `controller_id` in the same process.
+The bridge releases and closes the current virtual devices before
+opening the selected controller. If it is absent, the bridge waits for
+it. An explicit hidraw path and a one-shot benchmark keep their original
+selection. The transport and gamepad CLI flags override their profile values.
 `--rumble` enables rumble for the run.
 
 Set `model = "dualsense"` or `model = "dualsense-edge"` in `[bridge]`
@@ -175,7 +178,8 @@ controller_id = "00:11:22:33:44:55"
 Use your controller's value in place of the example. The ID comes from
 Linux's HID driver. A configured ID requires an exact match, with case
 ignored in hexadecimal digits. If the ID is unavailable, choose a model
-filter without an ID. Restart the service after changing the selection.
+filter without an ID. Use `systemctl --user reload joyshockrust.service`
+or `--load-profile PATH` to change the active selection in discovery mode.
 
 ### Touchpad regions
 

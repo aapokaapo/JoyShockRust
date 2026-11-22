@@ -392,6 +392,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             profile_path,
             reload_path.as_deref(),
             profile.bridge.unwrap_or_default(),
+            path.is_none() && benchmark_target.is_none(),
+            transport,
         )?;
         (profile, Some(reload))
     } else {
@@ -477,18 +479,34 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             reload,
             status,
             |event| match event {
-                discovery::Event::Connected(input, identity) => {
-                    serve_session(input, &mut runtime, reload, status, identity, bridge, None)
+                discovery::Event::Connected(input, identity, filter) => {
+                    let active_bridge = profile::BridgeOptions {
+                        transport: filter.transport,
+                        model: filter.model,
+                        controller_id: filter.controller_id,
+                        ..bridge
+                    };
+                    serve_session(
+                        input,
+                        &mut runtime,
+                        reload,
+                        status,
+                        identity,
+                        active_bridge,
+                        None,
+                    )
                 }
-                discovery::Event::Reload(reload) => {
+                discovery::Event::Reload(reload, current_filter) => {
                     if let Some(next) = reload.load() {
+                        let filter = reload.controller_filter(&next, current_filter);
                         runtime = next;
                         if let Some(status) = status {
                             status.update(None, runtime.gyro.is_some());
                         }
                         reload.applied();
+                        return Ok(Some(filter));
                     }
-                    Ok(())
+                    Ok(None)
                 }
             },
         )?;
@@ -523,7 +541,7 @@ fn serve_session(
     identity: Identity,
     bridge: profile::BridgeOptions,
     mut measurement: Option<&mut benchmark::Benchmark>,
-) -> std::io::Result<()> {
+) -> std::io::Result<Option<discovery::ControllerFilter>> {
     use std::os::fd::AsFd;
 
     let mut mouse = open_mouse(input, identity.transport, runtime.gyro)?;
@@ -554,6 +572,7 @@ fn serve_session(
     let resource_start = measurement
         .as_ref()
         .and_then(|_| benchmark::ResourceSnapshot::capture());
+    let mut switch = None;
     let result = forward_reports(
         input,
         identity,
@@ -574,6 +593,12 @@ fn serve_session(
                     let Some(next) = reload.load() else {
                         return Ok(ControlFlow::Continue(()));
                     };
+                    let current_filter = bridge.controller_filter();
+                    let filter = reload.controller_filter(&next, current_filter);
+                    if filter != current_filter {
+                        switch = Some((filter, next, reload));
+                        return Ok(ControlFlow::Break(()));
+                    }
                     if let (Some(mouse), Some(current), Some(next)) =
                         (&mut mouse, runtime.gyro, next.gyro)
                         && (gyro_mouse::Options {
@@ -629,13 +654,31 @@ fn serve_session(
     if let Some(measurement) = measurement {
         measurement.finish_resources(resource_start);
     }
-    if let Some(status) = status {
-        status.update(None, runtime.gyro.is_some());
-    }
     let release = state.publish(joyshockrust_core::Controls::default(), |events| {
         output.emit(events)
     });
-    result.and(release.map(|_| ()))
+    let result = result.and(release.map(|_| ()));
+    if let Some((filter, next, request)) = switch {
+        if let Err(err) = &result {
+            request.rejected(err);
+        } else {
+            // Close all old virtual outputs before acknowledging the new filter.
+            drop(feedback);
+            drop(output);
+            drop(mouse);
+            drop(rumble);
+            *runtime = next;
+            if let Some(status) = status {
+                status.update(None, runtime.gyro.is_some());
+            }
+            request.applied();
+            return Ok(Some(filter));
+        }
+    }
+    if let Some(status) = status {
+        status.update(None, runtime.gyro.is_some());
+    }
+    result.map(|_| None)
 }
 
 #[cfg(target_os = "linux")]
@@ -682,14 +725,14 @@ enum SessionEvent<'a> {
 const REPORT_BATCH_LIMIT: u64 = 32;
 
 #[cfg(target_os = "linux")]
-fn forward_reports(
+fn forward_reports<'a>(
     input: &mut std::fs::File,
     identity: Identity,
-    reload: Option<&reload::Reload>,
+    reload: Option<&'a reload::Reload>,
     status: Option<&status::StatusSocket>,
     feedback: Option<std::os::fd::BorrowedFd<'_>>,
     mut measurement: Option<&mut benchmark::Benchmark>,
-    mut publish: impl FnMut(SessionEvent<'_>) -> std::io::Result<ControlFlow<()>>,
+    mut publish: impl FnMut(SessionEvent<'a>) -> std::io::Result<ControlFlow<()>>,
 ) -> std::io::Result<()> {
     use joyshockrust_input::parse_report;
     use nix::poll::PollFlags;

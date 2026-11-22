@@ -62,7 +62,7 @@ pub enum ModelSelection {
     DualSenseEdge,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct ControllerFilter {
     pub transport: Selection,
     pub model: ModelSelection,
@@ -130,15 +130,15 @@ pub fn open_first_controller(filter: ControllerFilter) -> io::Result<(File, Iden
 }
 
 pub enum Event<'a> {
-    Connected(&'a mut File, Identity),
-    Reload(reload::Request<'a>),
+    Connected(&'a mut File, Identity, ControllerFilter),
+    Reload(reload::Request<'a>, ControllerFilter),
 }
 
 pub fn run(
-    filter: ControllerFilter,
+    mut filter: ControllerFilter,
     reload: Option<&Reload>,
     status: Option<&StatusSocket>,
-    mut handle: impl FnMut(Event<'_>) -> io::Result<()>,
+    mut handle: impl FnMut(Event<'_>) -> io::Result<Option<ControllerFilter>>,
 ) -> io::Result<()> {
     // Subscribe before enumerating so a connection between the scan and the
     // wait is still visible to the process.
@@ -163,8 +163,13 @@ pub fn run(
                 transport_name(identity.transport),
                 identity.model_name()
             );
-            let result = handle(Event::Connected(&mut input, identity));
-            finish_session(input.as_fd(), result)?;
+            match handle(Event::Connected(&mut input, identity, filter)) {
+                Ok(Some(next)) => {
+                    filter = next;
+                    continue;
+                }
+                result => finish_session(input.as_fd(), result.map(|_| ()))?,
+            }
             eprintln!(
                 "Disconnected: {} ({}) {}",
                 path.display(),
@@ -186,8 +191,12 @@ pub fn run(
                     return Err(io::Error::other("udev monitor lost"));
                 }
                 let requested = request.is_some();
-                if let Some(request) = request {
-                    handle(Event::Reload(request))?;
+                if let Some(request) = request
+                    && let Some(next) = handle(Event::Reload(request, filter))?
+                    && next != filter
+                {
+                    filter = next;
+                    waiting = false;
                 }
                 if ready.contains(PollFlags::POLLIN) {
                     for _ in monitor.iter().take(64) {}

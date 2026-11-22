@@ -26,6 +26,7 @@ use nix::{
 };
 
 use crate::{
+    discovery::{ControllerFilter, Selection},
     profile::{self, BridgeOptions, RuntimeOptions},
     status::{self, StatusSocket},
 };
@@ -35,6 +36,8 @@ const MAX_PROFILE_BYTES: usize = 64 * 1024;
 pub struct Reload {
     path: PathBuf,
     bridge_at_startup: BridgeOptions,
+    allow_controller_switch: bool,
+    transport_override: Option<Selection>,
     signal: SignalFd,
     listener: Option<UnixListener>,
     load_socket: Option<UnixDatagram>,
@@ -53,6 +56,8 @@ impl Reload {
         path: PathBuf,
         socket: Option<&Path>,
         bridge_at_startup: BridgeOptions,
+        allow_controller_switch: bool,
+        transport_override: Option<Selection>,
     ) -> io::Result<Self> {
         let listener = socket
             .map(|path| {
@@ -98,6 +103,8 @@ impl Reload {
         Ok(Self {
             path,
             bridge_at_startup,
+            allow_controller_switch,
+            transport_override,
             signal,
             listener,
             load_socket,
@@ -142,21 +149,46 @@ impl Request<'_> {
             profile::load(&self.reload.path)
         };
         match profile {
-            Ok(profile)
-                if (inline.is_some() && profile.bridge.is_none())
-                    || profile.bridge.unwrap_or_default() == self.reload.bridge_at_startup =>
-            {
+            Ok(profile) => {
+                if inline.is_some() && profile.bridge.is_none() {
+                    return Some(profile);
+                }
+                let next = profile.bridge.unwrap_or_default();
+                let startup = self.reload.bridge_at_startup;
+                if next.gamepad != startup.gamepad || next.rumble != startup.rumble {
+                    self.rejected("gamepad and rumble changes require restarting JoyShockRust");
+                    return None;
+                }
+                if !self.reload.allow_controller_switch
+                    && next.controller_filter() != startup.controller_filter()
+                {
+                    self.rejected("controller selection changes require automatic discovery");
+                    return None;
+                }
                 Some(profile)
-            }
-            Ok(_) => {
-                self.rejected("changes to [bridge] require restarting JoyShockRust");
-                None
             }
             Err(err) => {
                 self.rejected(err);
                 None
             }
         }
+    }
+
+    pub fn controller_filter(
+        &self,
+        next: &RuntimeOptions,
+        current: ControllerFilter,
+    ) -> ControllerFilter {
+        if !self.reload.allow_controller_switch
+            || (next.bridge.is_none() && matches!(self.client, Some(Client::Load(_, _))))
+        {
+            return current;
+        }
+        let mut filter = next.bridge.unwrap_or_default().controller_filter();
+        if let Some(transport) = self.reload.transport_override {
+            filter.transport = transport;
+        }
+        filter
     }
 
     pub fn applied(self) {
@@ -412,6 +444,8 @@ mod tests {
                 rumble: true,
                 ..BridgeOptions::default()
             },
+            allow_controller_switch: false,
+            transport_override: None,
             signal: SignalFd::new(&SigSet::empty()).unwrap(),
             listener: None,
             load_socket: None,
@@ -441,6 +475,19 @@ mod tests {
         );
         assert_eq!(reload.outcome(), "rejected");
 
+        reload.allow_controller_switch = true;
+        let request = Request {
+            reload: &reload,
+            client: None,
+        };
+        let next = request
+            .load()
+            .expect("automatic discovery can change model");
+        assert!(
+            request.controller_filter(&next, reload.bridge_at_startup.controller_filter())
+                == ControllerFilter::default()
+        );
+
         reload.bridge_at_startup = BridgeOptions::default();
         assert!(
             Request {
@@ -464,6 +511,8 @@ mod tests {
                 rumble: true,
                 ..BridgeOptions::default()
             },
+            allow_controller_switch: true,
+            transport_override: Some(Selection::Bluetooth),
             signal: SignalFd::new(&SigSet::empty()).unwrap(),
             listener: None,
             load_socket: Some(load_socket),
@@ -485,12 +534,36 @@ mod tests {
         let (_, request, feedback) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
         assert!(feedback.is_empty());
         let request = request.unwrap();
-        assert!(request.load().unwrap().gyro.is_some());
+        let next = request.load().unwrap();
+        assert!(next.gyro.is_some());
+        let current = ControllerFilter {
+            transport: Selection::Bluetooth,
+            model: crate::discovery::ModelSelection::DualSense,
+            controller_id: None,
+        };
+        assert!(request.controller_filter(&next, current) == current);
         request.applied();
         let mut reply = [0; 32];
         let len = client.recv(&mut reply).unwrap();
         assert_eq!(&reply[..len], b"applied\n");
         assert_eq!(reload.path, Path::new("/dev/null"));
+
+        client
+            .send(b"version = 1\n[bridge]\ntransport = 'usb'\nmodel = 'dualsense-edge'\ncontroller_id = '02:00:00:00:00:01'\nrumble = true\n")
+            .unwrap();
+        let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
+        let request = request.unwrap();
+        let next = request.load().unwrap();
+        let filter = request.controller_filter(&next, current);
+        assert_eq!(filter.transport, Selection::Bluetooth);
+        assert_eq!(
+            filter.model,
+            crate::discovery::ModelSelection::DualSenseEdge
+        );
+        assert!(filter.controller_id.is_some());
+        request.applied();
+        let len = client.recv(&mut reply).unwrap();
+        assert_eq!(&reply[..len], b"applied\n");
     }
 
     #[test]
@@ -503,6 +576,8 @@ mod tests {
         let reload = Reload {
             path: PathBuf::from("/dev/null"),
             bridge_at_startup: BridgeOptions::default(),
+            allow_controller_switch: false,
+            transport_override: None,
             signal: SignalFd::new(&SigSet::empty()).unwrap(),
             listener: Some(listener),
             load_socket: None,
