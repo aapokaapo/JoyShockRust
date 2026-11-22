@@ -361,6 +361,43 @@ Supported button names are `cross`, `circle`, `square`, `triangle`,
 
 [USB gyro test](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
 
+## Game sensitivity calibration
+
+Set the game's mouse sensitivity and calibrate against a visible landmark.
+Enable raw mouse input in the game when available. Run the tool from a
+terminal, switch to the game within five seconds and count the turns made
+by the test movement. Include fractional turns, such as `1.25`.
+
+```sh
+joyshockrust-linux --calibrate-game 14400 2.0
+```
+
+Here `14400` is the number of mouse counts to send and `2.0` is the game's
+mouse sensitivity. The tool prints two fields to copy into the existing
+`[gyro]` table. If you already know the number of turns, pass it as the
+last argument to calculate without opening a virtual mouse.
+
+```sh
+joyshockrust-linux --calibrate-game 9000 2.0 1.25
+```
+
+```toml
+[gyro]
+real_world_calibration = 40.0
+in_game_sens = 2.0
+sensitivity_x = 1.0
+sensitivity_y = 1.0
+# flick_stick = 1.0
+```
+
+The factor `real_world_calibration / in_game_sens` scales both gyro axes
+and optional Flick Stick output. Both fields default to `1.0`. With the
+factor calibrated, `sensitivity_x = 1.0` is a starting point for a 1:1
+horizontal turn. Tune the vertical axis separately. If the game exposes
+no numeric sensitivity, use `1.0` and recalibrate after a game setting
+change. Load the resulting preset with `--load-profile`.
+[JoyShockMapper scaling](https://github.com/Electronicks/JoyShockMapper/blob/e148efe0b6ff4ad2ce0fc8c2560fa1028097b1a7/JoyShockMapper/src/main.cpp#L1166-L1174)
+
 ## Experimental Flick Stick
 
 Add `--flick-stick 4` with `--gyro-mouse` to use the right stick for

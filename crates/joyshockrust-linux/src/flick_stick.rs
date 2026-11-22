@@ -33,6 +33,13 @@ impl FlickStick {
         }
     }
 
+    pub fn set_counts_per_degree(&mut self, scale: f64) {
+        if self.counts_per_degree != scale {
+            self.counts_per_degree = scale;
+            self.remainder = 0.0;
+        }
+    }
+
     pub fn advance(&mut self, stick: Stick, ticks: u32) -> i32 {
         let delta = match self.timebase.observe(ticks) {
             TimestampUpdate::FirstSample => Duration::ZERO,

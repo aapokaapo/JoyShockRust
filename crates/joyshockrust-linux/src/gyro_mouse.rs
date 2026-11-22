@@ -17,6 +17,7 @@ use joyshockrust_motion::{
 
 use super::{
     flick_stick::FlickStick,
+    game_calibration::GameCalibration,
     gyro_gate::{Binding, GyroGate},
 };
 
@@ -33,6 +34,7 @@ pub struct Options {
     pub binding: Binding,
     pub flick_stick: Option<f64>,
     pub sensitivity: Sensitivity,
+    pub game_calibration: GameCalibration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -58,6 +60,19 @@ impl Sensitivity {
     }
 }
 
+impl Options {
+    fn gyro_scale(self) -> [f64; 2] {
+        self.sensitivity
+            .0
+            .map(|scale| self.game_calibration.scale(f64::from(scale)))
+    }
+
+    fn flick_scale(self) -> Option<f64> {
+        self.flick_stick
+            .map(|scale| self.game_calibration.scale(scale))
+    }
+}
+
 pub fn validate_flick_scale(scale: f64) -> Result<f64, &'static str> {
     if !(0.01..=100.0).contains(&scale) {
         return Err("Flick Stick sensitivity must be between 0.01 and 100 counts per degree");
@@ -65,32 +80,38 @@ pub fn validate_flick_scale(scale: f64) -> Result<f64, &'static str> {
     Ok(scale)
 }
 
+pub fn open_output(name: &str) -> io::Result<VirtualDevice> {
+    let axes = [Axis::REL_X, Axis::REL_Y]
+        .into_iter()
+        .collect::<AttributeSet<_>>();
+    // Advertise the left button so consumers classify this as a mouse.
+    let keys = [KeyCode::BTN_LEFT].into_iter().collect::<AttributeSet<_>>();
+    VirtualDevice::builder()?
+        .name(name)
+        .input_id(InputId::new(BusType::BUS_VIRTUAL, 0, 0, 1))
+        .with_keys(&keys)?
+        .with_relative_axes(&axes)?
+        .build()
+}
+
 impl GyroMouse {
     pub fn open(input: &File, transport: Transport, options: Options) -> io::Result<Self> {
         let factory = super::hidraw::read_factory_calibration(input, transport).map_err(|err| {
             io::Error::other(format!("could not read factory calibration: {err}"))
         })?;
-        let axes = [Axis::REL_X, Axis::REL_Y]
-            .into_iter()
-            .collect::<AttributeSet<_>>();
-        // Advertise the left button so consumers classify this as a mouse.
-        let keys = [KeyCode::BTN_LEFT].into_iter().collect::<AttributeSet<_>>();
-        let output = VirtualDevice::builder()?
-            .name("JoyShockRust Gyro Mouse")
-            .input_id(InputId::new(BusType::BUS_VIRTUAL, 0, 0, 1))
-            .with_keys(&keys)?
-            .with_relative_axes(&axes)?
-            .build()?;
         Ok(Self {
-            aim: GyroAim::new(factory, options.calibrate, options.sensitivity),
-            output,
+            aim: GyroAim::new(factory, options.calibrate, options.gyro_scale()),
+            output: open_output("JoyShockRust Gyro Mouse")?,
             gate: GyroGate::new(options.binding),
-            flick: options.flick_stick.map(FlickStick::new),
+            flick: options.flick_scale().map(FlickStick::new),
         })
     }
 
-    pub fn set_sensitivity(&mut self, sensitivity: Sensitivity) {
-        self.aim.set_sensitivity(sensitivity);
+    pub fn set_scaling(&mut self, options: Options) {
+        self.aim.set_sensitivity(options.gyro_scale());
+        if let (Some(flick), Some(scale)) = (&mut self.flick, options.flick_scale()) {
+            flick.set_counts_per_degree(scale);
+        }
     }
 
     pub fn publish(&mut self, report: InputReport) -> io::Result<()> {
@@ -124,12 +145,12 @@ struct GyroAim {
     motion: MotionEngine,
     calibration: Option<StationaryCalibration>,
     remainder: [f64; 2],
-    sensitivity: Sensitivity,
+    sensitivity: [f64; 2],
     was_enabled: bool,
 }
 
 impl GyroAim {
-    fn new(factory: FactoryCalibration, calibrate: bool, sensitivity: Sensitivity) -> Self {
+    fn new(factory: FactoryCalibration, calibrate: bool, sensitivity: [f64; 2]) -> Self {
         let config = Self::config();
         // The sensor clock advances at three ticks per microsecond.
         let max_gap_ticks = (config.max_gap_ns * 3 / 1_000) as u32;
@@ -155,9 +176,9 @@ impl GyroAim {
         }
     }
 
-    fn set_sensitivity(&mut self, sensitivity: Sensitivity) {
+    fn set_sensitivity(&mut self, sensitivity: [f64; 2]) {
         for (axis, remainder) in self.remainder.iter_mut().enumerate() {
-            if self.sensitivity.0[axis] != sensitivity.0[axis] {
+            if self.sensitivity[axis] != sensitivity[axis] {
                 *remainder = 0.0;
             }
         }
@@ -210,8 +231,8 @@ impl GyroAim {
         // Retain fractional movement so repeated sub-count deltas still move
         // the pointer. Clear these fractions on discontinuities.
         std::array::from_fn(|axis| {
-            let total = self.remainder[axis]
-                + f64::from(output.aim_delta[axis]) * f64::from(self.sensitivity.0[axis]);
+            let total =
+                self.remainder[axis] + f64::from(output.aim_delta[axis]) * self.sensitivity[axis];
             let whole = total as i32;
             self.remainder[axis] = total - f64::from(whole);
             whole
@@ -252,7 +273,7 @@ mod tests {
         GyroAim::new(
             FactoryCalibration::from_report(&report).unwrap(),
             calibrate,
-            Sensitivity::default(),
+            Options::default().gyro_scale(),
         )
     }
 
@@ -278,6 +299,27 @@ mod tests {
     }
 
     #[test]
+    fn game_calibration_scales_both_gyro_axes_and_flick_stick() {
+        let profile = crate::profile::parse(
+            "version = 1\n[gyro]\nsensitivity_x = 1.0\nsensitivity_y = 0.5\nflick_stick = 1.0\nreal_world_calibration = 40.0\nin_game_sens = 2.0",
+        ).unwrap();
+        let options = profile.gyro.unwrap();
+        assert_eq!(options.gyro_scale(), [20.0, 10.0]);
+        assert_eq!(options.flick_scale(), Some(20.0));
+
+        let mut aim = aim(false);
+        aim.set_sensitivity(options.gyro_scale());
+        assert_eq!(aim.advance(sample(0), true), [0, 0]);
+        let mut total = [0, 0];
+        for step in 1..=10 {
+            let delta = aim.advance(sample(step * 3000), true);
+            total[0] += delta[0];
+            total[1] += delta[1];
+        }
+        assert_eq!(total, [-20, 5]);
+    }
+
+    #[test]
     fn changing_one_sensitivity_does_not_change_other_axis_or_restart_motion() {
         let mut aim = aim(false);
         assert_eq!(aim.advance(sample(0), true), [0, 0]);
@@ -288,7 +330,7 @@ mod tests {
             total[1] += delta[1];
         }
         assert_eq!(total, [-3, 1]);
-        aim.set_sensitivity(Sensitivity::from_profile(Some(20.0), None).unwrap());
+        aim.set_sensitivity([20.0, 4.0]);
         // X emits at the new scale immediately. Y retains its fractional carry.
         assert_eq!(aim.advance(sample(30_000), true), [-2, 1]);
     }

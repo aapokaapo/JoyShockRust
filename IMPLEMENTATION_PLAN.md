@@ -100,6 +100,11 @@ request can also apply a preset to the running service for the current
 session. The startup file remains available through the existing reload
 command. [Live gyro sensitivity acceptance](TESTING_AND_PERFORMANCE.md#live-gyro-sensitivity-acceptance)
 
+The profile scales gyro and Flick Stick with a per-game factor. The
+calibration CLI sends a known horizontal mouse displacement and derives
+the factor from the turn measured in the game. In-game validation is
+pending. [Game calibration acceptance](TESTING_AND_PERFORMANCE.md#game-sensitivity-calibration-acceptance)
+
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.
 

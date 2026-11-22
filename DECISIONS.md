@@ -196,3 +196,11 @@ socket in the service runtime directory. The running bridge validates and
 applies it with the same transactional reload path. The startup profile
 remains the source for ordinary reload and restart.
 [Live gyro sensitivity acceptance](TESTING_AND_PERFORMANCE.md#live-gyro-sensitivity-acceptance)
+
+Updated 2026-11-22. The gyro profile's game factor is
+`real_world_calibration / in_game_sens`. It multiplies each gyro axis and
+the independent Flick Stick scale. Defaults preserve existing profiles.
+The calibration command measures a known relative mouse displacement and
+computes `counts / (360 × measured turns) × in_game_sens`. It assumes the
+same mouse input settings used to measure and play.
+[JoyShockMapper scaling](https://github.com/Electronicks/JoyShockMapper/blob/e148efe0b6ff4ad2ce0fc8c2560fa1028097b1a7/JoyShockMapper/src/main.cpp#L1166-L1174) · [Calibration acceptance](TESTING_AND_PERFORMANCE.md#game-sensitivity-calibration-acceptance)

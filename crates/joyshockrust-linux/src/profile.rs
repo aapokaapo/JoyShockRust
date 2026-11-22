@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::{
     discovery::Selection,
+    game_calibration::GameCalibration,
     gamepad::{ButtonRemaps, OutputKind, StickCurve},
     gyro_gate::{self, Binding, TriggerGate},
     gyro_mouse,
@@ -38,6 +39,8 @@ struct Gyro {
     flick_stick: Option<f64>,
     sensitivity_x: Option<f32>,
     sensitivity_y: Option<f32>,
+    real_world_calibration: Option<f64>,
+    in_game_sens: Option<f64>,
     binding: Option<GyroBinding>,
 }
 
@@ -213,6 +216,10 @@ impl Gyro {
             calibrate: self.calibrate,
             binding,
             flick_stick,
+            game_calibration: GameCalibration::new(
+                self.real_world_calibration.unwrap_or(1.0),
+                self.in_game_sens.unwrap_or(1.0),
+            )?,
             sensitivity: gyro_mouse::Sensitivity::from_profile(
                 self.sensitivity_x,
                 self.sensitivity_y,
@@ -287,6 +294,20 @@ mod tests {
                 let profile = format!("version = 1\n[gyro]\n{field} = {value}");
                 assert!(parse(&profile).is_err(), "{profile}");
             }
+        }
+    }
+
+    #[test]
+    fn game_calibration_rejects_invalid_profile_values() {
+        for fields in [
+            "real_world_calibration = 0",
+            "real_world_calibration = nan",
+            "in_game_sens = -1",
+            "in_game_sens = inf",
+            "real_world_calibration = 40\nin_game_sens = 0.00001",
+        ] {
+            let profile = format!("version = 1\n[gyro]\n{fields}");
+            assert!(parse(&profile).is_err(), "{profile}");
         }
     }
 

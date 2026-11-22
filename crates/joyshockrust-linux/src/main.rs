@@ -5,6 +5,8 @@ mod discovery;
 #[cfg(target_os = "linux")]
 mod flick_stick;
 #[cfg(target_os = "linux")]
+mod game_calibration;
+#[cfg(target_os = "linux")]
 mod gamepad;
 #[cfg(target_os = "linux")]
 mod gyro_gate;
@@ -47,6 +49,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
+        "       joyshockrust-linux --calibrate-game COUNTS IN_GAME_SENS [MEASURED_TURNS]\n",
         "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
@@ -80,6 +83,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     if args.next_if(|arg| arg == "--launch-sdl").is_some() {
         eprintln!("{}", launch::run(args));
         return Ok(ExitCode::FAILURE);
+    }
+    if args.next_if(|arg| arg == "--calibrate-game").is_some() {
+        game_calibration::run(args)?;
+        return Ok(ExitCode::SUCCESS);
     }
     while let Some(arg) = args.next() {
         if arg == "--help" {
@@ -445,10 +452,11 @@ fn serve_session(
                         (&mut mouse, runtime.gyro, next.gyro)
                         && (gyro_mouse::Options {
                             sensitivity: next.sensitivity,
+                            game_calibration: next.game_calibration,
                             ..current
                         }) == next
                     {
-                        mouse.set_sensitivity(next.sensitivity);
+                        mouse.set_scaling(next);
                     } else if runtime.gyro != next.gyro {
                         let input = reload_input.as_ref().expect("reload descriptor");
                         match open_mouse(input, identity.transport, next.gyro) {

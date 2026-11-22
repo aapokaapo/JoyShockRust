@@ -400,6 +400,16 @@ profile.
 A manual bridge needs `--profile PATH --reload-socket SOCKET`. Pass the same
 `SOCKET` as the optional final argument to `--load-profile`.
 
+## Game sensitivity calibration acceptance
+
+Run the [game calibration tool](README.md#game-sensitivity-calibration) in
+a game with a visible landmark. Enter the measured turns, paste the
+printed values into the preset's `[gyro]` table and load it. With
+`sensitivity_x = 1.0`, compare a physical horizontal turn with the camera
+turn. If Flick Stick is enabled, set `flick_stick = 1.0` and verify that a
+90-degree stick flick turns the camera by roughly 90 degrees. Record the
+game and its raw-input and mouse sensitivity settings.
+
 ## Profile reload acceptance
 
 Install the updated executable and unit. Reload the systemd user manager
