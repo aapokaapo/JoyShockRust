@@ -10,6 +10,7 @@ pub enum Binding {
     #[default]
     Always,
     Hold(Button),
+    DisableWhileHeld(Button),
     Toggle(Button),
     TapHold(Button),
     DoubleTap(Button),
@@ -92,6 +93,7 @@ impl GyroGate {
         match self.binding {
             Binding::Always => true,
             Binding::Hold(button) => buttons.contains(button),
+            Binding::DisableWhileHeld(button) => !buttons.contains(button),
             Binding::Chord(first, second) => buttons.contains(first) && buttons.contains(second),
             Binding::Toggle(button) => {
                 let pressed = buttons.contains(button);

@@ -38,6 +38,7 @@ struct Gyro {
 )]
 enum GyroBinding {
     Hold(String),
+    DisableWhileHeld(String),
     Toggle(String),
     TapHold(String),
     DoubleTap(String),
@@ -94,6 +95,9 @@ impl Gyro {
         let binding = match self.binding {
             None => Binding::Always,
             Some(GyroBinding::Hold(name)) => Binding::Hold(named_button(&name)?),
+            Some(GyroBinding::DisableWhileHeld(name)) => {
+                Binding::DisableWhileHeld(named_button(&name)?)
+            }
             Some(GyroBinding::Toggle(name)) => Binding::Toggle(named_button(&name)?),
             Some(GyroBinding::TapHold(name)) => Binding::TapHold(named_button(&name)?),
             Some(GyroBinding::DoubleTap(name)) => Binding::DoubleTap(named_button(&name)?),
@@ -113,6 +117,21 @@ mod tests {
     use super::*;
     use crate::gamepad::RemapState;
     use joyshockrust_core::{Button, Controls, Stick};
+
+    #[test]
+    fn l2_profile_disables_gyro_only_while_digital_trigger_is_held() {
+        let profile = parse(include_str!("../../../profiles/gyro-except-l2.toml")).unwrap();
+        let mut gate = gyro_gate::GyroGate::new(profile.gyro.unwrap().binding);
+        let mut controls = Controls {
+            left_trigger: 0.5,
+            ..Controls::default()
+        };
+        assert!(gate.enabled(&controls, std::time::Instant::now));
+        controls.buttons.insert(Button::LeftTrigger);
+        assert!(!gate.enabled(&controls, std::time::Instant::now));
+        controls.buttons.remove(Button::LeftTrigger);
+        assert!(gate.enabled(&controls, std::time::Instant::now));
+    }
 
     #[test]
     fn shipped_profile_resolves_sticks_gyro_and_independent_layers() {

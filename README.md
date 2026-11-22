@@ -93,8 +93,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/dualsense-edge.ex
 
 Profiles require `version = 1`. The optional `[gyro]` table enables the gyro
 mouse. The optional `[gyro.binding]` table takes `mode` and `input`. Modes are
-`hold`, `toggle`, `tap-hold`, `double-tap`, `chord` and `trigger`. Input uses
-the same button, chord or analog trigger syntax as the equivalent CLI flag.
+`hold`, `disable-while-held`, `toggle`, `tap-hold`, `double-tap`, `chord`
+and `trigger`. Input names a digital button, a chord, or an analog trigger,
+depending on the mode. The [gyro-except-L2 profile](profiles/gyro-except-l2.toml)
+keeps gyro aim enabled until the digital L2 button is pressed.
 The profile is loaded at startup. Choose the profile or the equivalent CLI
 mapping flags for that run. You can still pass a hidraw path with `--profile`.
 
