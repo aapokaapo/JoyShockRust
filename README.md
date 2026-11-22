@@ -202,8 +202,18 @@ sudo install -Dm644 dist/udev/70-joyshockrust-rumble.rules /etc/udev/rules.d/70-
 sudo udevadm control --reload-rules
 ```
 
-Disconnect and reconnect the controller to apply the rule. See the
-[rumble test](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance).
+Disconnect and reconnect the controller to apply the rule. With the bridge
+running and rumble ready, run the following in another terminal to request a
+short pulse without launching a game.
+
+```sh
+cargo run --locked -p joyshockrust-linux --example rumble_test
+```
+
+If several JoyShockRust virtual gamepads are present, append
+`-- /dev/input/eventN` to select the virtual event node. The test sends the
+effect and you verify the physical pulse.
+[Rumble forwarding acceptance](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance)
 
 Add `--stick-curve 2` to soften small movements on both virtual gamepad
 sticks. The radial curve preserves direction, center, and full travel.

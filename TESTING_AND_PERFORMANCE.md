@@ -303,11 +303,14 @@ The user verified the standard DualSense and DualSense Edge with `3a0bc7a`.
 
 Stop the user service if it is active. Run the bridge manually with
 `--auto-transport --gamepad xbox-series --rumble` and check for
-`Rumble forwarding ready`. Trigger vibration in a game and record the
-game, Proton version and Steam Input setting. With `fftest` available,
-run `fftest /dev/input/eventN` against the **virtual** controller's event
-node to check forwarding independently of Steam. Check that vibration
-stops when the effect ends, the client exits or the controller disconnects.
+`Rumble forwarding ready`. In another terminal run
+`cargo run --locked -p joyshockrust-linux --example rumble_test`. Expect
+one 350 ms vibration pulse on the physical controller. The example opens
+the JoyShockRust virtual event node and uploads, plays and stops the effect.
+Append `-- /dev/input/eventN` when several virtual gamepads are present.
+Check that vibration stops when the effect ends, the client exits or the
+controller disconnects. For in-game compatibility, record the game, Proton
+version and Steam Input setting.
 Reconnect and repeat over the other transport. If permissions prevent
 opening the physical node, check that the bridge names the force feedback
 node in its error and that normal input still works. Install the optional
