@@ -7,7 +7,7 @@ Correct controller behavior first; then low input-to-output latency, low jitter,
 
 ## Locked decisions
 - Rust stable, edition 2024; Linux first.
-- Direct **hidraw** controller acquisition; DualSense Edge over USB or Bluetooth.
+- Direct **hidraw** controller acquisition for DualSense and DualSense Edge over USB or Bluetooth.
 - Event-driven report acquisition (`epoll`/nonblocking reads or equivalent), plus deadline-based timers for timed actions. **No global periodic polling loop by default.**
 - One dedicated processing thread per active controller initially; benchmark before changing.
 - Platform-agnostic, deterministic `joyshockrust-motion` crate; no I/O or runtime dependencies.
@@ -34,8 +34,9 @@ Development has started **Phase 6**, controller and game compatibility. The USB 
 startup, and digital hold and toggle gates have user-reported hardware tests.
 The analog trigger gate also passed the user's hardware check. Tap/hold and
 double-tap have also passed the user's hardware check. The user also verified
-Xbox Series virtual output. Bluetooth input and gyro calibration decoding
-have synthetic coverage and await testing on a paired controller.
+Xbox Series virtual output, Edge Bluetooth input and automatic transport
+switching. The standard DualSense has synthetic coverage and awaits hardware
+testing.
 
 See the [implementation plan](IMPLEMENTATION_PLAN.md), [test evidence](TESTING_AND_PERFORMANCE.md)
 and [source analysis](docs/REFERENCE_ANALYSIS.md).
@@ -153,7 +154,8 @@ The service needs the same hidraw and uinput access as a manual run.
 Query the running service with `$HOME/.local/bin/joyshockrust-linux --status`.
 The command prints `controller=waiting` or `controller=connected` and
 `gyro_configured=true` or `gyro_configured=false`. The `transport` field
-reports `usb`, `bluetooth` or `none`. The gyro field describes
+reports `usb`, `bluetooth` or `none`. The `model` field reports
+`dualsense`, `dualsense_edge` or `none`. The gyro field describes
 the loaded profile. A hold or toggle binding can still suppress mouse output.
 The `last_reload` field reports `not_attempted` on startup, then `applied`
 or `rejected` after the bridge handles a reload. A bridge started without a
@@ -164,7 +166,7 @@ and are removed when the service stops.
 
 ## Virtual gamepad on Linux
 
-Run the Linux bridge with read access to a DualSense Edge USB hidraw node and
+Run the Linux bridge with read access to a DualSense or DualSense Edge USB hidraw node and
 write access to `/dev/uinput`. With no arguments it uses udev discovery and
 waits for the next connection when the controller is unplugged. Pass a
 specific node to run a single session.
@@ -210,7 +212,7 @@ active, the last-declared layer wins. Unmapped buttons use base rules. The modif
 Replace the former `--remap-layer l1 --remap-button cross=circle` syntax
 with `--layer-remap l1:cross=circle`.
 
-## DualSense Edge over Bluetooth
+## DualSense and DualSense Edge over Bluetooth
 
 Pair the controller in the Linux Bluetooth settings, then select the
 Bluetooth bridge explicitly. USB discovery remains the default.
@@ -227,12 +229,13 @@ checksum and waits for reconnection after the device disconnects.
 Use `--auto-transport` to accept either connection in one run. When opening
 a session, the bridge tries USB first and then Bluetooth. It keeps the chosen
 connection until it disconnects and creates fresh virtual devices for the
-next session. `--diagnose --auto-transport` lists candidates for both
-transports.
+next session. When both models are available on the same transport, the
+bridge tries the Edge first. The standard DualSense uses USB product ID
+`0ce6`. `--diagnose --auto-transport` lists candidates for both transports.
 
 ## Experimental gyro mouse
 
-On Linux, enable relative pointer output from a wired DualSense Edge:
+On Linux, enable relative pointer output from a DualSense or DualSense Edge:
 
 ```sh
 cargo run --locked -p joyshockrust-linux -- --gyro-mouse

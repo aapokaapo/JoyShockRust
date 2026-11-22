@@ -44,19 +44,100 @@ pub fn read_factory_calibration(
     calibration.map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
-pub fn edge_transport(device: &File) -> io::Result<Option<Transport>> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Identity {
+    pub model: DeviceModel,
+    pub transport: Transport,
+}
+
+impl Identity {
+    pub fn from_hid_id(id: &str) -> Option<Self> {
+        let mut fields = id.split(':');
+        let bus = u16::from_str_radix(fields.next()?, 16).ok()?;
+        let vendor = u16::from_str_radix(fields.next()?, 16).ok()?;
+        let product = u16::from_str_radix(fields.next()?, 16).ok()?;
+        if fields.next().is_some() {
+            return None;
+        }
+        Self::from_ids(u32::from(bus), vendor, product)
+    }
+
+    fn from_ids(bus: u32, vendor: u16, product: u16) -> Option<Self> {
+        let transport = match bus {
+            bus if bus == u32::from(evdev::BusType::BUS_USB.0) => Transport::Usb,
+            bus if bus == u32::from(evdev::BusType::BUS_BLUETOOTH.0) => Transport::Bluetooth,
+            _ => return None,
+        };
+        Self::from_vid_pid(vendor, product, transport)
+    }
+
+    pub fn from_vid_pid(vendor: u16, product: u16, transport: Transport) -> Option<Self> {
+        let model = DeviceModel::from_vid_pid(vendor, product);
+        (!matches!(model, DeviceModel::Other { .. })).then_some(Self { model, transport })
+    }
+
+    pub fn model_name(self) -> &'static str {
+        match self.model {
+            DeviceModel::DualSense => "DualSense",
+            DeviceModel::DualSenseEdge => "DualSense Edge",
+            DeviceModel::Other { .. } => "unknown model",
+        }
+    }
+}
+
+pub fn identity(device: &File) -> io::Result<Option<Identity>> {
     let mut info = HidrawDevInfo::default();
     // SAFETY: The borrowed file keeps the descriptor alive. HIDIOCGRAWINFO
     // writes the Linux hidraw_devinfo struct to this writable, C-layout buffer.
     unsafe { hid_get_raw_info(device.as_raw_fd(), &mut info) }?;
-    if DeviceModel::from_vid_pid(info.vendor as u16, info.product as u16)
-        != DeviceModel::DualSenseEdge
-    {
-        return Ok(None);
+    Ok(Identity::from_ids(
+        info.bus_type,
+        info.vendor as u16,
+        info.product as u16,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sysfs_identity_accepts_only_supported_models_and_buses() {
+        for (id, model, transport) in [
+            (
+                "0003:0000054C:00000CE6",
+                DeviceModel::DualSense,
+                Transport::Usb,
+            ),
+            (
+                "0005:0000054C:00000CE6",
+                DeviceModel::DualSense,
+                Transport::Bluetooth,
+            ),
+            (
+                "0003:0000054C:00000DF2",
+                DeviceModel::DualSenseEdge,
+                Transport::Usb,
+            ),
+            (
+                "0005:0000054C:00000DF2",
+                DeviceModel::DualSenseEdge,
+                Transport::Bluetooth,
+            ),
+        ] {
+            assert_eq!(
+                Identity::from_hid_id(id),
+                Some(Identity { model, transport })
+            );
+        }
+        for id in [
+            "0006:0000054C:00000CE6",
+            "0003:0000045E:00000CE6",
+            "0005:0000054C:0000FFFF",
+            "0003:0000054C",
+            "0003:0000054C:00000CE6:01",
+        ] {
+            assert!(Identity::from_hid_id(id).is_none(), "{id}");
+        }
     }
-    Ok(match info.bus_type {
-        bus if bus == u32::from(evdev::BusType::BUS_USB.0) => Some(Transport::Usb),
-        bus if bus == u32::from(evdev::BusType::BUS_BLUETOOTH.0) => Some(Transport::Bluetooth),
-        _ => None,
-    })
 }

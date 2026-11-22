@@ -72,8 +72,11 @@ The opt-in Bluetooth path discovers a paired DualSense Edge through udev and
 checks the descriptor bus and model. The parser verifies full input and
 factory calibration CRCs. The user verified Bluetooth on hardware.
 Automatic transport selection prefers an accessible USB node when opening a
-session and falls back to Bluetooth. Live switching after a disconnect
-awaits a hardware test. [Automatic transport acceptance](TESTING_AND_PERFORMANCE.md#automatic-transport-acceptance)
+session and falls back to Bluetooth. The user verified switching after
+disconnect. The Linux bridge also supports standard DualSense `0ce6` on
+both transports. The common layout and model-specific button handling
+have synthetic coverage. Standard DualSense hardware validation is pending.
+[Standard DualSense acceptance](TESTING_AND_PERFORMANCE.md#standard-dualsense-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.

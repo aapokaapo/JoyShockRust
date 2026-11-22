@@ -90,7 +90,7 @@ fn replays_captured_dualsense_edge_usb() {
 fn validates_model_and_transport_before_decoding() {
     let edge = DeviceModel::from_vid_pid(0x054c, 0x0df2);
     assert_eq!(edge, DeviceModel::DualSenseEdge);
-    for (vendor_id, product_id) in [(0x054c, 0x0ce6), (0x0001, 0x0df2)] {
+    for (vendor_id, product_id) in [(0x054c, 0x05c4), (0x0001, 0x0df2)] {
         let other = DeviceModel::from_vid_pid(vendor_id, product_id);
         assert_eq!(
             other,
@@ -108,6 +108,34 @@ fn validates_model_and_transport_before_decoding() {
         parse_report(edge, Transport::Other, &neutral_frame(), None),
         Err(ParseError::UnsupportedTransport(Transport::Other))
     );
+}
+
+#[test]
+fn model_specific_buttons_do_not_change_face_button_positions() {
+    let mut frame = neutral_frame();
+    frame[8] = 0x98;
+    frame[10] = 0xf7;
+    let standard = parse_report(DeviceModel::DualSense, Transport::Usb, &frame, None).unwrap();
+    let edge = parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap();
+    for button in [
+        Button::West,
+        Button::North,
+        Button::Home,
+        Button::TouchpadClick,
+        Button::MicrophoneMute,
+    ] {
+        assert!(standard.controls.buttons.contains(button));
+        assert!(edge.controls.buttons.contains(button));
+    }
+    for button in [
+        Button::LeftFunction,
+        Button::RightFunction,
+        Button::LeftPaddle,
+        Button::RightPaddle,
+    ] {
+        assert!(!standard.controls.buttons.contains(button));
+        assert!(edge.controls.buttons.contains(button));
+    }
 }
 
 #[test]

@@ -94,3 +94,22 @@ fn bluetooth_factory_calibration_checks_the_feature_seed() {
         CalibrationReportError::InvalidChecksum,
     );
 }
+
+#[test]
+fn standard_dualsense_decodes_common_controls_without_edge_paddles() {
+    let model = DeviceModel::from_vid_pid(0x054c, 0x0ce6);
+    assert_eq!(model, DeviceModel::DualSense);
+    let bluetooth = full_bluetooth_frame();
+    let mut usb = [0; 64];
+    usb[0] = 1;
+    usb[1..].copy_from_slice(&bluetooth[2..65]);
+    let wireless = parse_report(model, Transport::Bluetooth, &bluetooth, None).unwrap();
+    assert_eq!(
+        wireless,
+        parse_report(model, Transport::Usb, &usb, None).unwrap()
+    );
+    assert!(wireless.controls.buttons.contains(Button::South));
+    assert!(wireless.controls.buttons.contains(Button::TouchpadClick));
+    assert!(!wireless.controls.buttons.contains(Button::RightPaddle));
+    assert_eq!(wireless.imu.device_ticks, 0x1234_5678);
+}

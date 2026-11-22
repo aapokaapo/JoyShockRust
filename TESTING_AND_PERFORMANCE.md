@@ -282,7 +282,20 @@ controller again. Unplug USB and reconnect Bluetooth to exercise the reverse
 transition. If both connections are visible at startup, the bridge tries USB
 first. When there is already a session, it keeps using it until disconnect.
 With a status socket configured, check that `--status` reports the active
-transport and reports `none` while waiting.
+transport and reports `none` while waiting. The user reported that automatic
+transport selection worked with `704d33a`.
+
+## Standard DualSense acceptance
+
+Connect a standard DualSense with product ID `0ce6` by USB and run
+`cargo run --locked -p joyshockrust-linux -- --diagnose --auto-transport`.
+Check that it is listed as a readable wired DualSense. Run the bridge
+with `--auto-transport --gamepad xbox-series --gyro-mouse` and check face
+buttons, sticks, triggers and gyro on the virtual devices. Confirm
+Square maps to X and Triangle to Y. Disconnect USB, connect the controller
+over Bluetooth, and repeat. The bridge should log the model and transport
+for each session. With an Edge, repeat the same steps and check a remap
+using an Fn button or paddle as the source.
 
 ## Profile reload acceptance
 

@@ -23,6 +23,8 @@ mod status;
 mod systemd;
 
 #[cfg(target_os = "linux")]
+use hidraw::Identity;
+#[cfg(target_os = "linux")]
 use joyshockrust_input::Transport;
 
 #[cfg(target_os = "linux")]
@@ -302,7 +304,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let reload = reload.as_ref();
     let gamepad_kind = gamepad_kind.unwrap_or_default();
     if let Some(path) = path {
-        let (mut input, transport) = discovery::open_edge(&path, selection)
+        let (mut input, identity) = discovery::open_controller(&path, selection)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
         serve_session(
             &mut input,
@@ -310,12 +312,12 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             reload,
             status,
             gamepad_kind,
-            transport,
+            identity,
         )?;
     } else {
         discovery::run(selection, reload, status, |event| match event {
-            discovery::Event::Connected(input, transport) => {
-                serve_session(input, &mut runtime, reload, status, gamepad_kind, transport)
+            discovery::Event::Connected(input, identity) => {
+                serve_session(input, &mut runtime, reload, status, gamepad_kind, identity)
             }
             discovery::Event::Reload(reload) => {
                 if let Some(next) = reload.load() {
@@ -357,18 +359,18 @@ fn serve_session(
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
     gamepad_kind: gamepad::OutputKind,
-    transport: Transport,
+    identity: Identity,
 ) -> std::io::Result<()> {
-    let mut mouse = open_mouse(input, transport, runtime.gyro)?;
+    let mut mouse = open_mouse(input, identity.transport, runtime.gyro)?;
     let reload_input = reload.map(|_| input.try_clone()).transpose()?;
     let mut output = gamepad::open(gamepad_kind)
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
     let mut state = gamepad::GamepadState::new(gamepad_kind);
     let mut layer_state = gamepad::RemapState::default();
     if let Some(status) = status {
-        status.update(Some(transport), runtime.gyro.is_some());
+        status.update(Some(identity), runtime.gyro.is_some());
     }
-    let result = forward_reports(input, transport, reload, status, |event| {
+    let result = forward_reports(input, identity, reload, status, |event| {
         let report = match event {
             SessionEvent::Report(report) => report,
             SessionEvent::Reload(reload) => {
@@ -377,7 +379,7 @@ fn serve_session(
                 };
                 if runtime.gyro != next.gyro {
                     let input = reload_input.as_ref().expect("reload descriptor");
-                    match open_mouse(input, transport, next.gyro) {
+                    match open_mouse(input, identity.transport, next.gyro) {
                         Ok(next_mouse) => mouse = next_mouse,
                         Err(err) => {
                             reload.rejected(&err);
@@ -390,7 +392,7 @@ fn serve_session(
                 }
                 *runtime = next;
                 if let Some(status) = status {
-                    status.update(Some(transport), runtime.gyro.is_some());
+                    status.update(Some(identity), runtime.gyro.is_some());
                 }
                 reload.applied();
                 return Ok(());
@@ -437,12 +439,12 @@ enum SessionEvent<'a> {
 #[cfg(target_os = "linux")]
 fn forward_reports(
     input: &mut std::fs::File,
-    transport: Transport,
+    identity: Identity,
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
     mut publish: impl FnMut(SessionEvent<'_>) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    use joyshockrust_input::{DeviceModel, parse_report};
+    use joyshockrust_input::parse_report;
     use nix::poll::PollFlags;
     use std::{
         io::{self, Read},
@@ -477,7 +479,7 @@ fn forward_reports(
                 Err(err) => return Err(err),
             };
             if let Ok(report) =
-                parse_report(DeviceModel::DualSenseEdge, transport, &report[..len], None)
+                parse_report(identity.model, identity.transport, &report[..len], None)
             {
                 publish(SessionEvent::Report(report))?;
             }
@@ -494,14 +496,21 @@ mod tests {
         os::unix::net::{UnixDatagram, UnixStream},
     };
 
+    use super::Identity;
     use joyshockrust_core::Button;
+    use joyshockrust_input::{DeviceModel, Transport};
+
+    const USB_EDGE: Identity = Identity {
+        model: DeviceModel::DualSenseEdge,
+        transport: Transport::Usb,
+    };
 
     #[test]
     fn readiness_loop_ends_when_input_disconnects() {
         let (sender, receiver) = UnixStream::pair().unwrap();
         drop(sender);
         let mut input = File::from(OwnedFd::from(receiver));
-        super::forward_reports(&mut input, super::Transport::Usb, None, None, |_| {
+        super::forward_reports(&mut input, USB_EDGE, None, None, |_| {
             panic!("disconnected input published controls")
         })
         .unwrap();
@@ -522,17 +531,16 @@ mod tests {
 
         let mut input = File::from(OwnedFd::from(receiver));
         let mut presses = Vec::new();
-        let result =
-            super::forward_reports(&mut input, super::Transport::Usb, None, None, |event| {
-                let super::SessionEvent::Report(report) = event else {
-                    unreachable!()
-                };
-                presses.push(report.controls.buttons.contains(Button::South));
-                if presses.len() == 2 {
-                    return Err(io::ErrorKind::BrokenPipe.into());
-                }
-                Ok(())
-            });
+        let result = super::forward_reports(&mut input, USB_EDGE, None, None, |event| {
+            let super::SessionEvent::Report(report) = event else {
+                unreachable!()
+            };
+            presses.push(report.controls.buttons.contains(Button::South));
+            if presses.len() == 2 {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            Ok(())
+        });
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(presses, [true, false]);
     }

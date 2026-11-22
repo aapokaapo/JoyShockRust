@@ -138,3 +138,9 @@ then Bluetooth candidates. The active descriptor determines report framing
 and factory calibration until the session ends. The next transport starts a
 new session with fresh virtual devices. The status snapshot includes the
 active transport. [Automatic transport acceptance](TESTING_AND_PERFORMANCE.md#automatic-transport-acceptance)
+
+Updated 2026-11-22. Both Sony DualSense models are identified from the open
+hidraw descriptor. Model selection controls interpretation of the extra
+button bits, while the common controls and sensor counts use the same
+decoder. USB remains first in automatic mode. On a given transport,
+discovery tries the Edge first. [Linux HID IDs](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-ids.h#L1257-L1267) · [Linux device match](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L2898-L2906)

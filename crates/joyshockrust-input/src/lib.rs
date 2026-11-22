@@ -1,4 +1,4 @@
-//! Pure decoding of DualSense Edge USB and Bluetooth HID reports in the layout described in
+//! Pure decoding of DualSense and DualSense Edge USB and Bluetooth HID reports in the layout described in
 //! `docs/REFERENCE_ANALYSIS.md`.
 
 #![no_std]
@@ -25,6 +25,7 @@ const COMMON_REPORT_LEN: usize = DUALSENSE_EDGE_USB_REPORT_LEN - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceModel {
+    DualSense,
     DualSenseEdge,
     Other { vendor_id: u16, product_id: u16 },
 }
@@ -32,6 +33,7 @@ pub enum DeviceModel {
 impl DeviceModel {
     pub const fn from_vid_pid(vendor_id: u16, product_id: u16) -> Self {
         match (vendor_id, product_id) {
+            (0x054c, 0x0ce6) => Self::DualSense,
             (0x054c, 0x0df2) => Self::DualSenseEdge,
             _ => Self::Other {
                 vendor_id,
@@ -115,10 +117,13 @@ const STANDARD_BUTTONS: &[(u8, Button)] = &[
     (0x80, Button::RightStick),
 ];
 
-const EXTRA_BUTTONS: &[(u8, Button)] = &[
+const SPECIAL_BUTTONS: &[(u8, Button)] = &[
     (0x01, Button::Home),
     (0x02, Button::TouchpadClick),
     (0x04, Button::MicrophoneMute),
+];
+
+const EDGE_BUTTONS: &[(u8, Button)] = &[
     (0x10, Button::LeftFunction),
     (0x20, Button::RightFunction),
     (0x40, Button::LeftPaddle),
@@ -135,7 +140,7 @@ pub fn parse_report(
     bytes: &[u8],
     received_at_ns: Option<u64>,
 ) -> Result<InputReport, ParseError> {
-    if model != DeviceModel::DualSenseEdge {
+    if matches!(model, DeviceModel::Other { .. }) {
         return Err(ParseError::UnsupportedDevice(model));
     }
     let (length, id, offset) = match transport {
@@ -177,10 +182,16 @@ pub fn parse_report(
         value => return Err(ParseError::InvalidHat { value }),
     };
     let mut buttons = Buttons::default();
+    let edge_buttons = if model == DeviceModel::DualSenseEdge {
+        EDGE_BUTTONS
+    } else {
+        &[]
+    };
     for (byte, mapping) in [
         (bytes[7], FACE_BUTTONS),
         (bytes[8], STANDARD_BUTTONS),
-        (bytes[9], EXTRA_BUTTONS),
+        (bytes[9], SPECIAL_BUTTONS),
+        (bytes[9], edge_buttons),
     ] {
         for &(mask, button) in mapping {
             if byte & mask != 0 {

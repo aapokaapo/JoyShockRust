@@ -6,10 +6,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use joyshockrust_input::Transport;
+use joyshockrust_input::{DeviceModel, Transport};
 use nix::poll::PollFlags;
 
 use super::{
+    hidraw::{self, Identity},
     reload::{self, Reload},
     status::StatusSocket,
     systemd,
@@ -41,31 +42,31 @@ impl Selection {
 
     pub fn description(self) -> &'static str {
         match self {
-            Self::Usb => "wired DualSense Edge",
-            Self::Bluetooth => "Bluetooth DualSense Edge",
-            Self::Auto => "DualSense Edge over USB or Bluetooth",
+            Self::Usb => "wired DualSense or DualSense Edge",
+            Self::Bluetooth => "Bluetooth DualSense or DualSense Edge",
+            Self::Auto => "DualSense or DualSense Edge over USB or Bluetooth",
         }
     }
 }
 
-pub fn open_edge(path: &Path, selection: Selection) -> io::Result<(File, Transport)> {
+pub fn open_controller(path: &Path, selection: Selection) -> io::Result<(File, Identity)> {
     let input = OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_NONBLOCK)
         .open(path)?;
-    let transport = super::hidraw::edge_transport(&input)?
-        .filter(|&transport| selection.accepts(transport))
+    let identity = hidraw::identity(&input)?
+        .filter(|identity| selection.accepts(identity.transport))
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!("expected a {}", selection.description()),
             )
         })?;
-    Ok((input, transport))
+    Ok((input, identity))
 }
 
 pub enum Event<'a> {
-    Connected(&'a mut File, Transport),
+    Connected(&'a mut File, Identity),
     Reload(reload::Request<'a>),
 }
 
@@ -85,22 +86,26 @@ pub fn run(
     let mut disconnected = None;
     let mut waiting = false;
     loop {
-        if let Some(((path, transport), mut input)) = find_edge(selection, disconnected.as_ref())? {
+        if let Some(((path, identity), mut input)) =
+            find_controller(selection, disconnected.as_ref())?
+        {
             waiting = false;
             eprintln!(
-                "Connected: {} ({})",
+                "Connected: {} ({}) {}",
                 path.display(),
-                transport_name(transport)
+                transport_name(identity.transport),
+                identity.model_name()
             );
-            handle(Event::Connected(&mut input, transport))?;
+            handle(Event::Connected(&mut input, identity))?;
             eprintln!(
-                "Disconnected: {} ({})",
+                "Disconnected: {} ({}) {}",
                 path.display(),
-                transport_name(transport)
+                transport_name(identity.transport),
+                identity.model_name()
             );
             // Give udev a chance to settle before reopening the same path.
             // A different already-connected controller can take over immediately.
-            disconnected = Some((path, transport));
+            disconnected = Some((path, identity));
         } else {
             if !waiting {
                 eprintln!("Waiting for a {}", selection.description());
@@ -128,22 +133,24 @@ pub fn run(
     }
 }
 
-type Candidate = (PathBuf, Transport);
+type Candidate = (PathBuf, Identity);
 
-fn find_edge(
+fn find_controller(
     selection: Selection,
     skip: Option<&Candidate>,
 ) -> io::Result<Option<(Candidate, File)>> {
     Ok(first_available(
-        edge_nodes(selection)?,
+        controller_nodes(selection)?,
         skip,
-        |path, transport| {
-            let selection = match transport {
-                Transport::Usb => Selection::Usb,
-                Transport::Bluetooth => Selection::Bluetooth,
-                Transport::Other => return Err(io::ErrorKind::Unsupported.into()),
-            };
-            open_edge(path, selection).map(|(file, _)| file)
+        |path, expected| {
+            let (file, actual) = open_controller(path, selection)?;
+            if actual != expected {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "HID node identity changed since discovery",
+                ));
+            }
+            Ok(file)
         },
     ))
 }
@@ -151,15 +158,20 @@ fn find_edge(
 fn first_available<T>(
     mut nodes: Vec<Candidate>,
     skip: Option<&Candidate>,
-    mut open: impl FnMut(&Path, Transport) -> io::Result<T>,
+    mut open: impl FnMut(&Path, Identity) -> io::Result<T>,
 ) -> Option<(Candidate, T)> {
-    nodes.sort_by_key(|(_, transport)| *transport == Transport::Bluetooth);
+    nodes.sort_by_key(|(_, identity)| {
+        (
+            identity.transport == Transport::Bluetooth,
+            identity.model != DeviceModel::DualSenseEdge,
+        )
+    });
     for candidate in nodes {
         if Some(&candidate) == skip {
             continue;
         }
-        let (path, transport) = &candidate;
-        match open(path, *transport) {
+        let (path, identity) = &candidate;
+        match open(path, *identity) {
             Ok(input) => return Some((candidate, input)),
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => eprintln!("Could not use {}: {err}", path.display()),
@@ -168,7 +180,7 @@ fn first_available<T>(
     None
 }
 
-pub fn edge_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
+pub fn controller_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
     let mut enumerator = udev::Enumerator::new()?;
     enumerator.match_subsystem("hidraw")?;
     let mut nodes = Vec::new();
@@ -176,21 +188,32 @@ pub fn edge_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
         let Some(path) = device.devnode() else {
             continue;
         };
-        if selection.accepts(Transport::Usb)
-            && device
+        let usb = if selection.accepts(Transport::Usb) {
+            device
                 .parent_with_subsystem_devtype("usb", "usb_device")?
-                .is_some_and(|usb| {
-                    usb.attribute_value("idVendor") == Some(OsStr::new("054c"))
-                        && usb.attribute_value("idProduct") == Some(OsStr::new("0df2"))
+                .and_then(|usb| {
+                    let vendor = usb.attribute_value("idVendor")?.to_str()?;
+                    let product = usb.attribute_value("idProduct")?.to_str()?;
+                    Identity::from_vid_pid(
+                        u16::from_str_radix(vendor, 16).ok()?,
+                        u16::from_str_radix(product, 16).ok()?,
+                        Transport::Usb,
+                    )
                 })
-        {
-            nodes.push((path.to_path_buf(), Transport::Usb));
+        } else {
+            None
+        };
+        if let Some(identity) = usb {
+            nodes.push((path.to_path_buf(), identity));
         } else if selection.accepts(Transport::Bluetooth)
-            && device.parent_with_subsystem("hid")?.is_some_and(|hid| {
-                hid.property_value("HID_ID") == Some(OsStr::new("0005:0000054C:00000DF2"))
-            })
+            && let Some(hid) = device.parent_with_subsystem("hid")?
+            && let Some(identity) = hid
+                .property_value("HID_ID")
+                .and_then(OsStr::to_str)
+                .and_then(Identity::from_hid_id)
+                .filter(|identity| identity.transport == Transport::Bluetooth)
         {
-            nodes.push((path.to_path_buf(), Transport::Bluetooth));
+            nodes.push((path.to_path_buf(), identity));
         }
     }
     Ok(nodes)
@@ -200,16 +223,27 @@ pub fn edge_nodes(selection: Selection) -> io::Result<Vec<Candidate>> {
 mod tests {
     use super::*;
 
+    fn candidate(path: &str, model: DeviceModel, transport: Transport) -> Candidate {
+        (PathBuf::from(path), Identity { model, transport })
+    }
+
     #[test]
-    fn auto_prefers_usb_and_falls_back_to_bluetooth() {
-        let bluetooth = (PathBuf::from("/dev/hidraw0"), Transport::Bluetooth);
-        let usb = (PathBuf::from("/dev/hidraw1"), Transport::Usb);
-        let candidates = [bluetooth.clone(), usb.clone()];
+    fn auto_prefers_usb_then_edge_and_falls_back_to_bluetooth() {
+        let bluetooth = candidate(
+            "/dev/hidraw0",
+            DeviceModel::DualSenseEdge,
+            Transport::Bluetooth,
+        );
+        let usb = candidate("/dev/hidraw1", DeviceModel::DualSense, Transport::Usb);
+        let edge_usb = candidate("/dev/hidraw2", DeviceModel::DualSenseEdge, Transport::Usb);
+        let candidates = [bluetooth.clone(), usb.clone(), edge_usb.clone()];
 
         let selected = first_available(candidates.to_vec(), None, |_, _| Ok(()));
-        assert_eq!(selected, Some((usb.clone(), ())));
-        let fallback = first_available(candidates.to_vec(), None, |_, transport| {
-            if transport == Transport::Usb {
+        assert_eq!(selected, Some((edge_usb.clone(), ())));
+        let next = first_available(candidates.to_vec(), Some(&edge_usb), |_, _| Ok(()));
+        assert_eq!(next, Some((usb, ())));
+        let fallback = first_available(candidates.to_vec(), None, |_, identity| {
+            if identity.transport == Transport::Usb {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
             Ok(())
@@ -218,13 +252,17 @@ mod tests {
     }
 
     #[test]
-    fn a_new_transport_can_reuse_the_path_of_the_disconnected_device() {
-        let path = PathBuf::from("/dev/hidraw0");
-        let disconnected = (path.clone(), Transport::Bluetooth);
-        let new_device = (path, Transport::Usb);
-        let selected =
-            first_available(vec![new_device.clone()], Some(&disconnected), |_, _| Ok(()));
-        assert_eq!(selected, Some((new_device, ())));
+    fn a_new_transport_or_model_can_reuse_the_path_of_the_disconnected_device() {
+        let path = "/dev/hidraw0";
+        let disconnected = candidate(path, DeviceModel::DualSenseEdge, Transport::Bluetooth);
+        for new_device in [
+            candidate(path, DeviceModel::DualSenseEdge, Transport::Usb),
+            candidate(path, DeviceModel::DualSense, Transport::Bluetooth),
+        ] {
+            let selected =
+                first_available(vec![new_device.clone()], Some(&disconnected), |_, _| Ok(()));
+            assert_eq!(selected, Some((new_device, ())));
+        }
         let selected = first_available(vec![disconnected.clone()], Some(&disconnected), |_, _| {
             Ok(())
         });
