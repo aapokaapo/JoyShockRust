@@ -2,10 +2,19 @@
 
 Each phase requires tests, documentation, a runnable demonstration when appropriate, and a clear hardware-validation status. Do not advance on unverified assumptions.
 
+## Status on 2026-11-22
+
+Phase 4 mappings are the current development focus. Phases 0–3 established
+source evidence, captured USB replay, a Linux USB input/output bridge and
+opt-in gyro aiming. Hardware evidence is partial. Residual bias calibration,
+per-axis aiming accuracy and timing benchmarks still need validation.
+Profiles, service integration and the control plane are Phase 5 work.
+See the [minimum usable product requirements](PRODUCT_REQUIREMENTS.md#p0-minimum-usable-product).
+
 ## Phase 0 — research and feasibility
 Review both JSM repositories and Linux hid-playstation for scheduling, protocol, calibration, permissions, kernel coexistence, mapping semantics and licensing. The [reference analysis](docs/REFERENCE_ANALYSIS.md) records exact source revisions. The [feature matrix](FEATURE_MATRIX.md) and [decision log](DECISIONS.md) record findings and open items.
 
-Source review is complete as of 2026-11-22. Phase 0 hardware evidence is pending. The exit requires an annotated wired DualSense Edge capture, factory calibration response, and observed interface, permissions and coexistence behavior. An approved Phase 1 can start with synthetic tests while capture collection is pending. Captured-fixture acceptance remains required.
+Source review is complete. The stationary USB capture and subsequent Linux tests provide partial hardware evidence. Annotated control and motion captures, a shareable factory calibration reply, and broader permission and coexistence checks remain open.
 
 ## Phase 1 — minimal workspace and parser
 The offline parser milestone covers synthetic replay and the 300-report stationary USB fixture added in `d7da53b`, reviewed 2026-11-22. Captures of individual controls and motion remain pending. The root Cargo workspace uses stable Rust, edition 2024. See the [source-backed USB layout](docs/REFERENCE_ANALYSIS.md#dualsense-edge-usb-input).
@@ -15,7 +24,7 @@ The offline parser milestone covers synthetic replay and the 300-report stationa
 | `joyshockrust-core` | Transport-neutral button, D-pad, stick and analog trigger state. Define normalized axes independently of the packet layout. |
 | `joyshockrust-input` | Pure USB parser, raw IMU counts and device ticks, structured errors, and a replayable timebase. Depends only on `joyshockrust-core` and Rust's `core` library. Linux device discovery and I/O are Phase 2 work. |
 
-Create `joyshockrust-motion` when there is calibrated data and motion processing to implement. Its first input should follow the [motion contract](MOTION_CONTRACT.md). The output, mapping, daemon, configuration and IPC crates can wait for their consumers.
+Phases 2 and 3 describe the added Linux and motion crates. The [motion contract](MOTION_CONTRACT.md) defines the calibrated input boundary.
 
 | Task | Acceptance |
 |---|---|
@@ -43,7 +52,7 @@ The motion engine accepts calibrated IMU samples, applies a supplied gyro bias, 
 ## Phase 4 — mapping engine
 Add remapping, tap/hold/double-tap, chords, layers, trigger modes, stick curves and Flick Stick with deadline scheduler. **Exit:** deterministic state-machine tests and no unnecessary global polling.
 
-The first mapping increment supports an optional digital button hold or toggle for gyro aim, with an L2 shortcut. Inactive intervals and the interval across a gate transition produce no pointer motion. Synthetic tests cover release on a repeated timestamp, reactivation without fractional carry, and toggle edges. Timed mappings and Flick Stick remain open.
+Digital holds and toggles passed the user's hardware check. The next increment adds analog L2/R2 gating with separate engagement and release thresholds. Automated tests cover hysteresis, invalid thresholds and fresh session state. Hardware validation of the analog gate, deadline-driven actions, remapping, chords, layers, stick curves and Flick Stick remain open.
 
 ## Phase 5 — config, IPC, CLI and systemd
 Versioned TOML, snapshots, Unix socket protocol, diagnostics, udev permissions, systemd user service. **Exit:** live reload at sample boundaries and service restart/reconnect tested.

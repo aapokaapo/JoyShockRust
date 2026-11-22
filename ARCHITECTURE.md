@@ -22,12 +22,20 @@ flowchart TD
   SYSTEMD[systemd --user] -. lifecycle .-> ENGINE
 ```
 
+## Current implementation
+
+The Linux bridge owns one wired controller session, waits for hidraw readiness
+with `poll`, and drains reports in bounded batches. Udev supplies discovery
+and reconnect. The input and motion libraries are separate from Linux I/O.
+The diagram above shows the target architecture, including the planned deadline
+scheduler, control plane and additional transports.
+
 ## Threads and scheduling
 Start with one processing thread per controller. It owns the parser, mapping and motion state, and preferably submits output directly. A control-plane thread owns IPC, configuration persistence and diagnostics. Timer deadlines are integrated into the same processing event loop; don't spin when idle. A read-ready event may contain multiple reports: drain until EAGAIN, preserving order. Bound the amount of work per wakeup to avoid starvation; benchmark any batching.
 
 ## Suggested workspace (adjust only with evidence)
-- `joyshockrust-core`: normalized types, controller state and orchestration.
-- `joyshockrust-input`: hidraw transport, discovery, device-specific parsers.
+- `joyshockrust-core`: normalized controller types.
+- `joyshockrust-input`: device-specific report decoding, factory calibration and sensor timebase.
 - `joyshockrust-motion`: pure deterministic calibration, fusion and gyro mapping math.
 - `joyshockrust-mapping`: buttons, triggers, sticks and deadline-driven actions.
 - `joyshockrust-output`: output traits and state diffing.

@@ -7,6 +7,10 @@
 - Diff output state and avoid redundant writes, but preserve required release events and synchronization boundaries.
 - Test correct output lifetime, reconnect, stuck-key prevention and virtual-device identification.
 
+The bridge emits a generic virtual gamepad and optional relative mouse.
+The [test record](TESTING_AND_PERFORMANCE.md) covers uinput press/release and
+Steam USB reconnect. Per-game visibility still needs its own acceptance run.
+
 ## Physical controller visibility
 The daemon reads physical devices through hidraw. Games may also discover the physical controller through evdev, SDL, Steam Input, Wine/Proton or other paths, causing duplicate input.
 

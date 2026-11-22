@@ -27,12 +27,16 @@ Correct controller behavior first; then low input-to-output latency, low jitter,
 8. [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
 9. [TESTING_AND_PERFORMANCE.md](TESTING_AND_PERFORMANCE.md)
 
-## First task
-**Do Phase 0 research and Phase 1 design before writing a controller engine.** Verify actual USB HID reports, calibration constants, Linux driver interactions, permissions, and feature semantics against source and hardware. Preserve citations and evidence in research notes.
-
 ## Status
 
-The parser and timebase are covered by synthetic tests and replay of a stationary USB capture. Live hidraw validation remains pending. See the [implementation plan](IMPLEMENTATION_PLAN.md) and [source analysis](docs/REFERENCE_ANALYSIS.md).
+Development is in **Phase 4**, controller mappings. The USB parser replays a
+300-report capture. The Linux virtual gamepad, USB reconnect, gyro mouse
+startup, and digital hold and toggle gates have user-reported hardware tests.
+The analog trigger gate is covered by automated tests. Timed mappings and
+Flick Stick remain open, along with profiles and the control plane.
+
+See the [implementation plan](IMPLEMENTATION_PLAN.md), [test evidence](TESTING_AND_PERFORMANCE.md)
+and [source analysis](docs/REFERENCE_ANALYSIS.md).
 
 ## Local checks
 
@@ -112,7 +116,11 @@ window completes. The bias is measured again on each USB reconnect.
 Add `--gyro-hold l2` (or `--gyro-hold-l2`) to move the pointer only while
 L2 is held. Alternatively, use `--gyro-toggle r3` to switch gyro aiming on
 and off with each R3 press. A toggle starts off on every USB connection.
-Both modes can be combined with `--calibrate-gyro`.
+For analog travel, use `--gyro-trigger l2` or `--gyro-trigger r2:0.60:0.40`.
+The default trigger engages at 45% travel and releases at 35%. Custom
+thresholds use `SIDE:PRESS:RELEASE` in the range 0–1, with the release
+threshold below the press threshold. Select one binding per session.
+Any binding can be combined with `--calibrate-gyro`.
 
 Supported button names are `cross`, `circle`, `square`, `triangle`,
 `l1`, `r1`, `l2`, `r2`, `l3`, `r3`, `create`, `options`, `ps`,

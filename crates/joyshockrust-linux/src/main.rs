@@ -14,10 +14,14 @@ mod hidraw;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::{env, path::PathBuf};
 
-    use gyro_gate::Binding;
+    use gyro_gate::{Binding, TriggerGate};
     use joyshockrust_core::Button;
 
-    const USAGE: &str = "usage: joyshockrust-linux [--gyro-mouse [--calibrate-gyro] [--gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-hold-l2]] [/dev/hidrawN]";
+    const USAGE: &str = concat!(
+        "usage: joyshockrust-linux [--gyro-mouse [--calibrate-gyro] [BINDING]] [/dev/hidrawN]\n",
+        "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-hold-l2 | ",
+        "--gyro-trigger SIDE[:PRESS:RELEASE]",
+    );
     let mut gyro_mouse = false;
     let mut options = gyro_mouse::Options::default();
     let mut path = None;
@@ -31,12 +35,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             gyro_mouse = true;
         } else if arg == "--calibrate-gyro" && !options.calibrate {
             options.calibrate = true;
-        } else if arg == "--gyro-hold-l2" || arg == "--gyro-hold" || arg == "--gyro-toggle" {
+        } else if matches!(
+            arg.to_str(),
+            Some("--gyro-hold-l2" | "--gyro-hold" | "--gyro-toggle" | "--gyro-trigger")
+        ) {
             if !matches!(options.binding, Binding::Always) {
-                return Err("select only one gyro hold or toggle binding".into());
+                return Err("select only one gyro binding".into());
             }
             options.binding = if arg == "--gyro-hold-l2" {
                 Binding::Hold(Button::LeftTrigger)
+            } else if arg == "--gyro-trigger" {
+                let spec = args
+                    .next()
+                    .ok_or("expected an analog trigger specification")?;
+                Binding::AnalogTrigger(TriggerGate::parse(
+                    spec.to_str()
+                        .ok_or("invalid analog trigger specification")?,
+                )?)
             } else {
                 let name = args.next().ok_or("expected a gyro binding button name")?;
                 let button = name

@@ -3,7 +3,15 @@
 ## Chosen interface
 Use `/dev/hidraw*` directly; discovery/hotplug through udev. Open nonblocking, register fd with `epoll` (or an equivalently measured Linux event API), read complete HID reports, and decode based on device identity, transport, report ID and length. Treat errors and device removal explicitly.
 
-## Mandatory Phase 0 verification
+## Current evidence
+
+The stationary USB capture covers the wired report layout. The Linux bridge
+has been tested with a wired Edge. It uses USB ancestry and `HIDIOCGRAWINFO`
+to select a node, then waits for reads with `poll`. Annotated control and
+motion captures, versioned calibration evidence, and Bluetooth validation
+remain open. See the [hardware test record](TESTING_AND_PERFORMANCE.md).
+
+## Hardware verification checklist
 - Confirm actual DualSense Edge VID/PID, USB interface selection and report formats against Linux `hid-playstation`, kernel headers, USB captures and real hardware. **Do not hard-code previously discussed report IDs/lengths without verification.**
 - Identify what hidraw exposes when `hid-playstation` is bound, and whether simultaneous kernel input devices cause double input.
 - Determine the controller's IMU sample cadence, report timestamps, rollover behavior, calibration feature reports and conversion units.

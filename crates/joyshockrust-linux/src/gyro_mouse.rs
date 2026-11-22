@@ -50,7 +50,7 @@ impl GyroMouse {
 
     pub fn publish(&mut self, report: InputReport) -> io::Result<()> {
         let was_calibrating = self.aim.calibration.is_some();
-        let enabled = self.gate.enabled(report.controls.buttons);
+        let enabled = self.gate.enabled(&report.controls);
         let movement = self.aim.advance(report.imu, enabled);
         if was_calibrating && self.aim.calibration.is_none() {
             eprintln!("Gyro rest calibration complete");
