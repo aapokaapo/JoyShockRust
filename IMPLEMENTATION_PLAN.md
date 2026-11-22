@@ -103,11 +103,18 @@ command. [Live gyro sensitivity acceptance](TESTING_AND_PERFORMANCE.md#live-gyro
 The profile scales gyro and Flick Stick with a per-game factor. The
 calibration CLI uses the controller’s right stick to drive a temporary
 mouse and calculates the factor from whole camera turns. It saves the
-result to the selected profile. In-game validation is
-pending. [Game calibration acceptance](TESTING_AND_PERFORMANCE.md#game-sensitivity-calibration-acceptance)
+result to the selected profile. The user verified measurement and saving
+after four full in-game turns. The angular accuracy check after applying
+the profile remains open. [Game calibration acceptance](TESTING_AND_PERFORMANCE.md#game-sensitivity-calibration-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.
+
+The first increment adds per-connection HID decoder counts and an
+approximate host-side decoded report rate to the service status reply.
+Synthetic input covers successful and rejected reports and connection reset.
+USB and Bluetooth measurements are pending.
+[Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

@@ -205,6 +205,11 @@ The `battery_state` and `battery_percent` fields report the controller's
 latest battery reading. The percentage is an estimate in coarse steps.
 A missing reading is shown as `none`, including when the controller is
 disconnected.
+The `reports_decoded` and `reports_rejected` fields count HID decoder
+results for the current connection. The `report_rate_hz` field estimates
+decoded reports per second using host time after the first successful read
+batch. It shows `none` until at least a second has elapsed and a later
+batch has supplied a valid report. The counters reset to zero on disconnect.
 The `last_reload` field reports `not_attempted` on startup, then `applied`
 or `rejected` after the bridge handles a reload. A bridge started without a
 profile reports `unavailable`. To request the same reload directly, run

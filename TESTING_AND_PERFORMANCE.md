@@ -402,6 +402,10 @@ A manual bridge needs `--profile PATH --reload-socket SOCKET`. Pass the same
 
 ## Game sensitivity calibration acceptance
 
+The user completed four camera turns at a game sensitivity of `1.0` and
+confirmed that the tool printed and saved `real_world_calibration = 44.34375`
+and `in_game_sens = 1.0` to the profile.
+
 Run the [game calibration tool](README.md#game-sensitivity-calibration) in
 a game with a visible landmark. Use the right stick to complete several
 full camera turns and enter the whole-turn count. Verify that the tool
@@ -460,6 +464,22 @@ restart delay. Restore the version to 1, start the service again and check
 that `last_reload=not_attempted`. The user's Fedora run of `1e4b78c`
 confirmed exit status `78/CONFIG`, no automatic retry, and a successful
 manual restart after restoring version 1.
+
+## Report statistics acceptance
+
+With the updated service running, query `joyshockrust-linux --status`
+before connecting a controller. Expect zero decoded and rejected reports
+and `report_rate_hz=none`. Connect via USB and run the command twice,
+several seconds apart. Expect the decoded count to increase and a positive
+rate once there is at least one second of observation. Check that the
+decoded count continues increasing after a valid profile reload.
+Disconnect and check that the values reset. Repeat over Bluetooth with
+`transport = "auto"` in the startup profile. Record the model, transport,
+kernel and both status snapshots for each connection.
+
+The rate estimates how many HID reports the host decodes per second after
+the first successful read batch. The rejected count covers only
+reports that reached the parser and failed decoding.
 
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.

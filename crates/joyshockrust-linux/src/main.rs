@@ -565,6 +565,8 @@ fn forward_reports(
         if !ready.contains(PollFlags::POLLIN) {
             continue;
         }
+        let mut decoded = 0;
+        let mut rejected = 0;
         for _ in 0..32 {
             let len = match input.read(&mut report) {
                 Ok(0) => return Ok(()),
@@ -578,12 +580,20 @@ fn forward_reports(
                 }
                 Err(err) => return Err(err),
             };
-            if let Ok(report) =
-                parse_report(identity.model, identity.transport, &report[..len], None)
-                && publish(SessionEvent::Report(report))?.is_break()
-            {
-                return Ok(());
+            match parse_report(identity.model, identity.transport, &report[..len], None) {
+                Ok(report) => {
+                    decoded += 1;
+                    if publish(SessionEvent::Report(report))?.is_break() {
+                        return Ok(());
+                    }
+                }
+                Err(_) => rejected += 1,
             }
+        }
+        if let Some(status) = status
+            && (decoded > 0 || rejected > 0)
+        {
+            status.observe_reports(decoded, rejected);
         }
     }
 }

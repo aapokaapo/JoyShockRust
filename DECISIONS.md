@@ -210,3 +210,11 @@ movement between two confirmations at the same on-screen landmark. The
 operator supplies the number of complete turns. The command edits only
 the two calibration fields and replaces the profile atomically after
 validating it. [Game calibration instructions](README.md#game-sensitivity-calibration)
+
+Updated 2026-11-22. The version 1 status reply adds decoded and rejected HID
+report totals for the active connection and a host-time average decoded
+report rate. The input loop aggregates counts per read batch and records
+the first successful batch time once per connection. A status query
+computes the rate over elapsed host time, including idle periods. The
+counters persist across profile reloads and reset on disconnect.
+[Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
