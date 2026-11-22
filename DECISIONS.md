@@ -157,3 +157,8 @@ force feedback bitmap before opening them, then checks for `FF_RUMBLE`
 with evdev. The optional udev rule uses the existing active-seat ACL
 mechanism and matches physical DualSense or Edge event nodes with force
 feedback capabilities. [systemd active-seat ACL](https://github.com/systemd/systemd/blob/781d9d0789379d1ea1f2ecefb804d41e9c8b6c38/src/udev/udev-builtin-uaccess.c#L108-L163)
+
+Updated 2026-11-22. The wired Edge rumble diagnostic can send a single
+legacy USB pulse directly on a verified Edge hidraw node. The diagnostic
+sends a zero-amplitude report on completion or ordinary termination. The
+bridge still forwards rumble through evdev. [Linux report format and rumble flags](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1290-L1327) · [SDL legacy rumble](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/src/joystick/hidapi/SDL_hidapi_ps5.c#L692-L710)

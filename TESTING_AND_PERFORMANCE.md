@@ -319,7 +319,20 @@ writes through both paths without physical vibration. To check whether
 device gain suppresses the pulse, close other controller applications and
 repeat the physical test with `--reset-gain`. This restores the device-wide
 gain to the Linux default of 100% before the pulse. Compare the direct
-result over Bluetooth if USB still produces no vibration.
+result over Bluetooth if USB still produces no vibration. In the follow-up
+test the standard DualSense vibrated when addressed directly. Its virtual
+gamepad reported no rumble capability. The Edge produced no vibration from
+either path.
+
+To compare the Edge's legacy USB mode, stop the bridge and any other
+controller clients, leave the Edge connected over USB, and use the hidraw
+node shown by `--diagnose`. The test opens that node for writing and sends
+one pulse and a stop report.
+
+```sh
+cargo run --locked -p joyshockrust-linux --example rumble_test -- --edge-usb-legacy /dev/hidrawN
+```
+
 Check that vibration stops when the effect ends, the client exits or the
 controller disconnects. For in-game compatibility, record the game, Proton
 version and Steam Input setting.
