@@ -1,4 +1,12 @@
-use std::{error::Error, fs, path::Path};
+use std::{
+    env,
+    error::Error,
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+    process,
+};
 
 use serde::Deserialize;
 
@@ -55,6 +63,89 @@ pub struct RuntimeOptions {
 pub fn load(path: &Path) -> Result<RuntimeOptions, Box<dyn Error>> {
     let source = fs::read_to_string(path)?;
     parse(&source)
+}
+
+pub fn default_path() -> io::Result<PathBuf> {
+    env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|dir| dir.is_absolute())
+                .map(|home| home.join(".config"))
+        })
+        .map(|dir| dir.join("joyshockrust/profile.toml"))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "no absolute XDG_CONFIG_HOME or HOME",
+            )
+        })
+}
+
+pub fn install(source: &Path, destination: &Path) -> Result<(), Box<dyn Error>> {
+    let content =
+        fs::read_to_string(source).map_err(|err| format!("{}: {err}", source.display()))?;
+    parse(&content).map_err(|err| format!("{}: {err}", source.display()))?;
+    if destination.file_name().is_none() {
+        return Err("expected a destination file".into());
+    }
+    replace_file(destination, content.as_bytes())
+        .map_err(|err| format!("{}: {err}", destination.display()))?;
+    Ok(())
+}
+
+fn replace_file(destination: &Path, content: &[u8]) -> io::Result<()> {
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "destination must be a regular file",
+            ));
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    // Stage in the same directory so concurrent readers see either whole file.
+    for attempt in 0..64 {
+        let temporary = parent.join(format!(
+            ".joyshockrust-profile-{}-{attempt}.tmp",
+            process::id()
+        ));
+        if temporary.file_name() == destination.file_name() {
+            continue;
+        }
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        };
+        let result = file
+            .write_all(content)
+            .and_then(|()| file.sync_all())
+            .and_then(|()| fs::rename(&temporary, destination));
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        return result;
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not reserve a temporary profile file",
+    ))
 }
 
 fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {

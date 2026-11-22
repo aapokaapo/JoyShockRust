@@ -247,7 +247,18 @@ again. Expect the command to fail, the journal to report the rejection and
 the last working mapping to remain active. Restore the version when done. The same reload
 command works when USB is unplugged. The user's Fedora run of `5d13eda`
 confirmed successful reloads and rejection of profile version 2 with the
-same bridge process running.
+same bridge process running. The user's Fedora run of `4800d3b` also
+confirmed the systemd reload command reports success, failure and recovery.
+
+## Profile installation acceptance
+
+Install a valid preset to a separate file with
+`joyshockrust-linux --install-profile SOURCE DESTINATION`. Compare the
+files to check that comments and formatting match. Try to install a preset
+with version 2 to the same destination. Expect a nonzero exit and confirm
+that the destination still contains the first preset. For a live test,
+install a chosen preset as the service profile and reload the service.
+Check the mapping or gyro binding on the existing virtual devices.
 
 ## Service status acceptance
 

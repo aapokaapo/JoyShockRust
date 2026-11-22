@@ -97,6 +97,14 @@ mouse. The optional `[gyro.binding]` table takes `mode` and `input`. Modes are
 and `trigger`. Input names a digital button, a chord, or an analog trigger,
 depending on the mode. The [gyro-except-L2 profile](profiles/gyro-except-l2.toml)
 keeps gyro aim enabled until the digital L2 button is pressed.
+Use `joyshockrust-linux --install-profile SOURCE [DESTINATION]` to validate
+a saved preset and copy it into place, preserving its comments and formatting.
+The default destination is `$XDG_CONFIG_HOME/joyshockrust/profile.toml`, or
+`$HOME/.config/joyshockrust/profile.toml` when `XDG_CONFIG_HOME` is unset or
+relative. The command creates parent directories as needed and replaces an
+existing regular file. Symbolic link destinations are rejected. Reload the
+running service to apply the installed profile.
+
 The profile is loaded at startup. Send SIGHUP to the running bridge PID
 to reload it. Invalid edits leave the last valid configuration active. Choose the profile or the equivalent CLI
 mapping flags for that run. You can still pass a hidraw path with `--profile`.

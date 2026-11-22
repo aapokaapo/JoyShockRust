@@ -32,6 +32,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     const USAGE: &str = concat!(
         "usage: joyshockrust-linux --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
+        "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
         "       joyshockrust-linux --diagnose [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
@@ -42,6 +43,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "--gyro-double-tap BUTTON | --gyro-chord BUTTON,BUTTON | --gyro-hold-l2 | ",
         "--gyro-trigger SIDE[:PRESS:RELEASE]",
     );
+    #[derive(PartialEq)]
+    enum ProfileMode {
+        Run,
+        Check,
+        Install,
+    }
+
     let mut gyro_mouse = false;
     let mut options = gyro_mouse::Options::default();
     let mut path = None;
@@ -120,12 +128,20 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             status_path = Some(PathBuf::from(
                 args.next().ok_or("expected a status socket path")?,
             ));
-        } else if arg == "--profile" || arg == "--check-profile" {
+        } else if matches!(
+            arg.to_str(),
+            Some("--profile" | "--check-profile" | "--install-profile")
+        ) {
             if profile_path.is_some() {
                 return Err("select only one profile".into());
             }
             let file = args.next().ok_or("expected a profile path")?;
-            profile_path = Some((PathBuf::from(file), arg == "--check-profile"));
+            let mode = match arg.to_str() {
+                Some("--check-profile") => ProfileMode::Check,
+                Some("--install-profile") => ProfileMode::Install,
+                _ => ProfileMode::Run,
+            };
+            profile_path = Some((PathBuf::from(file), mode));
         } else if arg == "--flick-stick" {
             if options.flick_stick.is_some() {
                 return Err("select only one Flick Stick sensitivity".into());
@@ -197,11 +213,23 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         diagnostics::run(path.as_deref(), std::io::stdout().lock())?;
         return Ok(ExitCode::SUCCESS);
     }
-    let (mut runtime, reload) = if let Some((profile_path, check_only)) = profile_path {
+    let (mut runtime, reload) = if let Some((profile_path, mode)) = profile_path {
         if mapping_options {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
-        if check_only && (path.is_some() || sockets_configured) {
+        if mode == ProfileMode::Install {
+            if sockets_configured {
+                return Err("--install-profile takes a source and an optional destination".into());
+            }
+            let destination = match path {
+                Some(path) => path,
+                None => profile::default_path()?,
+            };
+            profile::install(&profile_path, &destination)?;
+            println!("Installed profile: {}", destination.display());
+            return Ok(ExitCode::SUCCESS);
+        }
+        if mode == ProfileMode::Check && (path.is_some() || sockets_configured) {
             return Err("--check-profile takes only a profile path".into());
         }
         let profile = match profile::load(&profile_path) {
@@ -212,7 +240,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 return Ok(ExitCode::from(78));
             }
         };
-        if check_only {
+        if mode == ProfileMode::Check {
             println!("Valid profile: {}", profile_path.display());
             return Ok(ExitCode::SUCCESS);
         }

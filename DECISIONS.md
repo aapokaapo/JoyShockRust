@@ -108,3 +108,9 @@ Unix socket in its private runtime directory. One connection requests one
 reload and receives its result after the bridge has applied or rejected the
 profile. The unit uses the client's exit status to report reload success or
 failure. Direct SIGHUP remains available. [systemd reload settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#ExecReload=)
+
+Updated 2026-11-22. Profile installation validates and stages the same
+source bytes before renaming them into place. The default destination
+follows the user configuration directory. The installed file has private
+permissions. Profile installation and live reload are separate operations.
+[XDG configuration directory](https://specifications.freedesktop.org/basedir-spec/latest/)
