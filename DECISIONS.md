@@ -295,6 +295,14 @@ controllers, show the same model and transport filter as startup, and
 probe access for matching nodes. Excluded inventory entries are identified
 from udev metadata. [Device diagnostics](README.md#device-diagnostics)
 
+Updated 2026-11-22. Profile selection can optionally require a six-octet
+controller ID. The bridge reads `HIDIOCGRAWUNIQ` from the opened
+descriptor because the Linux DualSense driver sets the HID unique string
+to the controller address. The setting is checked after model and
+transport, regardless of the reused hidraw node name. Diagnostics display
+actual addresses only through an explicit opt-in.
+[DualSense driver](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1755-L1760) · [hidraw API](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/include/uapi/linux/hidraw.h)
+
 Updated 2026-11-22. The common DualSense payload supplies two contact slots.
 Grid bindings are opt-in in version 1 profiles. Either active slot can
 hold a touch binding. The mechanical click selects the first active slot's

@@ -50,7 +50,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "usage: joyshockrust-linux --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
-        "       joyshockrust-linux --diagnose [--profile PATH] [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
+        "       joyshockrust-linux --diagnose [--profile PATH] [--show-controller-id] [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
@@ -77,6 +77,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut path = None;
     let mut profile_path = None;
     let mut diagnose = false;
+    let mut show_controller_id = false;
     let mut benchmark_target = None;
     let mut benchmark_timeout = None;
     let mut status_query = false;
@@ -152,6 +153,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             };
         } else if arg == "--diagnose" && !diagnose {
             diagnose = true;
+        } else if arg == "--show-controller-id" && !show_controller_id {
+            show_controller_id = true;
         } else if arg == "--benchmark-reports" && benchmark_target.is_none() {
             let value = args
                 .next()
@@ -277,6 +280,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some() || rumble_enabled;
     let socket_commands =
         u8::from(status_query) + u8::from(reload_query) + u8::from(load_profile_path.is_some());
+    if show_controller_id && !diagnose {
+        return Err("--show-controller-id requires --diagnose".into());
+    }
     if benchmark_timeout.is_some() && benchmark_target.is_none() {
         return Err("--benchmark-timeout requires --benchmark-reports".into());
     }
@@ -346,6 +352,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             path.as_deref(),
             filter,
             profile_path.is_some(),
+            show_controller_id,
             std::io::stdout().lock(),
         )?;
         return Ok(ExitCode::SUCCESS);

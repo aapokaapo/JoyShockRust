@@ -157,6 +157,8 @@ Profiles can constrain discovery, manual sessions, live benchmarks and
 game calibration to a selected DualSense model. The bridge continues
 to run one controller session at a time. Profile-aware diagnostics show
 which attached devices are excluded by the configured filter.
+Profiles can also constrain the selection to a single Linux HID unique
+ID. Same-model and cross-transport hardware checks remain open.
 [Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
 
 Process-lifetime counters expose started and ended controller sessions.

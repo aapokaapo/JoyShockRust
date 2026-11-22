@@ -560,6 +560,15 @@ service waits while the Edge remains connected. Reconnect the selected
 model, then repeat with `model = "dualsense-edge"`. With
 `transport = "auto"`, try each model over both USB and Bluetooth.
 
+For two controllers of the same model, use
+`--diagnose --auto-transport --show-controller-id` to obtain their IDs.
+Set `[bridge].controller_id` for one of them. Verify that profile-aware
+diagnostics exclude the other one. Start the service, confirm the intended
+controller produces input, then repeat over Bluetooth using the same
+profile. Record which selection matched on each transport. The optional
+diagnostic ID is the controller's hardware address. Omit it from shared
+test logs.
+
 With gyro enabled, also disconnect during the interval between the
 `Connected` log line and virtual device setup. If setup fails after
 the detach, expect a disconnect diagnostic and the same process to

@@ -18,7 +18,7 @@ use nix::{
 };
 
 use super::{
-    hidraw::{self, Identity},
+    hidraw::{self, ControllerId, Identity},
     reload::{self, Reload},
     status::StatusSocket,
     systemd,
@@ -66,6 +66,7 @@ pub enum ModelSelection {
 pub struct ControllerFilter {
     pub transport: Selection,
     pub model: ModelSelection,
+    pub controller_id: Option<ControllerId>,
 }
 
 impl ControllerFilter {
@@ -76,6 +77,11 @@ impl ControllerFilter {
                 ModelSelection::DualSense => identity.model == DeviceModel::DualSense,
                 ModelSelection::DualSenseEdge => identity.model == DeviceModel::DualSenseEdge,
             }
+    }
+
+    pub fn accepts_id(self, observed: Option<ControllerId>) -> bool {
+        self.controller_id
+            .is_none_or(|expected| Some(expected) == observed)
     }
 }
 
@@ -90,7 +96,11 @@ impl fmt::Display for ControllerFilter {
             Selection::Usb => write!(f, "wired {model}"),
             Selection::Bluetooth => write!(f, "Bluetooth {model}"),
             Selection::Auto => write!(f, "{model} over USB or Bluetooth"),
+        }?;
+        if self.controller_id.is_some() {
+            write!(f, " with the configured HID ID")?;
         }
+        Ok(())
     }
 }
 
@@ -104,6 +114,12 @@ pub fn open_controller(path: &Path, filter: ControllerFilter) -> io::Result<(Fil
         .ok_or_else(|| {
             io::Error::new(io::ErrorKind::Unsupported, format!("expected a {filter}"))
         })?;
+    if filter.controller_id.is_some() && !filter.accepts_id(hidraw::controller_id(&input)?) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "controller HID ID is absent or differs from the profile",
+        ));
+    }
     Ok((input, identity))
 }
 
@@ -367,6 +383,7 @@ mod tests {
                 ControllerFilter {
                     transport: Selection::Auto,
                     model: ModelSelection::DualSenseEdge,
+                    controller_id: None,
                 },
                 [true, true, false, false],
             ),
@@ -374,6 +391,7 @@ mod tests {
                 ControllerFilter {
                     transport: Selection::Bluetooth,
                     model: ModelSelection::DualSense,
+                    controller_id: None,
                 },
                 [false, false, false, true],
             ),

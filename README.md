@@ -161,6 +161,22 @@ discovery waits for it. The default `model = "any"` accepts either model.
 The model selection also applies to benchmarks and game calibration
 that use the profile.
 
+To select one individual controller, run
+`joyshockrust-linux --diagnose --auto-transport --show-controller-id`
+and copy that controller's reported ID into `[bridge]`.
+
+```toml
+[bridge]
+transport = "auto"
+model = "dualsense-edge"
+controller_id = "00:11:22:33:44:55"
+```
+
+Use your controller's value in place of the example. The ID comes from
+Linux's HID driver. A configured ID requires an exact match, with case
+ignored in hexadecimal digits. If the ID is unavailable, choose a model
+filter without an ID. Restart the service after changing the selection.
+
 ### Touchpad regions
 
 Add a `[touchpad]` grid to a version 1 profile for DualSense or DualSense
@@ -238,6 +254,7 @@ starting or restarting the bridge. It prints the effective controller
 filter and labels supported controllers outside that filter as
 `excluded by profile`. An optional `--bluetooth` or
 `--auto-transport` overrides the profile's transport for this check.
+Add `--show-controller-id` when you need to see individual HID IDs.
 
 Use `--benchmark-reports COUNT` for a bounded live bridge benchmark. It
 reports processing, host and device report interval percentiles plus

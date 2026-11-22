@@ -15,7 +15,9 @@ use crate::{
     game_calibration::GameCalibration,
     gamepad::{ButtonRemaps, OutputKind, StickCurve},
     gyro_gate::{self, Binding, DigitalInput, TriggerGate},
-    gyro_mouse, touchpad,
+    gyro_mouse,
+    hidraw::ControllerId,
+    touchpad,
 };
 
 #[derive(Deserialize)]
@@ -67,6 +69,7 @@ enum GyroBinding {
 pub struct BridgeOptions {
     pub transport: Selection,
     pub model: ModelSelection,
+    pub controller_id: Option<ControllerId>,
     pub gamepad: OutputKind,
     pub rumble: bool,
 }
@@ -76,6 +79,7 @@ impl BridgeOptions {
         ControllerFilter {
             transport: self.transport,
             model: self.model,
+            controller_id: self.controller_id,
         }
     }
 }
@@ -415,6 +419,7 @@ mod tests {
             BridgeOptions {
                 transport: Selection::Auto,
                 model: ModelSelection::DualSenseEdge,
+                controller_id: None,
                 gamepad: OutputKind::XboxSeries,
                 rumble: true,
             }
@@ -432,6 +437,7 @@ mod tests {
         for setting in [
             "transport = \"ethernet\"",
             "model = \"other\"",
+            "controller_id = \"01:23:45:67:89\"",
             "gamepad = \"sony\"",
             "rumble = \"true\"",
             "unknown = true",
