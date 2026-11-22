@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     fs::{File, OpenOptions},
     io,
     os::unix::fs::{MetadataExt, OpenOptionsExt},
@@ -37,6 +38,13 @@ impl Rumble {
             let Some(path) = device.devnode() else {
                 continue;
             };
+            // Inspect the input parent before opening any sibling event nodes.
+            let Some(input) = device.parent_with_subsystem("input")? else {
+                continue;
+            };
+            if !has_force_feedback(input.attribute_value("capabilities/ff")) {
+                continue;
+            }
             let physical = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -137,5 +145,32 @@ impl Rumble {
             }
         }
         Ok(())
+    }
+}
+
+fn has_force_feedback(capabilities: Option<&OsStr>) -> bool {
+    // Sysfs prints a whitespace-separated set of hexadecimal bitmap words.
+    // Test for a nonzero bitmap independent of the kernel's word size.
+    capabilities.is_some_and(|value| {
+        value
+            .as_encoded_bytes()
+            .iter()
+            .any(|byte| matches!(byte, b'1'..=b'9' | b'a'..=b'f' | b'A'..=b'F'))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rumble_probe_skips_event_nodes_without_force_feedback() {
+        assert!(!has_force_feedback(None));
+        for bitmap in ["", "0", "0000 0", "0 0\n"] {
+            assert!(!has_force_feedback(Some(OsStr::new(bitmap))));
+        }
+        for bitmap in ["10000 0", "0 0000000a", "A0000 0 0"] {
+            assert!(has_force_feedback(Some(OsStr::new(bitmap))));
+        }
     }
 }

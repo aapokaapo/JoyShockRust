@@ -193,7 +193,17 @@ controller. The bridge uses the force feedback evdev node belonging to
 the same controller, which must be writable. Look for
 `Rumble forwarding ready` in the log. If the node is unavailable, the
 bridge reports the reason and starts the virtual gamepad without rumble.
-See the [rumble test](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance).
+For a permission error in a local desktop session, the optional
+[udev rule](dist/udev/70-joyshockrust-rumble.rules) grants active-seat
+access to the force feedback nodes of supported DualSense controllers.
+
+```sh
+sudo install -Dm644 dist/udev/70-joyshockrust-rumble.rules /etc/udev/rules.d/70-joyshockrust-rumble.rules
+sudo udevadm control --reload-rules
+```
+
+Disconnect and reconnect the controller to apply the rule. See the
+[rumble test](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance).
 
 Add `--stick-curve 2` to soften small movements on both virtual gamepad
 sticks. The radial curve preserves direction, center, and full travel.

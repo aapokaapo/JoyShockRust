@@ -309,8 +309,10 @@ run `fftest /dev/input/eventN` against the **virtual** controller's event
 node to check forwarding independently of Steam. Check that vibration
 stops when the effect ends, the client exits or the controller disconnects.
 Reconnect and repeat over the other transport. If permissions prevent
-opening the physical node, check that the bridge logs the error and that
-normal input still works. The ignored `uinput_rumble_gamepad_advertises_ff_rumble`
+opening the physical node, check that the bridge names the force feedback
+node in its error and that normal input still works. Install the optional
+[rumble udev rule](README.md#virtual-gamepad-on-linux) in an active local
+session, reconnect and repeat the test. The ignored `uinput_rumble_gamepad_advertises_ff_rumble`
 test checks the virtual node's capabilities with a writable `/dev/uinput`
 and readable virtual event node.
 

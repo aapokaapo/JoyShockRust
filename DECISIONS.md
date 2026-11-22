@@ -151,3 +151,9 @@ owns transmission to the controller. Virtual effect IDs map to
 session-owned physical effects, which are removed on erase or session end.
 The virtual gamepad advertises rumble when a writable physical node is
 available. [Linux DualSense playback](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1621-L1640) · [Linux effect ownership and erase](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/ff-core.c#L124-L187)
+
+Updated 2026-11-22. Rumble discovery filters sibling input nodes by their
+force feedback bitmap before opening them, then checks for `FF_RUMBLE`
+with evdev. The optional udev rule uses the existing active-seat ACL
+mechanism and matches physical DualSense or Edge event nodes with force
+feedback capabilities. [systemd active-seat ACL](https://github.com/systemd/systemd/blob/781d9d0789379d1ea1f2ecefb804d41e9c8b6c38/src/udev/udev-builtin-uaccess.c#L108-L163)
