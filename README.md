@@ -130,7 +130,8 @@ journalctl --user -u joyshockrust.service -f
 The service uses the user manager's configuration directory. Edit
 `joyshockrust/profile.toml` there and run
 `systemctl --user reload joyshockrust.service` to load the changes. The
-journal reports `Profile reloaded` or `Profile reload rejected`. Reload
+command waits for the result and exits with an error if the bridge rejects
+the profile. The journal includes the rejection reason. Reload
 keeps the virtual gamepad. Changing gyro settings may recreate the mouse
 and restart its calibration. If the profile is invalid or unreadable at
 startup, the service stops. Correct the profile, check it with
@@ -145,11 +146,11 @@ The command prints `controller=waiting` or `controller=connected` and
 `gyro_configured=true` or `gyro_configured=false`. The gyro field describes
 the loaded profile. A hold or toggle binding can still suppress mouse output.
 The `last_reload` field reports `not_attempted` on startup, then `applied`
-or `rejected` after SIGHUP is handled. A bridge started without a profile
-reports `unavailable`. Wait for the reload result in the journal before
-querying status.
-The service socket is at `$XDG_RUNTIME_DIR/joyshockrust/status.sock` and is
-removed when the service stops.
+or `rejected` after the bridge handles a reload. A bridge started without a
+profile reports `unavailable`. To request the same reload directly, run
+`$HOME/.local/bin/joyshockrust-linux --reload-profile`.
+The status and reload sockets are under `$XDG_RUNTIME_DIR/joyshockrust/`
+and are removed when the service stops.
 
 ## Virtual gamepad on Linux
 

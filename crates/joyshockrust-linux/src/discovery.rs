@@ -30,7 +30,7 @@ pub fn open_wired_edge(path: &Path) -> io::Result<File> {
 
 pub enum Event<'a> {
     Connected(&'a mut File),
-    Reload(&'a Reload),
+    Reload(reload::Request<'a>),
 }
 
 pub fn run(
@@ -62,12 +62,13 @@ pub fn run(
                 waiting = true;
             }
             loop {
-                let (ready, requested) = reload::wait(monitor.as_fd(), reload, status)?;
+                let (ready, request) = reload::wait(monitor.as_fd(), reload, status)?;
                 if ready.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
                     return Err(io::Error::other("udev monitor lost"));
                 }
-                if let Some(reload) = reload.filter(|_| requested) {
-                    handle(Event::Reload(reload))?;
+                let requested = request.is_some();
+                if let Some(request) = request {
+                    handle(Event::Reload(request))?;
                 }
                 if ready.contains(PollFlags::POLLIN) {
                     for _ in monitor.iter().take(64) {}

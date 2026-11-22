@@ -34,7 +34,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --check-profile PATH\n",
         "       joyshockrust-linux --diagnose [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
-        "bridge option: --status-socket SOCKET\n",
+        "       joyshockrust-linux --reload-profile [SOCKET]\n",
+        "bridge options: --status-socket SOCKET [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -47,6 +48,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut profile_path = None;
     let mut diagnose = false;
     let mut status_query = false;
+    let mut reload_query = false;
+    let mut reload_path = None;
     let mut status_path = None;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
@@ -107,6 +110,12 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             diagnose = true;
         } else if arg == "--status" && !status_query {
             status_query = true;
+        } else if arg == "--reload-profile" && !reload_query {
+            reload_query = true;
+        } else if arg == "--reload-socket" && reload_path.is_none() {
+            reload_path = Some(PathBuf::from(
+                args.next().ok_or("expected a reload socket path")?,
+            ));
         } else if arg == "--status-socket" && status_path.is_none() {
             status_path = Some(PathBuf::from(
                 args.next().ok_or("expected a status socket path")?,
@@ -163,15 +172,26 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         return Err("gyro options require --gyro-mouse".into());
     }
     let mapping_options = gyro_mouse || stick_curve.is_some() || !remaps.is_empty();
-    if status_query {
-        if diagnose || profile_path.is_some() || status_path.is_some() || mapping_options {
-            return Err("--status takes only an optional socket path".into());
+    let sockets_configured = status_path.is_some() || reload_path.is_some();
+    if status_query || reload_query {
+        if (status_query && reload_query)
+            || diagnose
+            || profile_path.is_some()
+            || sockets_configured
+            || mapping_options
+        {
+            return Err("select one socket command with only an optional socket path".into());
         }
-        status::query(path.as_deref(), std::io::stdout().lock())?;
+        if status_query {
+            status::query(path.as_deref(), std::io::stdout().lock())?;
+        } else if let Err(err) = reload::request(path.as_deref()) {
+            eprintln!("{err}");
+            return Ok(ExitCode::FAILURE);
+        }
         return Ok(ExitCode::SUCCESS);
     }
     if diagnose {
-        if profile_path.is_some() || status_path.is_some() || mapping_options {
+        if profile_path.is_some() || sockets_configured || mapping_options {
             return Err("--diagnose takes only an optional hidraw path".into());
         }
         diagnostics::run(path.as_deref(), std::io::stdout().lock())?;
@@ -181,7 +201,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         if mapping_options {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
-        if check_only && (path.is_some() || status_path.is_some()) {
+        if check_only && (path.is_some() || sockets_configured) {
             return Err("--check-profile takes only a profile path".into());
         }
         let profile = match profile::load(&profile_path) {
@@ -196,8 +216,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             println!("Valid profile: {}", profile_path.display());
             return Ok(ExitCode::SUCCESS);
         }
-        (profile, Some(reload::Reload::new(profile_path)?))
+        (
+            profile,
+            Some(reload::Reload::new(profile_path, reload_path.as_deref())?),
+        )
     } else {
+        if reload_path.is_some() {
+            return Err("--reload-socket requires --profile".into());
+        }
         (
             profile::RuntimeOptions {
                 gyro: gyro_mouse.then_some(options),
@@ -339,7 +365,7 @@ fn main() {
 #[cfg(target_os = "linux")]
 enum SessionEvent<'a> {
     Report(joyshockrust_input::InputReport),
-    Reload(&'a reload::Reload),
+    Reload(reload::Request<'a>),
 }
 
 #[cfg(target_os = "linux")]
@@ -360,9 +386,9 @@ fn forward_reports(
     // length validation when a node delivers a report larger than 64 bytes.
     let mut report = [0; 16_384];
     loop {
-        let (ready, requested) = reload::wait(input.as_fd(), reload, status)?;
-        if let Some(reload) = reload.filter(|_| requested) {
-            publish(SessionEvent::Reload(reload))?;
+        let (ready, request) = reload::wait(input.as_fd(), reload, status)?;
+        if let Some(request) = request {
+            publish(SessionEvent::Reload(request))?;
         }
         if ready.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Ok(());

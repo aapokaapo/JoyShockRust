@@ -102,3 +102,9 @@ Updated 2026-11-22. An invalid or unreadable startup profile exits with
 The version 1 snapshot includes the most recent reload result. The process
 records success only after applying the profile, and a rejected reload keeps
 the previous settings. [systemd restart settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#RestartPreventExitStatus=)
+
+Updated 2026-11-22. The user unit requests reload through a dedicated
+Unix socket in its private runtime directory. One connection requests one
+reload and receives its result after the bridge has applied or rejected the
+profile. The unit uses the client's exit status to report reload success or
+failure. Direct SIGHUP remains available. [systemd reload settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#ExecReload=)

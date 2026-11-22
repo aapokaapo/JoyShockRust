@@ -1,9 +1,12 @@
 use std::{
     cell::Cell,
     fmt::Display,
-    io,
-    os::fd::{AsFd, BorrowedFd},
-    path::PathBuf,
+    io::{self, Read, Write},
+    os::{
+        fd::{AsFd, BorrowedFd},
+        unix::net::{UnixListener, UnixStream},
+    },
+    path::{Path, PathBuf},
 };
 
 use nix::{
@@ -17,12 +20,13 @@ use nix::{
 
 use crate::{
     profile::{self, RuntimeOptions},
-    status::StatusSocket,
+    status::{self, StatusSocket},
 };
 
 pub struct Reload {
     path: PathBuf,
     signal: SignalFd,
+    listener: Option<UnixListener>,
     outcome: Cell<Outcome>,
 }
 
@@ -34,7 +38,19 @@ enum Outcome {
 }
 
 impl Reload {
-    pub fn new(path: PathBuf) -> io::Result<Self> {
+    pub fn new(path: PathBuf, socket: Option<&Path>) -> io::Result<Self> {
+        let listener = socket
+            .map(|path| {
+                let listener = UnixListener::bind(path).map_err(|err| {
+                    io::Error::new(
+                        err.kind(),
+                        format!("could not bind {}: {err}", path.display()),
+                    )
+                })?;
+                listener.set_nonblocking(true)?;
+                Ok::<_, io::Error>(listener)
+            })
+            .transpose()?;
         let mut signals = SigSet::empty();
         signals.add(Signal::SIGHUP);
         signals.thread_block()?;
@@ -43,27 +59,9 @@ impl Reload {
         Ok(Self {
             path,
             signal,
+            listener,
             outcome: Cell::new(Outcome::NotAttempted),
         })
-    }
-
-    pub fn load(&self) -> Option<RuntimeOptions> {
-        match profile::load(&self.path) {
-            Ok(profile) => Some(profile),
-            Err(err) => {
-                self.rejected(err);
-                None
-            }
-        }
-    }
-
-    pub fn applied(&self) {
-        self.outcome.set(Outcome::Applied);
-        eprintln!("Profile reloaded: {}", self.path.display());
-    }
-    pub fn rejected(&self, err: impl Display) {
-        self.outcome.set(Outcome::Rejected);
-        eprintln!("Profile reload rejected ({}): {err}", self.path.display());
     }
 
     fn outcome(&self) -> &'static str {
@@ -75,11 +73,65 @@ impl Reload {
     }
 }
 
-pub fn wait(
+pub struct Request<'a> {
+    reload: &'a Reload,
+    client: Option<UnixStream>,
+}
+
+impl Request<'_> {
+    pub fn load(&self) -> Option<RuntimeOptions> {
+        match profile::load(&self.reload.path) {
+            Ok(profile) => Some(profile),
+            Err(err) => {
+                self.rejected(err);
+                None
+            }
+        }
+    }
+
+    pub fn applied(self) {
+        self.reload.outcome.set(Outcome::Applied);
+        eprintln!("Profile reloaded: {}", self.reload.path.display());
+        self.reply(b"applied\n");
+    }
+    pub fn rejected(&self, err: impl Display) {
+        self.reload.outcome.set(Outcome::Rejected);
+        eprintln!(
+            "Profile reload rejected ({}): {err}",
+            self.reload.path.display()
+        );
+        self.reply(b"rejected\n");
+    }
+
+    fn reply(&self, response: &[u8]) {
+        if let Some(mut client) = self.client.as_ref() {
+            let _ = client.write_all(response);
+        }
+    }
+}
+
+pub fn request(path: Option<&Path>) -> io::Result<()> {
+    let stream = status::connect(path, "reload.sock")?;
+    let mut response = Vec::new();
+    stream.take(32).read_to_end(&mut response)?;
+    match response.as_slice() {
+        b"applied\n" => Ok(()),
+        b"rejected\n" => Err(io::Error::other(
+            "profile reload rejected; see the bridge log for details",
+        )),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "profile reload returned no valid result",
+        )),
+    }
+}
+
+pub fn wait<'a>(
     fd: BorrowedFd<'_>,
-    reload: Option<&Reload>,
+    reload: Option<&'a Reload>,
     status: Option<&StatusSocket>,
-) -> io::Result<(PollFlags, bool)> {
+) -> io::Result<(PollFlags, Option<Request<'a>>)> {
+    let listener = reload.and_then(|reload| reload.listener.as_ref());
     let mut descriptors = [
         PollFd::new(fd, PollFlags::POLLIN),
         PollFd::new(
@@ -87,8 +139,11 @@ pub fn wait(
             reload.map_or(PollFlags::empty(), |_| PollFlags::POLLIN),
         ),
         PollFd::new(status.map_or(fd, StatusSocket::as_fd), PollFlags::POLLIN),
+        PollFd::new(listener.map_or(fd, AsFd::as_fd), PollFlags::POLLIN),
     ];
-    let len = if status.is_some() {
+    let len = if listener.is_some() {
+        4
+    } else if status.is_some() {
         3
     } else if reload.is_some() {
         2
@@ -121,8 +176,80 @@ pub fn wait(
             status.respond(reload.map_or("unavailable", Reload::outcome))?;
         }
     }
+    let mut client = None;
+    if let Some(listener) = listener {
+        let flags = descriptors[3].revents().unwrap_or_else(PollFlags::empty);
+        if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
+            return Err(io::Error::other("profile reload socket lost"));
+        }
+        if flags.contains(PollFlags::POLLIN) {
+            // One connection per wake leaves report processing a chance to run.
+            match listener.accept() {
+                Ok((stream, _)) if stream.set_nonblocking(true).is_ok() => client = Some(stream),
+                Ok(_) => {}
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::WouldBlock
+                            | io::ErrorKind::Interrupted
+                            | io::ErrorKind::ConnectionAborted
+                    ) => {}
+                Err(err) => return Err(err),
+            }
+        }
+    }
+    let request = reload
+        .filter(|_| requested || client.is_some())
+        .map(|reload| Request { reload, client });
     Ok((
         descriptors[0].revents().unwrap_or_else(PollFlags::empty),
-        requested,
+        request,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        os::{linux::net::SocketAddrExt, unix::net::SocketAddr},
+        process,
+        time::Duration,
+    };
+
+    use super::*;
+
+    #[test]
+    fn reload_socket_replies_with_the_result_for_each_client() {
+        let address =
+            SocketAddr::from_abstract_name(format!("joyshockrust-reload-{}", process::id()))
+                .unwrap();
+        let listener = UnixListener::bind_addr(&address).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let reload = Reload {
+            path: PathBuf::from("/dev/null"),
+            signal: SignalFd::new(&SigSet::empty()).unwrap(),
+            listener: Some(listener),
+            outcome: Cell::new(Outcome::NotAttempted),
+        };
+        let (_sender, input) = UnixStream::pair().unwrap();
+        let mut first = UnixStream::connect_addr(&address).unwrap();
+        let mut second = UnixStream::connect_addr(&address).unwrap();
+        for client in [&first, &second] {
+            client
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+        }
+
+        let (ready, request) = wait(input.as_fd(), Some(&reload), None).unwrap();
+        assert!(ready.is_empty());
+        assert!(request.unwrap().load().is_none());
+        let mut response = String::new();
+        first.read_to_string(&mut response).unwrap();
+        assert_eq!(response, "rejected\n");
+
+        let (_, request) = wait(input.as_fd(), Some(&reload), None).unwrap();
+        request.unwrap().applied();
+        response.clear();
+        second.read_to_string(&mut response).unwrap();
+        assert_eq!(response, "applied\n");
+    }
 }

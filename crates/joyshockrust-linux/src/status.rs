@@ -77,6 +77,12 @@ impl StatusSocket {
 }
 
 pub fn query(path: Option<&Path>, mut output: impl Write) -> io::Result<()> {
+    let stream = connect(path, "status.sock")?;
+    io::copy(&mut stream.take(512), &mut output)?;
+    Ok(())
+}
+
+pub(crate) fn connect(path: Option<&Path>, socket_name: &str) -> io::Result<UnixStream> {
     let default_path;
     let path = if let Some(path) = path {
         path
@@ -88,7 +94,8 @@ pub fn query(path: Option<&Path>, mut output: impl Write) -> io::Result<()> {
                     io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset")
                 })?,
         )
-        .join("joyshockrust/status.sock");
+        .join("joyshockrust")
+        .join(socket_name);
         &default_path
     };
     let stream = UnixStream::connect(path).map_err(|err| {
@@ -98,8 +105,7 @@ pub fn query(path: Option<&Path>, mut output: impl Write) -> io::Result<()> {
         )
     })?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    io::copy(&mut stream.take(512), &mut output)?;
-    Ok(())
+    Ok(stream)
 }
 
 #[cfg(test)]
@@ -143,7 +149,7 @@ mod tests {
             let (ready, requested) =
                 crate::reload::wait(input.as_fd(), None, Some(&status)).unwrap();
             assert!(ready.is_empty());
-            assert!(!requested);
+            assert!(requested.is_none());
             let mut response = String::new();
             client.read_to_string(&mut response).unwrap();
             assert_eq!(response, expected);
