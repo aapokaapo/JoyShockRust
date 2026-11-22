@@ -4,18 +4,29 @@ use evdev::{
     AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode, RelativeAxisCode as Axis,
     uinput::VirtualDevice,
 };
-use joyshockrust_input::{RawImuSample, Timebase, TimestampUpdate, UsbFactoryCalibration};
+use joyshockrust_input::{
+    InputReport, RawImuSample, Timebase, TimestampUpdate, UsbFactoryCalibration,
+};
 use joyshockrust_motion::{
     Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
 };
 
+use super::gyro_gate::{Binding, GyroGate};
+
 pub struct GyroMouse {
     aim: GyroAim,
     output: VirtualDevice,
+    gate: GyroGate,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Options {
+    pub calibrate: bool,
+    pub binding: Binding,
 }
 
 impl GyroMouse {
-    pub fn open(input: &File, calibrate: bool) -> io::Result<Self> {
+    pub fn open(input: &File, options: Options) -> io::Result<Self> {
         let factory = super::hidraw::read_factory_calibration(input).map_err(|err| {
             io::Error::other(format!("could not read factory calibration: {err}"))
         })?;
@@ -31,14 +42,16 @@ impl GyroMouse {
             .with_relative_axes(&axes)?
             .build()?;
         Ok(Self {
-            aim: GyroAim::new(factory, calibrate),
+            aim: GyroAim::new(factory, options.calibrate),
             output,
+            gate: GyroGate::new(options.binding),
         })
     }
 
-    pub fn publish(&mut self, sample: RawImuSample) -> io::Result<()> {
+    pub fn publish(&mut self, report: InputReport) -> io::Result<()> {
         let was_calibrating = self.aim.calibration.is_some();
-        let movement = self.aim.advance(sample);
+        let enabled = self.gate.enabled(report.controls.buttons);
+        let movement = self.aim.advance(report.imu, enabled);
         if was_calibrating && self.aim.calibration.is_none() {
             eprintln!("Gyro rest calibration complete");
         }
@@ -63,6 +76,7 @@ struct GyroAim {
     motion: MotionEngine,
     calibration: Option<StationaryCalibration>,
     remainder: [f64; 2],
+    was_enabled: bool,
 }
 
 impl GyroAim {
@@ -77,6 +91,7 @@ impl GyroAim {
                 .expect("valid gyro mouse defaults"),
             calibration: calibrate.then(StationaryCalibration::default),
             remainder: [0.0; 2],
+            was_enabled: false,
         }
     }
 
@@ -90,7 +105,14 @@ impl GyroAim {
         }
     }
 
-    fn advance(&mut self, sample: RawImuSample) -> [i32; 2] {
+    fn advance(&mut self, sample: RawImuSample, enabled: bool) -> [i32; 2] {
+        // Only emit motion for an interval that starts and ends with aim
+        // enabled. Apply button transitions even on repeated IMU timestamps.
+        let emit_motion = self.was_enabled && enabled;
+        self.was_enabled = enabled;
+        if !emit_motion {
+            self.remainder = [0.0; 2];
+        }
         let elapsed = match self.timebase.observe(sample.device_ticks) {
             TimestampUpdate::FirstSample => Duration::ZERO,
             TimestampUpdate::Advanced { elapsed, .. } => elapsed,
@@ -121,6 +143,10 @@ impl GyroAim {
             self.reset_motion();
             return [0; 2];
         };
+
+        if !emit_motion {
+            return [0; 2];
+        }
 
         // Retain fractional movement so repeated sub-count deltas still move
         // the pointer. Clear these fractions on discontinuities.
@@ -180,10 +206,10 @@ mod tests {
     #[test]
     fn fractional_motion_accumulates_in_pointer_direction_on_both_axes() {
         let mut aim = aim(false);
-        assert_eq!(aim.advance(sample(0)), [0, 0]);
+        assert_eq!(aim.advance(sample(0), true), [0, 0]);
         let mut total = [0, 0];
         for step in 1..=10 {
-            let delta = aim.advance(sample(step * 3000));
+            let delta = aim.advance(sample(step * 3000), true);
             total[0] += delta[0];
             total[1] += delta[1];
         }
@@ -193,12 +219,31 @@ mod tests {
     #[test]
     fn duplicates_and_gaps_do_not_generate_pointer_jumps() {
         let mut aim = aim(false);
-        assert_eq!(aim.advance(sample(0)), [0, 0]);
-        assert_eq!(aim.advance(sample(6000)), [0, 0]);
-        assert_eq!(aim.advance(sample(6000)), [0, 0]);
-        assert_eq!(aim.advance(sample(3000)), [0, 0]);
-        assert_eq!(aim.advance(sample(500_000)), [0, 0]);
-        assert_eq!(aim.advance(sample(503_000)), [0, 0]);
+        assert_eq!(aim.advance(sample(0), true), [0, 0]);
+        assert_eq!(aim.advance(sample(6000), true), [0, 0]);
+        assert_eq!(aim.advance(sample(6000), true), [0, 0]);
+        assert_eq!(aim.advance(sample(3000), true), [0, 0]);
+        assert_eq!(aim.advance(sample(500_000), true), [0, 0]);
+        assert_eq!(aim.advance(sample(503_000), true), [0, 0]);
+    }
+
+    #[test]
+    fn hold_gate_discards_inactive_motion_and_fractional_carry() {
+        let mut aim = aim(false);
+        for (ticks, enabled) in [
+            (0, false),
+            (12_000, false),
+            (24_000, true),
+            (27_000, true),
+            (27_000, false), // release without a new IMU timestamp
+            (30_000, false),
+            (33_000, true),
+            (36_000, true),
+            (39_000, true),
+        ] {
+            assert_eq!(aim.advance(sample(ticks), enabled), [0, 0], "{ticks}");
+        }
+        assert_eq!(aim.advance(sample(42_000), true), [-1, 0]);
     }
 
     #[test]
@@ -211,17 +256,17 @@ mod tests {
         };
 
         for ms in (0..=1000).step_by(10) {
-            assert_eq!(aim.advance(rest(ms)), [0; 2]);
+            assert_eq!(aim.advance(rest(ms), true), [0; 2]);
         }
         assert!(aim.calibration.is_none());
         for ms in (1010..=1500).step_by(10) {
-            assert_eq!(aim.advance(rest(ms)), [0; 2]);
+            assert_eq!(aim.advance(rest(ms), true), [0; 2]);
         }
         let mut horizontal = 0;
         for ms in (1510..=3000).step_by(10) {
             let mut sample = rest(ms);
             sample.gyro_counts[1] = 12;
-            horizontal += aim.advance(sample)[0];
+            horizontal += aim.advance(sample, true)[0];
         }
         assert_eq!(horizontal, -1);
     }

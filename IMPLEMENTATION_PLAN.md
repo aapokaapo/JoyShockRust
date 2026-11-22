@@ -43,6 +43,8 @@ The motion engine accepts calibrated IMU samples, applies a supplied gyro bias, 
 ## Phase 4 — mapping engine
 Add remapping, tap/hold/double-tap, chords, layers, trigger modes, stick curves and Flick Stick with deadline scheduler. **Exit:** deterministic state-machine tests and no unnecessary global polling.
 
+The first mapping increment supports an optional digital button hold or toggle for gyro aim, with an L2 shortcut. Inactive intervals and the interval across a gate transition produce no pointer motion. Synthetic tests cover release on a repeated timestamp, reactivation without fractional carry, and toggle edges. Timed mappings and Flick Stick remain open.
+
 ## Phase 5 — config, IPC, CLI and systemd
 Versioned TOML, snapshots, Unix socket protocol, diagnostics, udev permissions, systemd user service. **Exit:** live reload at sample boundaries and service restart/reconnect tested.
 

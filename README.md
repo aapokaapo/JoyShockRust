@@ -109,4 +109,14 @@ four relative counts per degree on both axes. To measure residual gyro bias,
 add `--calibrate-gyro`, put the controller on a stable surface, and wait for
 `Gyro rest calibration complete`. Pointer output starts when the calibration
 window completes. The bias is measured again on each USB reconnect.
+Add `--gyro-hold l2` (or `--gyro-hold-l2`) to move the pointer only while
+L2 is held. Alternatively, use `--gyro-toggle r3` to switch gyro aiming on
+and off with each R3 press. A toggle starts off on every USB connection.
+Both modes can be combined with `--calibrate-gyro`.
+
+Supported button names are `cross`, `circle`, `square`, `triangle`,
+`l1`, `r1`, `l2`, `r2`, `l3`, `r3`, `create`, `options`, `ps`,
+`touchpad`, `mute`, `fn-left`, `fn-right`, `paddle-left` and
+`paddle-right`. L2 and R2 use their digital button states.
+
 [USB gyro test](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)

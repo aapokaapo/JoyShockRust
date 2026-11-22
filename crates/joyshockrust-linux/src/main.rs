@@ -3,6 +3,8 @@ mod discovery;
 #[cfg(target_os = "linux")]
 mod gamepad;
 #[cfg(target_os = "linux")]
+mod gyro_gate;
+#[cfg(target_os = "linux")]
 mod gyro_mouse;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
@@ -12,35 +14,59 @@ mod hidraw;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::{env, path::PathBuf};
 
-    const USAGE: &str =
-        "usage: joyshockrust-linux [--gyro-mouse [--calibrate-gyro]] [/dev/hidrawN]";
+    use gyro_gate::Binding;
+    use joyshockrust_core::Button;
+
+    const USAGE: &str = "usage: joyshockrust-linux [--gyro-mouse [--calibrate-gyro] [--gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-hold-l2]] [/dev/hidrawN]";
     let mut gyro_mouse = false;
-    let mut calibrate_gyro = false;
+    let mut options = gyro_mouse::Options::default();
     let mut path = None;
-    for arg in env::args_os().skip(1) {
+    let mut args = env::args_os().skip(1);
+    while let Some(arg) = args.next() {
         if arg == "--help" {
             println!("{USAGE}");
             return Ok(());
         }
         if arg == "--gyro-mouse" && !gyro_mouse {
             gyro_mouse = true;
-        } else if arg == "--calibrate-gyro" && !calibrate_gyro {
-            calibrate_gyro = true;
+        } else if arg == "--calibrate-gyro" && !options.calibrate {
+            options.calibrate = true;
+        } else if arg == "--gyro-hold-l2" || arg == "--gyro-hold" || arg == "--gyro-toggle" {
+            if !matches!(options.binding, Binding::Always) {
+                return Err("select only one gyro hold or toggle binding".into());
+            }
+            options.binding = if arg == "--gyro-hold-l2" {
+                Binding::Hold(Button::LeftTrigger)
+            } else {
+                let name = args.next().ok_or("expected a gyro binding button name")?;
+                let button = name
+                    .to_str()
+                    .and_then(gyro_gate::button_by_name)
+                    .ok_or_else(|| {
+                        format!("unknown gyro binding button: {}", name.to_string_lossy())
+                    })?;
+                if arg == "--gyro-hold" {
+                    Binding::Hold(button)
+                } else {
+                    Binding::Toggle(button)
+                }
+            };
         } else if path.is_none() && !arg.as_encoded_bytes().starts_with(b"-") {
             path = Some(PathBuf::from(arg));
         } else {
             return Err(USAGE.into());
         }
     }
-    if calibrate_gyro && !gyro_mouse {
-        return Err("--calibrate-gyro requires --gyro-mouse".into());
+    if (options.calibrate || !matches!(options.binding, Binding::Always)) && !gyro_mouse {
+        return Err("gyro options require --gyro-mouse".into());
     }
+    let options = gyro_mouse.then_some(options);
     if let Some(path) = path {
         let mut input = discovery::open_wired_edge(&path)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-        serve_session(&mut input, gyro_mouse, calibrate_gyro)?;
+        serve_session(&mut input, options)?;
     } else {
-        discovery::run(|input| serve_session(input, gyro_mouse, calibrate_gyro))?;
+        discovery::run(|input| serve_session(input, options))?;
     }
     Ok(())
 }
@@ -48,14 +74,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(target_os = "linux")]
 fn serve_session(
     input: &mut std::fs::File,
-    gyro_mouse: bool,
-    calibrate_gyro: bool,
+    options: Option<gyro_mouse::Options>,
 ) -> std::io::Result<()> {
-    let mut mouse = if gyro_mouse {
-        let mouse = gyro_mouse::GyroMouse::open(input, calibrate_gyro)
+    let mut mouse = if let Some(options) = options {
+        let mouse = gyro_mouse::GyroMouse::open(input, options)
             .map_err(|err| std::io::Error::other(format!("could not start gyro mouse: {err}")))?;
         eprintln!("JoyShockRust Gyro Mouse ready");
-        if calibrate_gyro {
+        if options.calibrate {
             eprintln!("Set the controller down and keep it still for gyro calibration");
         }
         Some(mouse)
@@ -68,7 +93,7 @@ fn serve_session(
     let result = forward_reports(input, |report| {
         state.publish(report.controls, |events| output.emit(events))?;
         if let Some(mouse) = &mut mouse {
-            mouse.publish(report.imu)?;
+            mouse.publish(report)?;
         }
         Ok(())
     });

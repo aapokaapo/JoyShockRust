@@ -101,6 +101,16 @@ at least a second of stable input. After completion, check for drift and
 confirm that slow deliberate rotation still moves the pointer. Repeat after
 USB reconnect to verify that a fresh calibration is requested.
 
+For the Phase 4 hold gate, run with `--gyro-mouse --gyro-hold-l2`.
+Rotate with L2 released and check that the pointer stays still. Hold L2
+while rotating and check that motion starts without a jump. Release L2
+while rotating and check that the pointer stops. Press L2 again to check
+that inactive motion did not carry over. Repeat after reconnect.
+
+Run again with `--gyro-mouse --gyro-toggle r3`. Confirm aim starts off,
+turns on with one R3 press, stays on through release, and turns off with
+the next press. Reconnect and confirm aim starts off again.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

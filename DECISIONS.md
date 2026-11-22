@@ -57,3 +57,7 @@ Recorded 2026-11-22. The pure engine integrates calibrated device-axis angular v
 The experimental USB path uses the SDL HIDAPI convention of subtracting the factory gyro bias and scaling by the endpoint spans. It requires a structurally valid feature report and keeps the default gamepad mode available separately. The Linux mouse accumulates fractional movement within each segment and clears it across gaps. Report validation and the conversion are synthetic-tested. Physical direction, gain and remaining drift need measurement. [Calibration sources](docs/REFERENCE_ANALYSIS.md#calibration-and-units)
 
 The `--calibrate-gyro` mode uses an explicit stationary window at the start of each USB session. It withholds mouse motion until the window completes, then applies a fixed residual bias. The mode keeps profile storage and automatic bias learning separate. The stationary thresholds are provisional pending hardware tests. [Calibration contract](MOTION_CONTRACT.md#calibration)
+
+## Phase 4 first increment
+
+Recorded 2026-11-22. Optional gyro bindings use digital button states from each parsed report. The toggle starts inactive on each connection and flips on a new press after release. Mouse movement is emitted only for intervals with aim enabled at both ends. Inactive reports discard fractional movement. IMU timing and stationary calibration continue independently of the gate. [Gyro acceptance](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
