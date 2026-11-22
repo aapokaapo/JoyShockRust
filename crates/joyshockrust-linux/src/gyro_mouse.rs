@@ -346,6 +346,22 @@ mod tests {
         let options = profile.gyro.unwrap();
         assert_eq!(options.gyro_scale(), [20.0, 10.0]);
         assert_eq!(options.flick_scale(), Some(20.0));
+        let mut flick = FlickStick::new(options.flick_scale().unwrap());
+        let center = joyshockrust_core::Stick::default();
+        let right = joyshockrust_core::Stick { x: 1.0, y: 0.0 };
+        assert_eq!(flick.advance(center, 0), 0);
+        assert_eq!(flick.advance(right, 30_000), 0);
+        assert_eq!(flick.advance(right, 180_000), 900);
+        assert_eq!(flick.advance(center, 330_000), 900);
+
+        let updated = Options {
+            game_calibration: GameCalibration::new(40.0, 1.0).unwrap(),
+            ..options
+        };
+        flick.set_counts_per_degree(updated.flick_scale().unwrap());
+        assert_eq!(flick.advance(right, 360_000), 0);
+        assert_eq!(flick.advance(right, 510_000), 1800);
+        assert_eq!(flick.advance(center, 660_000), 1800);
 
         let mut aim = aim(false);
         aim.set_sensitivity(options.gyro_scale());

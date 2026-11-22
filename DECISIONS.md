@@ -335,3 +335,25 @@ loading a profile. The command uses the existing local datagram socket
 and the same single-session handoff as a profile filter change. It
 preserves the active profile and records no profile reload outcome.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
+
+Updated 2026-11-22. Keyboard bindings consume physical button states
+and D-pad directions. The controller readiness loop schedules gesture
+deadlines and key releases in the same thread. Key state and tap
+storage are allocated at device setup. The keyboard advertises Linux
+keyboard capabilities so udev recognizes it even with few bindings.
+A startup profile can suppress virtual gamepad creation while retaining
+keyboard and mouse output.
+[systemd keyboard classification](https://github.com/systemd/systemd/blob/781d9d0789379d1ea1f2ecefb804d41e9c8b6c38/src/udev/udev-builtin-input_id.c#L366-L371)
+
+Updated 2026-11-23. Keyboard stick mappings use radial boundaries and
+eight directional sectors. The outer key can be combined with the
+direction keys and uses hysteresis. A shared key stays held until all
+of its sources release. Held outer keys are pressed before direction keys
+when both change on the same report. Toggle mode requests a key pulse on
+entry and exit and keeps a release interval between pulses. If the zone
+changes again before the next pulse can start, the latest zone determines
+whether another press is needed. Keep-sprint mode pulses once and
+re-arms when the stick has released all of its mapped direction keys.
+Pulsed outer keys have a single binding. Changes from one input report
+are emitted together, with sprint pulses following movement presses.
+[Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)

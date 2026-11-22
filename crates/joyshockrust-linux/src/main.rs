@@ -18,6 +18,8 @@ mod gyro_mouse;
 #[allow(unsafe_code)]
 mod hidraw;
 #[cfg(target_os = "linux")]
+mod keyboard;
+#[cfg(target_os = "linux")]
 mod launch;
 #[cfg(target_os = "linux")]
 mod profile;
@@ -422,6 +424,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 stick_curve,
                 remaps,
                 touchpad: None,
+                keyboard: None,
             },
             None,
         )
@@ -561,11 +564,13 @@ fn serve_session(
     bridge: profile::BridgeOptions,
     mut measurement: Option<&mut benchmark::Benchmark>,
 ) -> std::io::Result<Option<discovery::ControllerFilter>> {
-    use std::os::fd::AsFd;
+    use std::{cell::Cell, os::fd::AsFd, time::Instant};
 
     let mut mouse = open_mouse(input, identity.transport, runtime.gyro)?;
+    let mut keyboard = keyboard::Keyboard::open(runtime.keyboard.as_ref())?;
+    let keyboard_deadline = Cell::new(None);
     let reload_input = reload.map(|_| input.try_clone()).transpose()?;
-    let mut rumble = if bridge.rumble {
+    let mut rumble = if bridge.virtual_gamepad && bridge.rumble {
         match rumble::Rumble::open(input) {
             Ok(rumble) => Some(rumble),
             Err(err) => {
@@ -576,11 +581,15 @@ fn serve_session(
     } else {
         None
     };
-    let mut output = gamepad::open(bridge.gamepad, rumble.is_some())
+    let mut output = bridge
+        .virtual_gamepad
+        .then(|| gamepad::open(bridge.gamepad, rumble.is_some()))
+        .transpose()
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
-    let feedback = rumble
+    let feedback = output
         .as_ref()
-        .map(|_| output.as_fd().try_clone_to_owned())
+        .filter(|_| rumble.is_some())
+        .map(|output| output.as_fd().try_clone_to_owned())
         .transpose()?;
     let mut state = gamepad::GamepadState::new(bridge.gamepad);
     let mut layer_state = gamepad::RemapState::default();
@@ -598,13 +607,23 @@ fn serve_session(
         reload,
         status,
         feedback.as_ref().map(AsFd::as_fd),
-        measurement.as_deref_mut(),
+        ReportTimers {
+            measurement: measurement.as_deref_mut(),
+            keyboard: Some(&keyboard_deadline),
+        },
         |event| {
             let report = match event {
                 SessionEvent::Report(report) => report,
+                SessionEvent::KeyboardDeadline(now) => {
+                    keyboard_deadline.set(None);
+                    if let Some(keyboard) = &mut keyboard {
+                        keyboard_deadline.set(keyboard.tick(now)?);
+                    }
+                    return Ok(ControlFlow::Continue(()));
+                }
                 SessionEvent::Feedback => {
-                    if let Some(rumble) = &mut rumble {
-                        rumble.service(&mut output)?;
+                    if let (Some(rumble), Some(output)) = (&mut rumble, &mut output) {
+                        rumble.service(output)?;
                     }
                     return Ok(ControlFlow::Continue(()));
                 }
@@ -620,6 +639,17 @@ fn serve_session(
                     let Some(next) = update.profile else {
                         reload.applied();
                         return Ok(ControlFlow::Continue(()));
+                    };
+                    let replacement_keyboard = if runtime.keyboard != next.keyboard {
+                        match keyboard::Keyboard::open(next.keyboard.as_ref()) {
+                            Ok(device) => Some(device),
+                            Err(err) => {
+                                reload.rejected(&err);
+                                return Ok(ControlFlow::Continue(()));
+                            }
+                        }
+                    } else {
+                        None
                     };
                     if let (Some(mouse), Some(current), Some(next)) =
                         (&mut mouse, runtime.gyro, next.gyro)
@@ -646,6 +676,16 @@ fn serve_session(
                     if runtime.touchpad != next.touchpad {
                         touch_click = touchpad::ClickState::default();
                     }
+                    if let Some(replacement) = replacement_keyboard {
+                        if let Some(previous) = &mut keyboard
+                            && let Err(err) = previous.release()
+                        {
+                            reload.rejected(&err);
+                            return Err(err);
+                        }
+                        keyboard = replacement;
+                        keyboard_deadline.set(None);
+                    }
                     *runtime = next;
                     if let Some(status) = status {
                         status.update(Some(identity), runtime.gyro.is_some());
@@ -657,9 +697,24 @@ fn serve_session(
             if let Some(status) = status {
                 status.observe_battery(report.battery);
             }
-            let controls =
-                map_gamepad_controls(runtime, &report, &mut layer_state, &mut touch_click);
-            let gamepad_batch = state.publish(controls, |events| output.emit(events))?;
+            if let Some(keyboard) = &mut keyboard {
+                let now = Instant::now();
+                if keyboard_deadline
+                    .get()
+                    .is_some_and(|deadline| deadline <= now)
+                {
+                    // A deadline can fall between two reports in the same read batch.
+                    keyboard.tick(now)?;
+                }
+                keyboard_deadline.set(keyboard.publish(report.controls, now)?);
+            }
+            let gamepad_batch = if let Some(output) = &mut output {
+                let controls =
+                    map_gamepad_controls(runtime, &report, &mut layer_state, &mut touch_click);
+                state.publish(controls, |events| output.emit(events))?
+            } else {
+                false
+            };
             let mouse_batch = if let Some(mouse) = &mut mouse {
                 mouse.publish(report)?
             } else {
@@ -676,10 +731,21 @@ fn serve_session(
     if let Some(measurement) = measurement {
         measurement.finish_resources(resource_start);
     }
-    let release = state.publish(joyshockrust_core::Controls::default(), |events| {
-        output.emit(events)
-    });
-    let result = result.and(release.map(|_| ()));
+    let release_gamepad = if let Some(output) = &mut output {
+        state
+            .publish(joyshockrust_core::Controls::default(), |events| {
+                output.emit(events)
+            })
+            .map(|_| ())
+    } else {
+        Ok(())
+    };
+    let release_keyboard = if let Some(keyboard) = &mut keyboard {
+        keyboard.release()
+    } else {
+        Ok(())
+    };
+    let result = result.and(release_gamepad).and(release_keyboard);
     if let Some((update, request)) = switch {
         if let Err(err) = &result {
             request.rejected(err);
@@ -688,6 +754,7 @@ fn serve_session(
             drop(feedback);
             drop(output);
             drop(mouse);
+            drop(keyboard);
             drop(rumble);
             if let Some(next) = update.profile {
                 *runtime = next;
@@ -743,10 +810,18 @@ enum SessionEvent<'a> {
     Report(joyshockrust_input::InputReport),
     Feedback,
     Reload(reload::Request<'a>),
+    KeyboardDeadline(std::time::Instant),
 }
 
 #[cfg(target_os = "linux")]
 const REPORT_BATCH_LIMIT: u64 = 32;
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct ReportTimers<'a> {
+    measurement: Option<&'a mut benchmark::Benchmark>,
+    keyboard: Option<&'a std::cell::Cell<Option<std::time::Instant>>>,
+}
 
 #[cfg(target_os = "linux")]
 fn forward_reports<'a>(
@@ -755,7 +830,7 @@ fn forward_reports<'a>(
     reload: Option<&'a reload::Reload>,
     status: Option<&status::StatusSocket>,
     feedback: Option<std::os::fd::BorrowedFd<'_>>,
-    mut measurement: Option<&mut benchmark::Benchmark>,
+    timers: ReportTimers<'_>,
     mut publish: impl FnMut(SessionEvent<'a>) -> std::io::Result<ControlFlow<()>>,
 ) -> std::io::Result<()> {
     use joyshockrust_input::parse_report;
@@ -769,10 +844,15 @@ fn forward_reports<'a>(
     // One read consumes one complete HID report. A larger buffer preserves
     // length validation when a node delivers a larger report than expected.
     let mut report = [0; 16_384];
-    let deadline = measurement
+    let mut measurement = timers.measurement;
+    let benchmark_deadline = measurement
         .as_ref()
         .map(|measurement| Instant::now() + measurement.timeout);
     loop {
+        let deadline = benchmark_deadline
+            .into_iter()
+            .chain(timers.keyboard.and_then(std::cell::Cell::get))
+            .min();
         let (ready, request, feedback_ready) =
             reload::wait(input.as_fd(), reload, status, feedback, deadline)?;
         if let Some(request) = request
@@ -783,11 +863,18 @@ fn forward_reports<'a>(
         if ready.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Ok(());
         }
-        if let (Some(deadline), Some(measurement)) = (deadline, measurement.as_deref_mut())
+        if let (Some(deadline), Some(measurement)) =
+            (benchmark_deadline, measurement.as_deref_mut())
             && Instant::now() >= deadline
         {
             measurement.timed_out = true;
             return Ok(());
+        }
+        if let Some(deadline) = timers.keyboard.and_then(std::cell::Cell::get) {
+            let now = Instant::now();
+            if now >= deadline && publish(SessionEvent::KeyboardDeadline(now))?.is_break() {
+                return Ok(());
+            }
         }
         if feedback_ready.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL)
         {
@@ -873,9 +960,15 @@ mod tests {
         let (sender, receiver) = UnixStream::pair().unwrap();
         drop(sender);
         let mut input = File::from(OwnedFd::from(receiver));
-        super::forward_reports(&mut input, USB_EDGE, None, None, None, None, |_| {
-            panic!("disconnected input published controls")
-        })
+        super::forward_reports(
+            &mut input,
+            USB_EDGE,
+            None,
+            None,
+            None,
+            super::ReportTimers::default(),
+            |_| panic!("disconnected input published controls"),
+        )
         .unwrap();
     }
 
@@ -893,7 +986,7 @@ mod tests {
             None,
             None,
             Some(feedback.as_fd()),
-            None,
+            super::ReportTimers::default(),
             |event| {
                 assert!(matches!(event, super::SessionEvent::Feedback));
                 Err(io::ErrorKind::BrokenPipe.into())
@@ -947,21 +1040,29 @@ mod tests {
         let mut reports = 0;
         let mut batches = 0;
         let allocations = allocation_counter::measure(|| {
-            super::forward_reports(&mut input, USB_EDGE, None, None, None, None, |event| {
-                let super::SessionEvent::Report(report) = event else {
-                    unreachable!()
-                };
-                let controls =
-                    super::map_gamepad_controls(&profile, &report, &mut layer, &mut click);
-                if pad.publish(controls, |events| {
-                    std::hint::black_box(events);
-                    Ok(())
-                })? {
-                    batches += 1;
-                }
-                reports += 1;
-                Ok(super::ControlFlow::Continue(()))
-            })
+            super::forward_reports(
+                &mut input,
+                USB_EDGE,
+                None,
+                None,
+                None,
+                super::ReportTimers::default(),
+                |event| {
+                    let super::SessionEvent::Report(report) = event else {
+                        unreachable!()
+                    };
+                    let controls =
+                        super::map_gamepad_controls(&profile, &report, &mut layer, &mut click);
+                    if pad.publish(controls, |events| {
+                        std::hint::black_box(events);
+                        Ok(())
+                    })? {
+                        batches += 1;
+                    }
+                    reports += 1;
+                    Ok(super::ControlFlow::Continue(()))
+                },
+            )
             .unwrap();
         });
         assert_eq!(reports, FRAMES);
@@ -989,7 +1090,10 @@ mod tests {
             None,
             None,
             None,
-            Some(&mut measurement),
+            super::ReportTimers {
+                measurement: Some(&mut measurement),
+                ..Default::default()
+            },
             |event| {
                 assert!(matches!(event, super::SessionEvent::Report(_)));
                 published += 1;
@@ -1022,7 +1126,10 @@ mod tests {
             None,
             None,
             None,
-            Some(&mut measurement),
+            super::ReportTimers {
+                measurement: Some(&mut measurement),
+                ..Default::default()
+            },
             |_| panic!("silent input produced an event"),
         );
         drop(finish);
@@ -1044,6 +1151,41 @@ mod tests {
     }
 
     #[test]
+    fn readiness_loop_services_keyboard_deadlines_while_input_is_idle() {
+        use std::{
+            cell::Cell,
+            time::{Duration, Instant},
+        };
+        let (_sender, receiver) = UnixDatagram::pair().unwrap();
+        let mut input = File::from(OwnedFd::from(receiver));
+        let mut benchmark = super::benchmark::Benchmark::new(2, Duration::from_millis(500));
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let keyboard = Cell::new(Some(deadline));
+        let mut fired = false;
+        super::forward_reports(
+            &mut input,
+            USB_EDGE,
+            None,
+            None,
+            None,
+            super::ReportTimers {
+                measurement: Some(&mut benchmark),
+                keyboard: Some(&keyboard),
+            },
+            |event| {
+                let super::SessionEvent::KeyboardDeadline(now) = event else {
+                    unreachable!()
+                };
+                assert!(now >= deadline);
+                fired = true;
+                Ok(super::ControlFlow::Break(()))
+            },
+        )
+        .unwrap();
+        assert!(fired);
+    }
+
+    #[test]
     fn readiness_loop_decodes_complete_reports_in_order() {
         let (sender, receiver) = UnixDatagram::pair().unwrap();
         receiver.set_nonblocking(true).unwrap();
@@ -1058,8 +1200,14 @@ mod tests {
 
         let mut input = File::from(OwnedFd::from(receiver));
         let mut presses = Vec::new();
-        let result =
-            super::forward_reports(&mut input, USB_EDGE, None, None, None, None, |event| {
+        let result = super::forward_reports(
+            &mut input,
+            USB_EDGE,
+            None,
+            None,
+            None,
+            super::ReportTimers::default(),
+            |event| {
                 let super::SessionEvent::Report(report) = event else {
                     unreachable!()
                 };
@@ -1068,7 +1216,8 @@ mod tests {
                     return Err(io::ErrorKind::BrokenPipe.into());
                 }
                 Ok(super::ControlFlow::Continue(()))
-            });
+            },
+        );
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
         assert_eq!(presses, [true, false]);
     }

@@ -17,7 +17,7 @@ use crate::{
     gyro_gate::{self, Binding, DigitalInput, TriggerGate},
     gyro_mouse,
     hidraw::ControllerId,
-    touchpad,
+    keyboard, touchpad,
 };
 
 #[derive(Deserialize)]
@@ -32,6 +32,7 @@ struct Profile {
     layer_remaps: Vec<String>,
     gyro: Option<Gyro>,
     touchpad: Option<touchpad::Config>,
+    keyboard: Option<keyboard::Settings>,
 }
 
 #[derive(Deserialize)]
@@ -64,7 +65,7 @@ enum GyroBinding {
     Trigger(String),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BridgeOptions {
     pub transport: Selection,
@@ -72,6 +73,20 @@ pub struct BridgeOptions {
     pub controller_id: Option<ControllerId>,
     pub gamepad: OutputKind,
     pub rumble: bool,
+    pub virtual_gamepad: bool,
+}
+
+impl Default for BridgeOptions {
+    fn default() -> Self {
+        Self {
+            transport: Selection::default(),
+            model: ModelSelection::default(),
+            controller_id: None,
+            gamepad: OutputKind::default(),
+            rumble: false,
+            virtual_gamepad: true,
+        }
+    }
 }
 
 impl BridgeOptions {
@@ -90,6 +105,7 @@ pub struct RuntimeOptions {
     pub remaps: ButtonRemaps,
     pub gyro: Option<gyro_mouse::Options>,
     pub touchpad: Option<touchpad::Grid>,
+    pub keyboard: Option<keyboard::Config>,
 }
 
 pub fn load(path: &Path) -> Result<RuntimeOptions, Box<dyn Error>> {
@@ -251,6 +267,10 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         remaps,
         gyro,
         touchpad,
+        keyboard: profile
+            .keyboard
+            .map(keyboard::Settings::resolve)
+            .transpose()?,
     })
 }
 
@@ -422,6 +442,7 @@ mod tests {
                 controller_id: None,
                 gamepad: OutputKind::XboxSeries,
                 rumble: true,
+                virtual_gamepad: true,
             }
         );
         let partial = parse("version = 1\n[bridge]\ngamepad = \"xbox360\"")

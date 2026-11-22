@@ -130,36 +130,46 @@ fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dy
     );
     eprintln!("Count the turns. At the landmark, center the stick and press Options again.");
 
-    forward_reports(&mut controller, identity, None, None, None, None, |event| {
-        let SessionEvent::Report(report) = event else {
-            return Ok(ControlFlow::Continue(()));
-        };
-        let (delta, confirmation) = sweep.advance(
-            report.controls.right_stick,
-            report.imu.device_ticks,
-            report.controls.buttons.contains(Button::Start),
-        );
-        if delta != 0 {
-            output.emit(&[InputEvent::new(
-                EventType::RELATIVE.0,
-                RelativeAxisCode::REL_X.0,
-                delta,
-            )])?;
-        }
-        match confirmation {
-            Confirmation::None => {}
-            Confirmation::Started => eprintln!("Measuring the camera turn."),
-            Confirmation::CenterStick => eprintln!("Center the right stick, then press Options."),
-            Confirmation::NoMotion => {
-                eprintln!("No horizontal movement recorded. Turn the camera before confirming.")
+    forward_reports(
+        &mut controller,
+        identity,
+        None,
+        None,
+        None,
+        crate::ReportTimers::default(),
+        |event| {
+            let SessionEvent::Report(report) = event else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            let (delta, confirmation) = sweep.advance(
+                report.controls.right_stick,
+                report.imu.device_ticks,
+                report.controls.buttons.contains(Button::Start),
+            );
+            if delta != 0 {
+                output.emit(&[InputEvent::new(
+                    EventType::RELATIVE.0,
+                    RelativeAxisCode::REL_X.0,
+                    delta,
+                )])?;
             }
-            Confirmation::Finished(counts) => {
-                measured_counts = Some(counts);
-                return Ok(ControlFlow::Break(()));
+            match confirmation {
+                Confirmation::None => {}
+                Confirmation::Started => eprintln!("Measuring the camera turn."),
+                Confirmation::CenterStick => {
+                    eprintln!("Center the right stick, then press Options.")
+                }
+                Confirmation::NoMotion => {
+                    eprintln!("No horizontal movement recorded. Turn the camera before confirming.")
+                }
+                Confirmation::Finished(counts) => {
+                    measured_counts = Some(counts);
+                    return Ok(ControlFlow::Break(()));
+                }
             }
-        }
-        Ok(ControlFlow::Continue(()))
-    })?;
+            Ok(ControlFlow::Continue(()))
+        },
+    )?;
     drop(output);
     let counts = i32::try_from(
         measured_counts.ok_or("controller disconnected before calibration finished")?,

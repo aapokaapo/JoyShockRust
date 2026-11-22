@@ -600,6 +600,49 @@ stay the same and that only one virtual gamepad is active. Use
 `controller_id_configured=false`. Reload the startup profile to restore
 its selection.
 
+## Keyboard and mouse profile acceptance
+
+Stop the user service while testing a standalone bridge.
+
+```sh
+cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.toml
+```
+
+1. Open a key-event viewer for **JoyShockRust Virtual Keyboard**. Tap
+   Cross once and expect Space after the double-tap window. Double-tap
+   Cross and expect R. Hold Cross and expect Left Shift to stay down
+   until release.
+2. Move the left stick slightly from center and verify that the deadzone
+   keeps the keys released. Tilt it partway up and check that W is held.
+   Tilt it fully up and check that Left Shift joins W. Back off slowly
+   past the release threshold and check that W stays held after Shift
+   releases. Tilt diagonally up-left and verify W and A. Push further
+   in that direction to add Shift, then return to center and check that
+   all three keys release.
+3. Verify the pointer responds to gyro and Flick Stick. Check the game
+   has one input mode and that JoyShockRust created a keyboard and mouse.
+4. Disconnect while a key is held. Verify that the key clears and the
+   bridge can reconnect. Repeat over Bluetooth.
+5. For a game with toggle sprint, test with a copy of the profile. Add
+   `mode = "toggle"` to `outer` and change the Cross `hold` key to
+   `KEY_LEFTCTRL`. With sprint initially off, hold the stick diagonally
+   up-left and move into the outer zone. Verify that W and A stay down
+   and Shift presses and releases once. Stay in the outer zone, then
+   back off past the release threshold while keeping W and A down.
+   Verify one more Shift press and release and confirm that the game
+   switches back to walking. Repeat with a return to center.
+6. In a game that ends sprint when movement stops, repeat with
+   `mode = "keep_sprint"`. A move into the outer zone should send one
+   Shift press. Back off, change direction and push fully again while
+   moving. Verify continued sprint with no further Shift press. Center
+   the stick and verify that the movement keys release and sprint ends.
+   The next movement into the outer zone should send a new Shift press.
+
+The automated Flick Stick test verifies two calibrated 90° turns with
+different game sensitivity values. For a physical check, calibrate a
+copy of the profile for your game and compare a 90° right flick against
+an in-game landmark.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

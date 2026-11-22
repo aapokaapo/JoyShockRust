@@ -5,8 +5,8 @@ use joyshockrust_input::TouchContact;
 
 use crate::touchpad::TouchRegion;
 
-const HOLD_TIME: Duration = Duration::from_millis(200);
-const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
+pub(crate) const HOLD_TIME: Duration = Duration::from_millis(200);
+pub(crate) const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
 
 #[derive(Clone, Copy, Default, PartialEq)]
 pub enum Binding {

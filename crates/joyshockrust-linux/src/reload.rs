@@ -197,8 +197,13 @@ impl Request<'_> {
                 }
                 let next = profile.bridge.unwrap_or_default();
                 let startup = self.reload.bridge_at_startup;
-                if next.gamepad != startup.gamepad || next.rumble != startup.rumble {
-                    self.rejected("gamepad and rumble changes require restarting JoyShockRust");
+                if next.gamepad != startup.gamepad
+                    || next.rumble != startup.rumble
+                    || next.virtual_gamepad != startup.virtual_gamepad
+                {
+                    self.rejected(
+                        "virtual gamepad and rumble changes require restarting JoyShockRust",
+                    );
                     return None;
                 }
                 if !self.reload.allow_controller_switch

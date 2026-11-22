@@ -150,7 +150,7 @@ rumble = true
 The transport options are `usb`, `bluetooth` and `auto`. The gamepad options
 are `generic`, `xbox360` and `xbox-series`. Profiles without this table use
 USB, generic output and rumble off. Restart JoyShockRust to change
-`gamepad` or `rumble`. With automatic discovery, reload the profile to
+`gamepad`, `virtual_gamepad` or `rumble`. With automatic discovery, reload the profile to
 change `transport`, `model` or `controller_id` in the same process.
 The bridge releases and closes the current virtual devices before
 opening the selected controller. If it is absent, the bridge waits for
@@ -188,6 +188,72 @@ The new ID applies until another selection command, a profile load that
 sets the selection, or a process restart. `--reload-profile` restores
 the startup selection. An optional final argument selects the reload
 socket.
+
+### Keyboard and mouse profiles
+
+The [gyro and keyboard example](profiles/gyro-keyboard.toml) enables gyro
+mouse and Flick Stick, maps the left stick to WASD, and assigns three gestures
+on Cross to three keys. `[bridge].virtual_gamepad = false` runs the
+profile with keyboard and mouse output.
+
+```toml
+[[keyboard.bindings]]
+button = "cross"
+tap = "KEY_SPACE"
+hold = "KEY_LEFTSHIFT"
+double_tap = "KEY_R"
+```
+
+Targets are Linux `KEY_*` names. Each binding reads a physical button or
+a direction such as `dpad-up`. A diagonal activates both matching
+directions. A hold-only binding presses its key immediately. A binding
+with a tap action commits to a hold after 200 ms. Two short releases
+less than 300 ms apart trigger the double-tap key. A single tap waits
+for that window when a double-tap binding is configured. Tap outputs
+hold the virtual key briefly so games can observe the press.
+
+Use `[[keyboard.sticks]]` to bind an analog stick. This example uses
+`KEY_LEFTSHIFT` in the outer zone and keeps the current WASD direction
+held while entering or leaving that zone.
+
+```toml
+[[keyboard.sticks]]
+side = "left"
+deadzone = 0.2
+up = "KEY_W"
+left = "KEY_A"
+down = "KEY_S"
+right = "KEY_D"
+outer = { key = "KEY_LEFTSHIFT", threshold = 0.8, release = 0.7 }
+```
+
+`side` accepts `left` or `right`. Radius is measured from the center,
+with 1.0 representing full deflection along an axis. Inside the deadzone,
+all stick keys release. Diagonals can hold two direction keys. The outer
+key engages at `threshold` and releases at `release`. The separate
+release threshold prevents flickering near the boundary. A profile can
+omit `outer` for direction keys alone.
+
+If the game uses the same key to toggle sprint on and off, add
+`mode = "toggle"` to `outer`. This sends a short key press each time
+the stick enters or leaves the outer zone, including a return to center.
+WASD follows the stick throughout. Start with sprint off in the game.
+JoyShockRust tracks the stick zone, so games that cancel sprint on their
+own can fall out of sync. A toggle key must be exclusive to its zone.
+In `profiles/gyro-keyboard.toml`, change or remove the Cross `hold`
+binding if Left Shift is the toggle key.
+
+Use `mode = "keep_sprint"` when the game ends sprint by itself once the
+movement keys are released. The outer zone sends one short press per
+continuous movement. Backing off or changing direction while a stick
+direction remains mapped keeps that sprint going. Releasing all mapped
+stick directions re-arms the next sprint, including on return to center.
+This mode also requires an exclusive sprint key. The default mode is
+`hold`.
+
+Keyboard mappings can be reloaded. Changing the virtual gamepad setting
+requires a restart. If the game also detects the physical gamepad, use
+the applicable [per-game visibility settings](#per-game-sdl-controller-visibility).
 
 ### Touchpad regions
 

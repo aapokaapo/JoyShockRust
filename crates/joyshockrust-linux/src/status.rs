@@ -283,7 +283,7 @@ mod tests {
             None,
             Some(&status),
             Some(feedback.as_fd()),
-            None,
+            crate::ReportTimers::default(),
             |event| match event {
                 crate::SessionEvent::Report(_) => {
                     // Query on the next wake, after the current batch is counted.
@@ -297,7 +297,9 @@ mod tests {
                     Ok(std::ops::ControlFlow::Continue(()))
                 }
                 crate::SessionEvent::Feedback => Ok(std::ops::ControlFlow::Break(())),
-                crate::SessionEvent::Reload(_) => unreachable!(),
+                crate::SessionEvent::Reload(_) | crate::SessionEvent::KeyboardDeadline(_) => {
+                    unreachable!()
+                }
             },
         )
         .unwrap();
@@ -378,7 +380,7 @@ mod tests {
             None,
             Some(&status),
             None,
-            None,
+            crate::ReportTimers::default(),
             |event| {
                 let crate::SessionEvent::Report(report) = event else {
                     unreachable!()

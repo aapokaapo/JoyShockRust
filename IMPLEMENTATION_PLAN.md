@@ -180,6 +180,16 @@ the effective filter while waiting, and a headless integration test
 verifies it after file reload and preset load.
 The CLI also supports changing or clearing the ID filter directly while
 retaining the current mappings and other filters.
+
+Keyboard profiles map digital buttons and D-pad directions to tap, hold
+and double-tap keys. Deadline and output handling have synthetic
+coverage. The bridge supports keyboard and mouse profiles with the
+virtual gamepad disabled. Analog stick bindings support direction keys,
+a radial deadzone and an outer key with separate engage and release
+thresholds. The outer key supports hold, toggle, and keep-sprint profiles.
+Flick Stick calibration is covered by output
+counts before and after a scaling change.
+[Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
 ## Change control
