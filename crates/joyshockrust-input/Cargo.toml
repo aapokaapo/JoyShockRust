@@ -1,0 +1,11 @@
+[package]
+name = "joyshockrust-input"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+joyshockrust-core = { path = "../joyshockrust-core" }
+
+[lints]
+workspace = true

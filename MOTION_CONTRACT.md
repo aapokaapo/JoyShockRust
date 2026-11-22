@@ -27,7 +27,9 @@ pub struct MotionEngine { /* private owned state */ }
 // MotionEngine::new(config, calibration) -> Self
 // MotionEngine::process(&mut self, sample) -> Result<MotionOutput, MotionError>
 ```
-This is an **interface sketch**, not compilable source; define error/calibration types and precise semantics in Phase 1.
+This sketch describes the future motion API. The first parser passes raw counts to a device-specific conversion stage. That stage uses validated factory coefficients and passes calibrated degrees per second and g to motion. Persisted manual gyro bias belongs to the profile and enters motion as three finite values in degrees per second. Motion applies that bias once and keeps runtime bias estimates in its own state.
+
+Use elapsed nanoseconds within a continuous input segment. The caller forwards only accepted sensor samples for integration and explicitly resets the motion timebase when a new segment starts. The first sample establishes a baseline and produces no integrated aim delta. Proposed sample errors are non-finite values, out-of-range values and non-increasing timestamps. Each leaves the previous accepted motion state intact. A segment reset clears elapsed-time and fusion history while retaining validated calibration. Define the physical range limits alongside device calibration using the captured fixture data.
 
 ## Processing stages
 1. Validate finite values, timestamp ordering and plausible ranges.

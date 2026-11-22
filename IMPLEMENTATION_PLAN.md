@@ -3,10 +3,32 @@
 Each phase requires tests, documentation, a runnable demonstration when appropriate, and a clear hardware-validation status. Do not advance on unverified assumptions.
 
 ## Phase 0 — research and feasibility
-Inspect both JSM repositories and Linux hid-playstation. Map existing callbacks versus polling, report protocols, calibration, device IDs, permissions, mapping semantics and licensing. Produce `docs/REFERENCE_ANALYSIS.md`, `docs/FEATURE_MATRIX.md`, `docs/DECISIONS.md`. Record source URLs/commit SHAs. **Exit:** evidence-backed hardware protocol and risks.
+Review both JSM repositories and Linux hid-playstation for scheduling, protocol, calibration, permissions, kernel coexistence, mapping semantics and licensing. The [reference analysis](docs/REFERENCE_ANALYSIS.md) records exact source revisions. The [feature matrix](FEATURE_MATRIX.md) and [decision log](DECISIONS.md) record findings and open items.
+
+Source review is complete as of 2026-11-22. Phase 0 hardware evidence is pending. The exit requires an annotated wired DualSense Edge capture, factory calibration response, and observed interface, permissions and coexistence behavior. An approved Phase 1 can start with synthetic tests while capture collection is pending. Captured-fixture acceptance remains required.
 
 ## Phase 1 — minimal workspace and parser
-Create minimal Cargo workspace, lint/CI, typed normalized reports, pure parser with fixtures and fuzz tests. **Exit:** decode captured USB DualSense Edge reports correctly without hardware I/O in tests.
+The offline parser milestone is implemented with synthetic tests as of 2026-11-22. Captured USB replay is pending. The root Cargo workspace uses stable Rust, edition 2024. See the [source-backed USB layout](docs/REFERENCE_ANALYSIS.md#dualsense-edge-usb-input).
+
+| Crate | Initial contents |
+|---|---|
+| `joyshockrust-core` | Transport-neutral button, D-pad, stick and analog trigger state. Define normalized axes independently of the packet layout. |
+| `joyshockrust-input` | Pure USB parser, raw IMU counts and device ticks, structured errors, and a replayable timebase. Depends only on `joyshockrust-core` and Rust's `core` library. Linux device discovery and I/O are Phase 2 work. |
+
+Create `joyshockrust-motion` when there is calibrated data and motion processing to implement. Its first input should follow the [motion contract](MOTION_CONTRACT.md). The output, mapping, daemon, configuration and IPC crates can wait for their consumers.
+
+| Task | Acceptance |
+|---|---|
+| Scaffold stable CI | On Linux, build and run `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`. The parser and timebase tests run offline once the toolchain is available. |
+| Define the parser boundary | Take model, transport, report bytes and optional monotonic receive time. Reject unsupported identities/transports and invalid ID/length before field extraction. Use a structured invalid-hat error for reserved values 9–15. Ignore fields outside the initial contract. Pure byte parsing uses fixed-size values, with no heap allocation or I/O per report. |
+| Decode and normalize controls | Keep typed D-pad directions and distinguish digital L2/R2 from analog travel. Map stick endpoints to −1 and +1 around nominal byte 128, with positive X right and positive Y down. Map triggers to 0–1. Test endpoints, neutral, eight directions, all supported button bits, signed IMU extrema and little-endian order. Confirm nominal center and Edge-specific buttons against physical traces. |
+| Preserve sensor time | Return each report's raw gyro/accel counts and device ticks. Use a separate deterministic timebase to classify first sample, forward delta, wrap, repeated timestamp and discontinuity. Carry tick remainders when converting accumulated ticks to nanoseconds. Reject out-of-order or invalid samples for integration while still allowing synchronous button updates from a structurally valid report. Treat long gaps and reconnect/reset as segment boundaries. Test zero, wrap, backwards progression, repeats, long gaps and clock reset. Set cadence-dependent thresholds from capture evidence. |
+| Validate robustness | Test empty, short, oversized and wrong-ID reports. Add property/fuzz cases for arbitrary lengths and bytes, including structurally valid frames with malformed field values. Require no panic and deterministic replay of accepted reports and diagnostics. |
+| Replay captured USB fixtures | Preserve report boundaries and order. Keep synthetic inputs separate from physical traces. Record firmware, device profile, descriptor/transport, provenance and expected events per capture. Replay rest, individual controls and motion without hardware I/O. Assert raw counts/ticks, input ordering and control changes against labelled actions and corroborating observations. |
+
+Document the future motion boundary before adding fusion. Define calibrated input as monotonic nanoseconds, °/s and g, with explicit status for invalid samples and segment discontinuity. Specify calibration and motion error types and the cases that preserve or reset state. Hardware calibration and bias learning remain Phase 3 tasks.
+
+**Exit:** source-based synthetic checks and captured USB Edge replay both pass. Physical live input-to-output behavior remains a Phase 2 acceptance test.
 
 ## Phase 2 — end-to-end USB vertical slice
 Discover hidraw via udev, open/read events, process buttons/sticks and create uinput virtual gamepad/mouse; clean disconnection. **Exit:** physical USB controller produces verified virtual events; no stuck buttons.
