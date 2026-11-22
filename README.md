@@ -212,6 +212,17 @@ less than 300 ms apart trigger the double-tap key. A single tap waits
 for that window when a double-tap binding is configured. Tap outputs
 hold the virtual key briefly so games can observe the press.
 
+Use `trigger` in place of `button` for an analog L2 or R2 binding.
+The optional suffix sets the engagement and release thresholds on a
+scale from 0 to 1. The defaults are 0.45 and 0.35. Bindings at different
+thresholds can overlap, so a deeper pull can add a second key.
+
+```toml
+[[keyboard.bindings]]
+trigger = "l2:0.35:0.25"
+hold = "KEY_Q"
+```
+
 Use `[[keyboard.sticks]]` to bind an analog stick. This example uses
 `KEY_LEFTSHIFT` in the outer zone and keeps the current WASD direction
 held while entering or leaving that zone.

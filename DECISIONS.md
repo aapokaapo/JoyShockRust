@@ -356,4 +356,9 @@ whether another press is needed. Keep-sprint mode pulses once and
 re-arms when the stick has released all of its mapped direction keys.
 Pulsed outer keys have a single binding. Changes from one input report
 are emitted together, with sprint pulses following movement presses.
+
+Keyboard trigger bindings use normalized travel and share the gyro
+trigger gate's threshold behavior. Each distinct threshold pair tracks
+its own pressed state and feeds the existing keyboard gesture logic.
+Digital L2 and R2 bindings continue to read their report bits.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)

@@ -76,10 +76,15 @@ impl TriggerGate {
         })
     }
 
-    fn travel(self, controls: &Controls) -> f32 {
-        match self.side {
+    pub(crate) fn pressed(self, controls: &Controls, was_pressed: bool) -> bool {
+        let travel = match self.side {
             TriggerSide::Left => controls.left_trigger,
             TriggerSide::Right => controls.right_trigger,
+        };
+        if was_pressed {
+            travel > self.release
+        } else {
+            travel >= self.press
         }
     }
 }
@@ -128,12 +133,7 @@ impl GyroGate {
             Binding::TapHold(input) => self.tap_hold(pressed(input), clock()),
             Binding::DoubleTap(input) => self.double_tap(pressed(input), clock()),
             Binding::AnalogTrigger(trigger) => {
-                let travel = trigger.travel(controls);
-                self.active = if self.active {
-                    travel > trigger.release
-                } else {
-                    travel >= trigger.press
-                };
+                self.active = trigger.pressed(controls, self.active);
                 self.active
             }
         }

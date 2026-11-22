@@ -637,6 +637,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
    moving. Verify continued sprint with no further Shift press. Center
    the stick and verify that the movement keys release and sprint ends.
    The next movement into the outer zone should send a new Shift press.
+7. Add a keyboard binding with `trigger = "l2:0.35:0.25"` and
+   `hold = "KEY_Q"`. Slowly squeeze L2 until Q activates, back off
+   slightly without releasing Q, and then release L2 fully to clear Q.
+   Confirm R2 alone leaves Q released. Repeat over Bluetooth.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

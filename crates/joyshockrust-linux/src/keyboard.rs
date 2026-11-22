@@ -7,7 +7,7 @@ use evdev::{AttributeSet, EventType, InputEvent, KeyCode, uinput::VirtualDevice}
 use joyshockrust_core::{Button, Controls, DPad};
 use serde::Deserialize;
 
-use crate::gyro_gate::{self, DOUBLE_TAP_WINDOW, HOLD_TIME};
+use crate::gyro_gate::{self, DOUBLE_TAP_WINDOW, HOLD_TIME, TriggerGate};
 
 mod stick;
 
@@ -25,7 +25,8 @@ pub struct Settings {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBinding {
-    button: String,
+    button: Option<String>,
+    trigger: Option<String>,
     tap: Option<String>,
     hold: Option<String>,
     double_tap: Option<String>,
@@ -62,13 +63,14 @@ fn keyboard_key(name: &str) -> Result<KeyCode, String> {
         .map_err(|_| format!("unknown keyboard key {name}"))
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Source {
     Button(Button),
     Direction(DPad),
+    Trigger(TriggerGate),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 struct Binding {
     source: Source,
     tap: Option<KeyCode>,
@@ -88,9 +90,10 @@ impl Source {
         Some(Self::Direction(direction))
     }
 
-    fn pressed(self, controls: Controls) -> bool {
+    fn pressed(self, controls: Controls, was_pressed: bool) -> bool {
         match self {
             Self::Button(button) => controls.buttons.contains(button),
+            Self::Trigger(trigger) => trigger.pressed(&controls, was_pressed),
             Self::Direction(direction) => {
                 controls.dpad == direction
                     || matches!(
@@ -109,10 +112,24 @@ impl Settings {
     pub fn resolve(self) -> Result<Config, String> {
         let mut bindings = Vec::<Binding>::new();
         for raw in self.bindings {
-            let source = Source::parse(&raw.button)
-                .ok_or_else(|| format!("unknown keyboard binding button {}", raw.button))?;
+            let (source, name) = match (raw.button.as_deref(), raw.trigger.as_deref()) {
+                (Some(name), None) => (
+                    Source::parse(name)
+                        .ok_or_else(|| format!("unknown keyboard binding button {name}"))?,
+                    name,
+                ),
+                (None, Some(spec)) => (
+                    Source::Trigger(TriggerGate::parse(spec).map_err(|error| {
+                        format!("invalid keyboard binding trigger {spec}: {error}")
+                    })?),
+                    spec,
+                ),
+                _ => {
+                    return Err("keyboard binding requires exactly one of button or trigger".into());
+                }
+            };
             if bindings.iter().any(|binding| binding.source == source) {
-                return Err(format!("duplicate keyboard binding for {}", raw.button));
+                return Err(format!("duplicate keyboard binding for {name}"));
             }
             let binding = Binding {
                 source,
@@ -122,8 +139,7 @@ impl Settings {
             };
             if binding.tap.is_none() && binding.hold.is_none() && binding.double_tap.is_none() {
                 return Err(format!(
-                    "keyboard binding for {} needs at least one key",
-                    raw.button
+                    "keyboard binding for {name} needs at least one key"
                 ));
             }
             bindings.push(binding);
@@ -167,7 +183,11 @@ struct Gesture {
 }
 
 impl Gesture {
-    fn update(&mut self, pressed: bool, now: Instant) -> Option<KeyCode> {
+    fn update(&mut self, controls: Controls, now: Instant) -> Option<KeyCode> {
+        let pressed = self
+            .binding
+            .source
+            .pressed(controls, !matches!(self.press, Press::Up));
         let mut pulse = None;
         if self.pending_tap.is_some_and(|deadline| deadline <= now) {
             self.pending_tap = None;
@@ -281,7 +301,7 @@ impl State {
         let mut deadline = None;
         self.pulses.retain(|&(_, until)| until > now);
         for gesture in &mut self.gestures {
-            if let Some(key) = gesture.update(gesture.binding.source.pressed(controls), now) {
+            if let Some(key) = gesture.update(controls, now) {
                 let until = now + TAP_KEY_TIME;
                 if let Some(pulse) = self.pulses.iter_mut().find(|pulse| pulse.0 == key) {
                     pulse.1 = until;
@@ -786,5 +806,60 @@ mod tests {
         ))
         .unwrap();
         assert!(!profile.bridge.unwrap().virtual_gamepad);
+    }
+
+    #[test]
+    fn analog_trigger_bindings_keep_independent_thresholds_and_ignore_the_button_bit() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            trigger = "l2:0.35:0.25"
+            hold = "KEY_Q"
+            [[keyboard.bindings]]
+            trigger = "l2:0.8:0.65"
+            hold = "KEY_E"
+            [[keyboard.bindings]]
+            button = "l2"
+            hold = "KEY_F"
+            "#,
+        );
+        let mut state = State::new(&config);
+        let now = Instant::now();
+        let mut controls = Controls {
+            right_trigger: 1.0,
+            ..Controls::default()
+        };
+        controls.buttons.insert(Button::LeftTrigger);
+        for (travel, expected) in [
+            (0.25, [false, false]),
+            (0.35, [true, false]),
+            (0.8, [true, true]),
+            (0.7, [true, true]),
+            (0.65, [true, false]),
+            (0.3, [true, false]),
+            (0.25, [false, false]),
+        ] {
+            controls.left_trigger = travel;
+            assert_eq!(state.update(controls, now, |_| Ok(())).unwrap(), None);
+            assert_eq!(
+                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
+                expected
+            );
+            assert!(state.held.contains(KeyCode::KEY_F));
+        }
+    }
+
+    #[test]
+    fn keyboard_profiles_validate_analog_sources() {
+        let binding = "[[keyboard.bindings]]\ntrigger = 'r2'\ntap = 'KEY_R'\n";
+        for invalid in [
+            format!("{binding}button = 'r2'\n"),
+            binding.replace("trigger = 'r2'\n", ""),
+            binding.replace("r2", "r2:0.6:0.7"),
+            binding.replace("r2", "l1"),
+            format!("{binding}{}", binding.replace("'r2'", "'r2:0.45:0.35'")),
+        ] {
+            assert!(crate::profile::parse(&format!("version = 1\n{invalid}")).is_err());
+        }
     }
 }
