@@ -35,8 +35,7 @@ startup, and digital hold and toggle gates have user-reported hardware tests.
 The analog trigger gate also passed the user's hardware check. Tap/hold and
 double-tap have also passed the user's hardware check. The user also verified
 Xbox Series virtual output, Edge Bluetooth input and automatic transport
-switching. The standard DualSense has synthetic coverage and awaits hardware
-testing.
+switching. The user also verified standard DualSense input on hardware.
 
 See the [implementation plan](IMPLEMENTATION_PLAN.md), [test evidence](TESTING_AND_PERFORMANCE.md)
 and [source analysis](docs/REFERENCE_ANALYSIS.md).
@@ -188,6 +187,13 @@ DualSense Edge touchpad click to Xbox Share. Use `--gamepad xbox360` when
 testing Xbox 360 compatibility. Both modes support TOML profiles, including
 bindings that use the physical trigger buttons. The output mode applies
 for the entire bridge run. Steam Input and Proton need hardware testing.
+
+Add `--rumble` to forward game vibration to the connected physical
+controller. The bridge uses the force feedback evdev node belonging to
+the same controller, which must be writable. Look for
+`Rumble forwarding ready` in the log. If the node is unavailable, the
+bridge reports the reason and starts the virtual gamepad without rumble.
+See the [rumble test](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance).
 
 Add `--stick-curve 2` to soften small movements on both virtual gamepad
 sticks. The radial curve preserves direction, center, and full travel.

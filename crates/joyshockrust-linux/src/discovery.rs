@@ -112,7 +112,7 @@ pub fn run(
                 waiting = true;
             }
             loop {
-                let (ready, request) = reload::wait(monitor.as_fd(), reload, status)?;
+                let (ready, request, _) = reload::wait(monitor.as_fd(), reload, status, None)?;
                 if ready.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
                     return Err(io::Error::other("udev monitor lost"));
                 }

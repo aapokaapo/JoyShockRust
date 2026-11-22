@@ -144,3 +144,10 @@ hidraw descriptor. Model selection controls interpretation of the extra
 button bits, while the common controls and sensor counts use the same
 decoder. USB remains first in automatic mode. On a given transport,
 discovery tries the Edge first. [Linux HID IDs](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-ids.h#L1257-L1267) · [Linux device match](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L2898-L2906)
+
+Updated 2026-11-22. Opt-in rumble routes uinput effects to the physical
+controller's evdev node under the same HID parent. Linux hid-playstation
+owns transmission to the controller. Virtual effect IDs map to
+session-owned physical effects, which are removed on erase or session end.
+The virtual gamepad advertises rumble when a writable physical node is
+available. [Linux DualSense playback](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1621-L1640) · [Linux effect ownership and erase](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/ff-core.c#L124-L187)

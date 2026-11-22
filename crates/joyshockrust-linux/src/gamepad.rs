@@ -220,7 +220,7 @@ impl OutputKind {
     }
 }
 
-pub fn open(kind: OutputKind) -> io::Result<VirtualDevice> {
+pub fn open(kind: OutputKind, rumble_enabled: bool) -> io::Result<VirtualDevice> {
     let (name, id) = kind.identity();
     let keys = kind
         .buttons()
@@ -239,6 +239,12 @@ pub fn open(kind: OutputKind) -> io::Result<VirtualDevice> {
             code,
             AbsInfo::new(0, min, max, 0, 0, 0),
         ))?;
+    }
+    if rumble_enabled {
+        let effects = AttributeSet::from_iter([evdev::FFEffectCode::FF_RUMBLE]);
+        builder = builder
+            .with_ff(&effects)?
+            .with_ff_effects_max(super::rumble::EFFECT_SLOTS as u32);
     }
     builder.build()
 }
@@ -521,22 +527,28 @@ mod tests {
     #[test]
     #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
     fn uinput_cross_press_and_release() {
-        assert_uinput_gamepad(OutputKind::Generic);
+        assert_uinput_gamepad(OutputKind::Generic, false);
     }
 
     #[test]
     #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
     fn uinput_xbox360_identity_and_cross_press() {
-        assert_uinput_gamepad(OutputKind::Xbox360);
+        assert_uinput_gamepad(OutputKind::Xbox360, false);
     }
 
     #[test]
     #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
     fn uinput_xbox_series_identity_and_cross_press() {
-        assert_uinput_gamepad(OutputKind::XboxSeries);
+        assert_uinput_gamepad(OutputKind::XboxSeries, false);
     }
 
-    fn assert_uinput_gamepad(kind: OutputKind) {
+    #[test]
+    #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
+    fn uinput_rumble_gamepad_advertises_ff_rumble() {
+        assert_uinput_gamepad(OutputKind::XboxSeries, true);
+    }
+
+    fn assert_uinput_gamepad(kind: OutputKind, rumble_enabled: bool) {
         use std::{
             os::fd::AsFd,
             thread,
@@ -546,7 +558,7 @@ mod tests {
         use evdev::{Device, SynchronizationCode};
         use nix::poll::{PollFd, PollFlags, poll};
 
-        let mut virtual_device = open(kind).expect("create the virtual gamepad");
+        let mut virtual_device = open(kind, rumble_enabled).expect("create the virtual gamepad");
         let node = virtual_device
             .enumerate_dev_nodes_blocking()
             .expect("enumerate the virtual gamepad's event nodes")
@@ -575,6 +587,12 @@ mod tests {
         let (name, id) = kind.identity();
         assert_eq!(observer.name(), Some(name));
         assert_eq!(observer.input_id(), id);
+        assert_eq!(
+            observer
+                .supported_ff()
+                .is_some_and(|effects| effects.contains(evdev::FFEffectCode::FF_RUMBLE)),
+            rumble_enabled,
+        );
         let keys = observer.supported_keys().unwrap();
         assert_eq!(
             keys.contains(Key::BTN_TL2),

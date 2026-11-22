@@ -173,8 +173,8 @@ mod tests {
             client
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
-            let (ready, requested) =
-                crate::reload::wait(input.as_fd(), None, Some(&status)).unwrap();
+            let (ready, requested, _) =
+                crate::reload::wait(input.as_fd(), None, Some(&status), None).unwrap();
             assert!(ready.is_empty());
             assert!(requested.is_none());
             let mut response = String::new();

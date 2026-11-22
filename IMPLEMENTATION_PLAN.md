@@ -75,8 +75,13 @@ Automatic transport selection prefers an accessible USB node when opening a
 session and falls back to Bluetooth. The user verified switching after
 disconnect. The Linux bridge also supports standard DualSense `0ce6` on
 both transports. The common layout and model-specific button handling
-have synthetic coverage. Standard DualSense hardware validation is pending.
+have synthetic coverage. The user verified both models on hardware.
 [Standard DualSense acceptance](TESTING_AND_PERFORMANCE.md#standard-dualsense-acceptance)
+
+Opt-in rumble forwards uinput effects to the physical controller through
+evdev. The event loop serves feedback while controller input is idle.
+Vibration and cleanup need hardware validation.
+[Rumble forwarding acceptance](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.

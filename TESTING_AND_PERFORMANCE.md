@@ -297,6 +297,23 @@ over Bluetooth, and repeat. The bridge should log the model and transport
 for each session. With an Edge, repeat the same steps and check a remap
 using an Fn button or paddle as the source.
 
+The user verified the standard DualSense and DualSense Edge with `3a0bc7a`.
+
+## Rumble forwarding acceptance
+
+Stop the user service if it is active. Run the bridge manually with
+`--auto-transport --gamepad xbox-series --rumble` and check for
+`Rumble forwarding ready`. Trigger vibration in a game and record the
+game, Proton version and Steam Input setting. With `fftest` available,
+run `fftest /dev/input/eventN` against the **virtual** controller's event
+node to check forwarding independently of Steam. Check that vibration
+stops when the effect ends, the client exits or the controller disconnects.
+Reconnect and repeat over the other transport. If permissions prevent
+opening the physical node, check that the bridge logs the error and that
+normal input still works. The ignored `uinput_rumble_gamepad_advertises_ff_rumble`
+test checks the virtual node's capabilities with a writable `/dev/uinput`
+and readable virtual event node.
+
 ## Profile reload acceptance
 
 Install the updated executable and unit. Reload the systemd user manager

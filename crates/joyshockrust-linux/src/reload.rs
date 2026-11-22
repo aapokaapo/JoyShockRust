@@ -130,7 +130,8 @@ pub fn wait<'a>(
     fd: BorrowedFd<'_>,
     reload: Option<&'a Reload>,
     status: Option<&StatusSocket>,
-) -> io::Result<(PollFlags, Option<Request<'a>>)> {
+    feedback: Option<BorrowedFd<'_>>,
+) -> io::Result<(PollFlags, Option<Request<'a>>, PollFlags)> {
     let listener = reload.and_then(|reload| reload.listener.as_ref());
     let mut descriptors = [
         PollFd::new(fd, PollFlags::POLLIN),
@@ -140,8 +141,11 @@ pub fn wait<'a>(
         ),
         PollFd::new(status.map_or(fd, StatusSocket::as_fd), PollFlags::POLLIN),
         PollFd::new(listener.map_or(fd, AsFd::as_fd), PollFlags::POLLIN),
+        PollFd::new(feedback.unwrap_or(fd), PollFlags::POLLIN),
     ];
-    let len = if listener.is_some() {
+    let len = if feedback.is_some() {
+        5
+    } else if listener.is_some() {
         4
     } else if status.is_some() {
         3
@@ -204,6 +208,7 @@ pub fn wait<'a>(
     Ok((
         descriptors[0].revents().unwrap_or_else(PollFlags::empty),
         request,
+        descriptors[4].revents().unwrap_or_else(PollFlags::empty),
     ))
 }
 
@@ -239,14 +244,14 @@ mod tests {
                 .unwrap();
         }
 
-        let (ready, request) = wait(input.as_fd(), Some(&reload), None).unwrap();
+        let (ready, request, _) = wait(input.as_fd(), Some(&reload), None, None).unwrap();
         assert!(ready.is_empty());
         assert!(request.unwrap().load().is_none());
         let mut response = String::new();
         first.read_to_string(&mut response).unwrap();
         assert_eq!(response, "rejected\n");
 
-        let (_, request) = wait(input.as_fd(), Some(&reload), None).unwrap();
+        let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None).unwrap();
         request.unwrap().applied();
         response.clear();
         second.read_to_string(&mut response).unwrap();

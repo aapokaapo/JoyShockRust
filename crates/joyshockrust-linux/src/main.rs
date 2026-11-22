@@ -18,6 +18,8 @@ mod profile;
 #[cfg(target_os = "linux")]
 mod reload;
 #[cfg(target_os = "linux")]
+mod rumble;
+#[cfg(target_os = "linux")]
 mod status;
 #[cfg(target_os = "linux")]
 mod systemd;
@@ -41,7 +43,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --diagnose [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
-        "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
+        "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -65,6 +67,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut reload_path = None;
     let mut status_path = None;
     let mut gamepad_kind = None;
+    let mut rumble_enabled = false;
     let mut selection = discovery::Selection::Usb;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
@@ -158,6 +161,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             } else {
                 discovery::Selection::Auto
             };
+        } else if arg == "--rumble" && !rumble_enabled {
+            rumble_enabled = true;
         } else if arg == "--gamepad" && gamepad_kind.is_none() {
             let value = args
                 .next()
@@ -214,7 +219,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         return Err("gyro options require --gyro-mouse".into());
     }
     let mapping_options = gyro_mouse || stick_curve.is_some() || !remaps.is_empty();
-    let bridge_options = status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some();
+    let bridge_options =
+        status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some() || rumble_enabled;
     if status_query || reload_query {
         if (status_query && reload_query)
             || diagnose
@@ -313,12 +319,19 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             status,
             gamepad_kind,
             identity,
+            rumble_enabled,
         )?;
     } else {
         discovery::run(selection, reload, status, |event| match event {
-            discovery::Event::Connected(input, identity) => {
-                serve_session(input, &mut runtime, reload, status, gamepad_kind, identity)
-            }
+            discovery::Event::Connected(input, identity) => serve_session(
+                input,
+                &mut runtime,
+                reload,
+                status,
+                gamepad_kind,
+                identity,
+                rumble_enabled,
+            ),
             discovery::Event::Reload(reload) => {
                 if let Some(next) = reload.load() {
                     runtime = next;
@@ -360,61 +373,92 @@ fn serve_session(
     status: Option<&status::StatusSocket>,
     gamepad_kind: gamepad::OutputKind,
     identity: Identity,
+    rumble_enabled: bool,
 ) -> std::io::Result<()> {
+    use std::os::fd::AsFd;
+
     let mut mouse = open_mouse(input, identity.transport, runtime.gyro)?;
     let reload_input = reload.map(|_| input.try_clone()).transpose()?;
-    let mut output = gamepad::open(gamepad_kind)
+    let mut rumble = if rumble_enabled {
+        match rumble::Rumble::open(input) {
+            Ok(rumble) => Some(rumble),
+            Err(err) => {
+                eprintln!("Rumble forwarding unavailable: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut output = gamepad::open(gamepad_kind, rumble.is_some())
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
+    let feedback = rumble
+        .as_ref()
+        .map(|_| output.as_fd().try_clone_to_owned())
+        .transpose()?;
     let mut state = gamepad::GamepadState::new(gamepad_kind);
     let mut layer_state = gamepad::RemapState::default();
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());
     }
-    let result = forward_reports(input, identity, reload, status, |event| {
-        let report = match event {
-            SessionEvent::Report(report) => report,
-            SessionEvent::Reload(reload) => {
-                let Some(next) = reload.load() else {
+    let result = forward_reports(
+        input,
+        identity,
+        reload,
+        status,
+        feedback.as_ref().map(AsFd::as_fd),
+        |event| {
+            let report = match event {
+                SessionEvent::Report(report) => report,
+                SessionEvent::Feedback => {
+                    if let Some(rumble) = &mut rumble {
+                        rumble.service(&mut output)?;
+                    }
                     return Ok(());
-                };
-                if runtime.gyro != next.gyro {
-                    let input = reload_input.as_ref().expect("reload descriptor");
-                    match open_mouse(input, identity.transport, next.gyro) {
-                        Ok(next_mouse) => mouse = next_mouse,
-                        Err(err) => {
-                            reload.rejected(&err);
-                            return Ok(());
+                }
+                SessionEvent::Reload(reload) => {
+                    let Some(next) = reload.load() else {
+                        return Ok(());
+                    };
+                    if runtime.gyro != next.gyro {
+                        let input = reload_input.as_ref().expect("reload descriptor");
+                        match open_mouse(input, identity.transport, next.gyro) {
+                            Ok(next_mouse) => mouse = next_mouse,
+                            Err(err) => {
+                                reload.rejected(&err);
+                                return Ok(());
+                            }
                         }
                     }
+                    if runtime.remaps != next.remaps {
+                        layer_state = gamepad::RemapState::default();
+                    }
+                    *runtime = next;
+                    if let Some(status) = status {
+                        status.update(Some(identity), runtime.gyro.is_some());
+                    }
+                    reload.applied();
+                    return Ok(());
                 }
-                if runtime.remaps != next.remaps {
-                    layer_state = gamepad::RemapState::default();
-                }
-                *runtime = next;
-                if let Some(status) = status {
-                    status.update(Some(identity), runtime.gyro.is_some());
-                }
-                reload.applied();
-                return Ok(());
+            };
+            let mut controls = runtime
+                .stick_curve
+                .map_or(report.controls, |curve| curve.apply(report.controls));
+            if runtime
+                .gyro
+                .is_some_and(|options| options.flick_stick.is_some())
+            {
+                controls.right_stick = Default::default();
             }
-        };
-        let mut controls = runtime
-            .stick_curve
-            .map_or(report.controls, |curve| curve.apply(report.controls));
-        if runtime
-            .gyro
-            .is_some_and(|options| options.flick_stick.is_some())
-        {
-            controls.right_stick = Default::default();
-        }
-        state.publish(runtime.remaps.apply(controls, &mut layer_state), |events| {
-            output.emit(events)
-        })?;
-        if let Some(mouse) = &mut mouse {
-            mouse.publish(report)?;
-        }
-        Ok(())
-    });
+            state.publish(runtime.remaps.apply(controls, &mut layer_state), |events| {
+                output.emit(events)
+            })?;
+            if let Some(mouse) = &mut mouse {
+                mouse.publish(report)?;
+            }
+            Ok(())
+        },
+    );
     if let Some(status) = status {
         status.update(None, runtime.gyro.is_some());
     }
@@ -433,6 +477,7 @@ fn main() {
 #[cfg(target_os = "linux")]
 enum SessionEvent<'a> {
     Report(joyshockrust_input::InputReport),
+    Feedback,
     Reload(reload::Request<'a>),
 }
 
@@ -442,6 +487,7 @@ fn forward_reports(
     identity: Identity,
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
+    feedback: Option<std::os::fd::BorrowedFd<'_>>,
     mut publish: impl FnMut(SessionEvent<'_>) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use joyshockrust_input::parse_report;
@@ -455,12 +501,20 @@ fn forward_reports(
     // length validation when a node delivers a larger report than expected.
     let mut report = [0; 16_384];
     loop {
-        let (ready, request) = reload::wait(input.as_fd(), reload, status)?;
+        let (ready, request, feedback_ready) =
+            reload::wait(input.as_fd(), reload, status, feedback)?;
         if let Some(request) = request {
             publish(SessionEvent::Reload(request))?;
         }
         if ready.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Ok(());
+        }
+        if feedback_ready.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL)
+        {
+            return Err(io::Error::other("virtual force feedback descriptor lost"));
+        }
+        if feedback_ready.contains(PollFlags::POLLIN) {
+            publish(SessionEvent::Feedback)?;
         }
         if !ready.contains(PollFlags::POLLIN) {
             continue;
@@ -510,10 +564,32 @@ mod tests {
         let (sender, receiver) = UnixStream::pair().unwrap();
         drop(sender);
         let mut input = File::from(OwnedFd::from(receiver));
-        super::forward_reports(&mut input, USB_EDGE, None, None, |_| {
+        super::forward_reports(&mut input, USB_EDGE, None, None, None, |_| {
             panic!("disconnected input published controls")
         })
         .unwrap();
+    }
+
+    #[test]
+    fn readiness_loop_services_feedback_when_input_is_idle() {
+        use std::os::fd::AsFd;
+
+        let (_sender, receiver) = UnixDatagram::pair().unwrap();
+        let (game, feedback) = UnixDatagram::pair().unwrap();
+        game.send(b"feedback").unwrap();
+        let mut input = File::from(OwnedFd::from(receiver));
+        let result = super::forward_reports(
+            &mut input,
+            USB_EDGE,
+            None,
+            None,
+            Some(feedback.as_fd()),
+            |event| {
+                assert!(matches!(event, super::SessionEvent::Feedback));
+                Err(io::ErrorKind::BrokenPipe.into())
+            },
+        );
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
     }
 
     #[test]
@@ -531,7 +607,7 @@ mod tests {
 
         let mut input = File::from(OwnedFd::from(receiver));
         let mut presses = Vec::new();
-        let result = super::forward_reports(&mut input, USB_EDGE, None, None, |event| {
+        let result = super::forward_reports(&mut input, USB_EDGE, None, None, None, |event| {
             let super::SessionEvent::Report(report) = event else {
                 unreachable!()
             };

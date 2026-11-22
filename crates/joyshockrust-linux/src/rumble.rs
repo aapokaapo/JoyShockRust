@@ -1,0 +1,141 @@
+use std::{
+    fs::{File, OpenOptions},
+    io,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
+};
+
+use evdev::{
+    Device, EventSummary, FFEffect, FFEffectCode, FFEffectKind, UInputCode, uinput::VirtualDevice,
+};
+use nix::libc;
+
+pub const EFFECT_SLOTS: usize = 16;
+
+pub struct Rumble {
+    physical: Device,
+    effects: [Option<FFEffect>; EFFECT_SLOTS],
+}
+
+impl Rumble {
+    pub fn open(hidraw: &File) -> io::Result<Self> {
+        let hidraw =
+            udev::Device::from_devnum(udev::DeviceType::Character, hidraw.metadata()?.rdev())?;
+        let hid = hidraw.parent_with_subsystem("hid")?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "could not find the controller's HID parent",
+            )
+        })?;
+        let mut devices = udev::Enumerator::new()?;
+        devices.match_parent(&hid)?;
+        devices.match_subsystem("input")?;
+        let mut open_error = None;
+        for device in devices.scan_devices()? {
+            if !device.sysname().as_encoded_bytes().starts_with(b"event") {
+                continue;
+            }
+            let Some(path) = device.devnode() else {
+                continue;
+            };
+            let physical = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(path)
+                .and_then(|file| Device::from_fd(file.into()));
+            match physical {
+                Ok(physical)
+                    if physical
+                        .supported_ff()
+                        .is_some_and(|effects| effects.contains(FFEffectCode::FF_RUMBLE)) =>
+                {
+                    eprintln!("Rumble forwarding ready: {}", path.display());
+                    return Ok(Self {
+                        physical,
+                        effects: Default::default(),
+                    });
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    open_error = Some(io::Error::new(
+                        err.kind(),
+                        format!("{}: {err}", path.display()),
+                    ));
+                }
+            }
+        }
+        Err(open_error.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "no physical evdev node advertises FF_RUMBLE",
+            )
+        }))
+    }
+
+    pub fn service(&mut self, virtual_device: &mut VirtualDevice) -> io::Result<()> {
+        // A single ready read services at most one kernel event batch.
+        let events: Vec<_> = match virtual_device.fetch_events() {
+            Ok(events) => events.collect(),
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        };
+        for event in events {
+            match event.destructure() {
+                EventSummary::UInput(event, UInputCode::UI_FF_UPLOAD, _) => {
+                    let mut request = match virtual_device.process_ff_upload(event) {
+                        Ok(request) => request,
+                        // A client can time out before the bridge sees its request.
+                        Err(err) if err.raw_os_error() == Some(libc::EINVAL) => continue,
+                        Err(err) => return Err(err),
+                    };
+                    let data = request.effect();
+                    let result = match self.effects.get_mut(request.effect_id() as usize) {
+                        Some(slot) if matches!(data.kind, FFEffectKind::Rumble { .. }) => {
+                            match slot {
+                                Some(effect) => effect.update(data),
+                                None => self
+                                    .physical
+                                    .upload_ff_effect(data)
+                                    .map(|effect| *slot = Some(effect)),
+                            }
+                        }
+                        _ => Err(io::Error::from_raw_os_error(libc::EINVAL)),
+                    };
+                    if let Err(err) = result {
+                        request.set_retval(-err.raw_os_error().unwrap_or(libc::EIO));
+                    }
+                }
+                EventSummary::UInput(event, UInputCode::UI_FF_ERASE, _) => {
+                    let mut request = match virtual_device.process_ff_erase(event) {
+                        Ok(request) => request,
+                        Err(err) if err.raw_os_error() == Some(libc::EINVAL) => continue,
+                        Err(err) => return Err(err),
+                    };
+                    if let Some(slot) = self.effects.get_mut(request.effect_id() as usize) {
+                        // FFEffect's drop stops and removes the owned effect in the kernel.
+                        *slot = None;
+                    } else {
+                        request.set_retval(-libc::EINVAL);
+                    }
+                }
+                EventSummary::ForceFeedback(_, id, count) if count >= 0 => {
+                    if let Some(effect) =
+                        self.effects.get_mut(id.0 as usize).and_then(Option::as_mut)
+                        && let Err(err) = effect.play(count)
+                    {
+                        eprintln!("Could not forward rumble playback: {err}");
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
