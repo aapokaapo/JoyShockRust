@@ -245,7 +245,20 @@ connected, edit the profile to change a gamepad mapping, then run
 gamepad. Change the profile version to an unsupported value and reload
 again. Confirm that the journal reports rejection and the last working
 mapping remains active. Restore the version when done. The same reload
-command works when USB is unplugged.
+command works when USB is unplugged. The user's Fedora run of `5d13eda`
+confirmed successful reloads and rejection of profile version 2 with the
+same bridge process running.
+
+## Service status acceptance
+
+Install the updated executable and unit and restart the service. Run
+`$HOME/.local/bin/joyshockrust-linux --status` with USB disconnected, after
+plugging the Edge in, and after unplugging it. Expect `controller=waiting`,
+`controller=connected` and `controller=waiting`, respectively. Check that
+`gyro_configured` matches the profile's gyro section. A successful reload
+that adds or removes the section changes the field. An invalid reload
+preserves it. After stopping the service, the status command should fail
+to connect.
 
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.

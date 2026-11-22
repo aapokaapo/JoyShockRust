@@ -137,6 +137,13 @@ Use `systemctl --user enable joyshockrust.service` to start it with the
 user manager, or `systemctl --user stop joyshockrust.service` to stop it.
 The service needs the same hidraw and uinput access as a manual run.
 
+Query the running service with `$HOME/.local/bin/joyshockrust-linux --status`.
+The command prints `controller=waiting` or `controller=connected` and
+`gyro_configured=true` or `gyro_configured=false`. The gyro field describes
+the loaded profile. A hold or toggle binding can still suppress mouse output.
+The service socket is at `$XDG_RUNTIME_DIR/joyshockrust/status.sock` and is
+removed when the service stops.
+
 ## Virtual gamepad on Linux
 
 Run the Linux bridge with read access to a DualSense Edge USB hidraw node and

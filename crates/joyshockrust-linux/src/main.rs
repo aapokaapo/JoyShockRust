@@ -17,6 +17,8 @@ mod hidraw;
 mod profile;
 #[cfg(target_os = "linux")]
 mod reload;
+#[cfg(target_os = "linux")]
+mod status;
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,6 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "usage: joyshockrust-linux --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
         "       joyshockrust-linux --diagnose [/dev/hidrawN]\n",
+        "       joyshockrust-linux --status [SOCKET]\n",
+        "bridge option: --status-socket SOCKET\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -40,6 +44,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut path = None;
     let mut profile_path = None;
     let mut diagnose = false;
+    let mut status_query = false;
+    let mut status_path = None;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
     let mut args = env::args_os().skip(1);
@@ -97,6 +103,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
         } else if arg == "--diagnose" && !diagnose {
             diagnose = true;
+        } else if arg == "--status" && !status_query {
+            status_query = true;
+        } else if arg == "--status-socket" && status_path.is_none() {
+            status_path = Some(PathBuf::from(
+                args.next().ok_or("expected a status socket path")?,
+            ));
         } else if arg == "--profile" || arg == "--check-profile" {
             if profile_path.is_some() {
                 return Err("select only one profile".into());
@@ -148,19 +160,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("gyro options require --gyro-mouse".into());
     }
+    let mapping_options = gyro_mouse || stick_curve.is_some() || !remaps.is_empty();
+    if status_query {
+        if diagnose || profile_path.is_some() || status_path.is_some() || mapping_options {
+            return Err("--status takes only an optional socket path".into());
+        }
+        status::query(path.as_deref(), std::io::stdout().lock())?;
+        return Ok(());
+    }
     if diagnose {
-        if profile_path.is_some() || gyro_mouse || stick_curve.is_some() || !remaps.is_empty() {
+        if profile_path.is_some() || status_path.is_some() || mapping_options {
             return Err("--diagnose takes only an optional hidraw path".into());
         }
         diagnostics::run(path.as_deref(), std::io::stdout().lock())?;
         return Ok(());
     }
     let (mut runtime, reload) = if let Some((profile_path, check_only)) = profile_path {
-        if gyro_mouse || stick_curve.is_some() || !remaps.is_empty() {
+        if mapping_options {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
-        if check_only && path.is_some() {
-            return Err("--check-profile does not take a device path".into());
+        if check_only && (path.is_some() || status_path.is_some()) {
+            return Err("--check-profile takes only a profile path".into());
         }
         let profile = profile::load(&profile_path)
             .map_err(|err| format!("{}: {err}", profile_path.display()))?;
@@ -179,17 +199,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None,
         )
     };
+    let status = status_path
+        .as_deref()
+        .map(|path| {
+            status::StatusSocket::bind(path)
+                .map_err(|err| format!("could not bind {}: {err}", path.display()))
+        })
+        .transpose()?;
+    let status = status.as_ref();
+    if let Some(status) = status {
+        status.update(false, runtime.gyro.is_some());
+    }
     let reload = reload.as_ref();
     if let Some(path) = path {
         let mut input = discovery::open_wired_edge(&path)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-        serve_session(&mut input, &mut runtime, reload)?;
+        serve_session(&mut input, &mut runtime, reload, status)?;
     } else {
-        discovery::run(reload, |event| match event {
-            discovery::Event::Connected(input) => serve_session(input, &mut runtime, reload),
+        discovery::run(reload, status, |event| match event {
+            discovery::Event::Connected(input) => {
+                serve_session(input, &mut runtime, reload, status)
+            }
             discovery::Event::Reload(reload) => {
                 if let Some(next) = reload.load() {
                     runtime = next;
+                    if let Some(status) = status {
+                        status.update(false, runtime.gyro.is_some());
+                    }
                     reload.applied();
                 }
                 Ok(())
@@ -221,6 +257,7 @@ fn serve_session(
     input: &mut std::fs::File,
     runtime: &mut profile::RuntimeOptions,
     reload: Option<&reload::Reload>,
+    status: Option<&status::StatusSocket>,
 ) -> std::io::Result<()> {
     let mut mouse = open_mouse(input, runtime.gyro)?;
     let reload_input = reload.map(|_| input.try_clone()).transpose()?;
@@ -228,7 +265,10 @@ fn serve_session(
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
     let mut state = gamepad::GamepadState::default();
     let mut layer_state = gamepad::RemapState::default();
-    let result = forward_reports(input, reload, |event| {
+    if let Some(status) = status {
+        status.update(true, runtime.gyro.is_some());
+    }
+    let result = forward_reports(input, reload, status, |event| {
         let report = match event {
             SessionEvent::Report(report) => report,
             SessionEvent::Reload(reload) => {
@@ -249,6 +289,9 @@ fn serve_session(
                     layer_state = gamepad::RemapState::default();
                 }
                 *runtime = next;
+                if let Some(status) = status {
+                    status.update(true, runtime.gyro.is_some());
+                }
                 reload.applied();
                 return Ok(());
             }
@@ -270,6 +313,9 @@ fn serve_session(
         }
         Ok(())
     });
+    if let Some(status) = status {
+        status.update(false, runtime.gyro.is_some());
+    }
     let release = state.publish(joyshockrust_core::Controls::default(), |events| {
         output.emit(events)
     });
@@ -292,6 +338,7 @@ enum SessionEvent<'a> {
 fn forward_reports(
     input: &mut std::fs::File,
     reload: Option<&reload::Reload>,
+    status: Option<&status::StatusSocket>,
     mut publish: impl FnMut(SessionEvent<'_>) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
@@ -305,7 +352,7 @@ fn forward_reports(
     // length validation when a node delivers a report larger than 64 bytes.
     let mut report = [0; 16_384];
     loop {
-        let (ready, requested) = reload::wait(input.as_fd(), reload)?;
+        let (ready, requested) = reload::wait(input.as_fd(), reload, status)?;
         if let Some(reload) = reload.filter(|_| requested) {
             publish(SessionEvent::Reload(reload))?;
         }
@@ -356,7 +403,7 @@ mod tests {
         let (sender, receiver) = UnixStream::pair().unwrap();
         drop(sender);
         let mut input = File::from(OwnedFd::from(receiver));
-        super::forward_reports(&mut input, None, |_| {
+        super::forward_reports(&mut input, None, None, |_| {
             panic!("disconnected input published controls")
         })
         .unwrap();
@@ -377,7 +424,7 @@ mod tests {
 
         let mut input = File::from(OwnedFd::from(receiver));
         let mut presses = Vec::new();
-        let result = super::forward_reports(&mut input, None, |event| {
+        let result = super::forward_reports(&mut input, None, None, |event| {
             let super::SessionEvent::Report(report) = event else {
                 unreachable!()
             };

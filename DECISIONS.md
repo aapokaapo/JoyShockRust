@@ -82,10 +82,12 @@ Experimental Flick Stick uses physical right-stick direction and device report t
 
 ## Phase 5 first increment
 
-Recorded 2026-11-22. TOML profiles have a required schema version and reject unknown fields. Startup validates profile values with the same button and curve validators used by the CLI. The process owns one resolved configuration for all USB sessions. Live reload and persistence are future work. [Profile example](profiles/dualsense-edge.example.toml)
+Recorded 2026-11-22. TOML profiles have a required schema version and reject unknown fields. Startup validates profile values with the same button and curve validators used by the CLI. The process owns one resolved configuration for all USB sessions. Profile persistence remains future work. [Profile example](profiles/dualsense-edge.example.toml)
 
 Device diagnostics shares automatic USB Edge enumeration and fd identity verification with normal startup. It checks uinput access by opening the builder and exits before creating a device. [Diagnostic acceptance](TESTING_AND_PERFORMANCE.md#device-diagnostics-acceptance)
 
 The optional systemd user unit starts the installed bridge in discovery mode with a startup profile under the user manager's configuration directory. It preserves the operator's user identity and reports startup and reconnect status through the journal. [User service acceptance](TESTING_AND_PERFORMANCE.md#user-service-acceptance)
 
 Profiles can be reloaded with SIGHUP. Linux polls a signalfd alongside hidraw or udev readiness, and the session validates new settings between report batches. Rejection preserves the previous profile. A mapping change resets layer selection, and gyro option changes prepare a replacement mouse before dropping the current one. [Reload acceptance](TESTING_AND_PERFORMANCE.md#profile-reload-acceptance)
+
+The user service publishes a read-only snapshot on a Unix stream socket in its private runtime directory. Each connection receives one versioned status response and closes. The bridge serves a bounded number of status connections per readiness wake. [Service status acceptance](TESTING_AND_PERFORMANCE.md#service-status-acceptance)

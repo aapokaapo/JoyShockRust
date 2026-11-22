@@ -13,7 +13,10 @@ use nix::{
     },
 };
 
-use crate::profile::{self, RuntimeOptions};
+use crate::{
+    profile::{self, RuntimeOptions},
+    status::StatusSocket,
+};
 
 pub struct Reload {
     path: PathBuf,
@@ -45,17 +48,28 @@ impl Reload {
     }
 }
 
-pub fn wait(fd: BorrowedFd<'_>, reload: Option<&Reload>) -> io::Result<(PollFlags, bool)> {
-    let mut fds = [
+pub fn wait(
+    fd: BorrowedFd<'_>,
+    reload: Option<&Reload>,
+    status: Option<&StatusSocket>,
+) -> io::Result<(PollFlags, bool)> {
+    let mut descriptors = [
         PollFd::new(fd, PollFlags::POLLIN),
         PollFd::new(
             reload.map_or(fd, |reload| reload.signal.as_fd()),
-            PollFlags::POLLIN,
+            reload.map_or(PollFlags::empty(), |_| PollFlags::POLLIN),
         ),
+        PollFd::new(status.map_or(fd, StatusSocket::as_fd), PollFlags::POLLIN),
     ];
-    let len = if reload.is_some() { 2 } else { 1 };
+    let len = if status.is_some() {
+        3
+    } else if reload.is_some() {
+        2
+    } else {
+        1
+    };
     loop {
-        match poll(&mut fds[..len], PollTimeout::NONE) {
+        match poll(&mut descriptors[..len], PollTimeout::NONE) {
             Ok(_) => break,
             Err(Errno::EINTR) => continue,
             Err(err) => return Err(err.into()),
@@ -63,7 +77,7 @@ pub fn wait(fd: BorrowedFd<'_>, reload: Option<&Reload>) -> io::Result<(PollFlag
     }
     let mut requested = false;
     if let Some(reload) = reload {
-        let flags = fds[1].revents().unwrap_or_else(PollFlags::empty);
+        let flags = descriptors[1].revents().unwrap_or_else(PollFlags::empty);
         if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Err(io::Error::other("profile reload signal descriptor lost"));
         }
@@ -71,5 +85,17 @@ pub fn wait(fd: BorrowedFd<'_>, reload: Option<&Reload>) -> io::Result<(PollFlag
             requested = reload.signal.read_signal()?.is_some();
         }
     }
-    Ok((fds[0].revents().unwrap_or_else(PollFlags::empty), requested))
+    if let Some(status) = status {
+        let flags = descriptors[2].revents().unwrap_or_else(PollFlags::empty);
+        if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
+            return Err(io::Error::other("status socket lost"));
+        }
+        if flags.contains(PollFlags::POLLIN) {
+            status.respond()?;
+        }
+    }
+    Ok((
+        descriptors[0].revents().unwrap_or_else(PollFlags::empty),
+        requested,
+    ))
 }

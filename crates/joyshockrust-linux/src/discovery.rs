@@ -8,7 +8,10 @@ use std::{
 
 use nix::poll::PollFlags;
 
-use super::reload::{self, Reload};
+use super::{
+    reload::{self, Reload},
+    status::StatusSocket,
+};
 
 pub fn open_wired_edge(path: &Path) -> io::Result<File> {
     let input = OpenOptions::new()
@@ -31,6 +34,7 @@ pub enum Event<'a> {
 
 pub fn run(
     reload: Option<&Reload>,
+    status: Option<&StatusSocket>,
     mut handle: impl FnMut(Event<'_>) -> io::Result<()>,
 ) -> io::Result<()> {
     // Subscribe before enumerating so a connection between the scan and the
@@ -54,16 +58,22 @@ pub fn run(
                 eprintln!("Waiting for a wired DualSense Edge");
                 waiting = true;
             }
-            let (ready, requested) = reload::wait(monitor.as_fd(), reload)?;
-            if ready.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
-                return Err(io::Error::other("udev monitor lost"));
-            }
-            if let Some(reload) = reload.filter(|_| requested) {
-                handle(Event::Reload(reload))?;
-            }
-            if ready.contains(PollFlags::POLLIN) {
-                for _ in monitor.iter().take(64) {}
-                disconnected = None;
+            loop {
+                let (ready, requested) = reload::wait(monitor.as_fd(), reload, status)?;
+                if ready.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
+                    return Err(io::Error::other("udev monitor lost"));
+                }
+                if let Some(reload) = reload.filter(|_| requested) {
+                    handle(Event::Reload(reload))?;
+                }
+                if ready.contains(PollFlags::POLLIN) {
+                    for _ in monitor.iter().take(64) {}
+                    disconnected = None;
+                    break;
+                }
+                if requested {
+                    break;
+                }
             }
         }
     }
