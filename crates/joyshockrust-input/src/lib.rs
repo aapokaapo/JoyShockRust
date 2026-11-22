@@ -21,6 +21,7 @@ pub const DUALSENSE_EDGE_USB_REPORT_LEN: usize = 64;
 const DUALSENSE_EDGE_USB_REPORT_ID: u8 = 0x01;
 pub const DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN: usize = 78;
 const DUALSENSE_EDGE_BLUETOOTH_REPORT_ID: u8 = 0x31;
+const BATTERY_STATUS_OFFSET: usize = 52;
 const COMMON_REPORT_LEN: usize = DUALSENSE_EDGE_USB_REPORT_LEN - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,10 +59,42 @@ pub struct RawImuSample {
     pub device_ticks: u32,
 }
 
+/// Charge state encoded by a full DualSense input report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatteryState {
+    Discharging,
+    Charging,
+    Full,
+    NotCharging,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatteryReading {
+    /// Approximate charge percentage. Unavailable on error and unknown states.
+    pub percent: Option<u8>,
+    pub state: BatteryState,
+}
+
+impl BatteryReading {
+    fn decode(status: u8) -> Self {
+        let estimated_percent = ((status & 0x0f) * 10 + 5).min(100);
+        let (percent, state) = match status >> 4 {
+            0x0 => (Some(estimated_percent), BatteryState::Discharging),
+            0x1 => (Some(estimated_percent), BatteryState::Charging),
+            0x2 => (Some(100), BatteryState::Full),
+            0xa | 0xb => (None, BatteryState::NotCharging),
+            _ => (None, BatteryState::Unknown),
+        };
+        Self { percent, state }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InputReport {
     pub controls: Controls,
     pub imu: RawImuSample,
+    pub battery: BatteryReading,
     /// Raw controller counter byte. Its sequence semantics require captures.
     pub counter: u8,
     /// Host monotonic receive time, when supplied by the caller.
@@ -224,6 +257,7 @@ pub fn parse_report(
             ]),
             device_ticks: u32::from_le_bytes([bytes[27], bytes[28], bytes[29], bytes[30]]),
         },
+        battery: BatteryReading::decode(bytes[BATTERY_STATUS_OFFSET]),
         counter: bytes[6],
         received_at_ns,
     })

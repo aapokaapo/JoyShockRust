@@ -175,6 +175,10 @@ The command prints `controller=waiting` or `controller=connected` and
 reports `usb`, `bluetooth` or `none`. The `model` field reports
 `dualsense`, `dualsense_edge` or `none`. The gyro field describes
 the loaded profile. A hold or toggle binding can still suppress mouse output.
+The `battery_state` and `battery_percent` fields report the controller's
+latest battery reading. The percentage is an estimate in coarse steps.
+A missing reading is shown as `none`, including when the controller is
+disconnected.
 The `last_reload` field reports `not_attempted` on startup, then `applied`
 or `rejected` after the bridge handles a reload. A bridge started without a
 profile reports `unavailable`. To request the same reload directly, run

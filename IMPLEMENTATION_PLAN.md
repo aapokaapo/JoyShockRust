@@ -82,8 +82,13 @@ Opt-in rumble forwards uinput effects to the physical controller through
 evdev. The event loop serves feedback while controller input is idle.
 The user verified that forwarding survives reconnection over USB and
 Bluetooth. Version 1 profiles can set the transport, output identity and
-rumble for a user service. Changes to those settings apply on restart.
+rumble for a user service. The user verified USB and Bluetooth pulse
+tests with the profile. Changes to those settings apply on restart.
 [Rumble forwarding acceptance](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance)
+
+Battery and charging state are decoded on both transports and exposed in
+the session status. The reading clears on disconnect. Fedora validation
+of the new fields is pending. [Battery status acceptance](TESTING_AND_PERFORMANCE.md#battery-status-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.

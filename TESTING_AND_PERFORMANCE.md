@@ -353,10 +353,24 @@ worked after reconnecting over both USB and Bluetooth with `ecbda68`.
 Add the [bridge settings](README.md#toml-profiles) to the active service
 profile and restart the user service. Check that the Xbox Series gamepad
 appears in Steam and use `rumble_test` to check a pulse. Swap transports
-without restarting the service. Change only `rumble` in `[bridge]` and request
+without restarting the service. The user confirmed that the pulse test
+worked over USB and Bluetooth with the bridge profile on `d987b1c`.
+Change only `rumble` in `[bridge]` and request
 a reload. Expect a restart-required error and the original gamepad to
 retain its capabilities. Restore the setting, make a gyro or mapping
 change and check that a profile reload applies it.
+
+## Battery status acceptance
+
+Run the updated user service with automatic transport selection. Connect
+the controller over USB and run
+`$HOME/.local/bin/joyshockrust-linux --status`. Expect a percentage and a
+charge state consistent with the controller. Depending on the controller's
+charge and power settings, it can report `charging` or `full`. Unplug USB and
+disconnect Bluetooth so the bridge waits. Both battery fields should
+then be `none`. Reconnect over Bluetooth without a charging cable and
+check for `discharging`. Reload a mapping profile and check that the reading
+remains available during the same session.
 
 ## Profile reload acceptance
 

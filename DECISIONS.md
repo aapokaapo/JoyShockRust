@@ -174,3 +174,10 @@ defaults. Command-line transport and gamepad overrides are resolved at
 startup. Reload rejects changes to this table since the discovery loop
 and virtual-device capabilities are selected at startup.
 [Bridge profile settings](README.md#toml-profiles)
+
+Updated 2026-11-22. The common DualSense input payload supplies battery
+state at byte 52, which is USB report byte 53 and Bluetooth report byte 54.
+The bridge uses the Linux midpoint estimate for known charge states and
+reports an unavailable percentage on error states. The status snapshot
+holds the latest reading for the current session.
+[Linux input layout](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L235-L258) · [Linux battery decoding](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1582-L1611)

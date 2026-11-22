@@ -431,6 +431,9 @@ fn serve_session(
                     return Ok(());
                 }
             };
+            if let Some(status) = status {
+                status.observe_battery(report.battery);
+            }
             let mut controls = runtime
                 .stick_curve
                 .map_or(report.controls, |curve| curve.apply(report.controls));

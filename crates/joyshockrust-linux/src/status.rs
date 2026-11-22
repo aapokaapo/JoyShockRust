@@ -1,6 +1,7 @@
 use std::{
     cell::Cell,
     env,
+    fmt::Display,
     io::{self, Read, Write},
     os::{
         fd::{AsFd, BorrowedFd},
@@ -10,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use joyshockrust_input::{DeviceModel, Transport};
+use joyshockrust_input::{BatteryReading, BatteryState, DeviceModel, Transport};
 
 use crate::hidraw::Identity;
 
@@ -23,6 +24,7 @@ pub struct StatusSocket {
 struct Snapshot {
     identity: Option<Identity>,
     gyro_configured: bool,
+    battery: Option<BatteryReading>,
 }
 
 impl StatusSocket {
@@ -40,10 +42,24 @@ impl StatusSocket {
     }
 
     pub fn update(&self, identity: Option<Identity>, gyro_configured: bool) {
+        let snapshot = self.snapshot.get();
         self.snapshot.set(Snapshot {
             identity,
             gyro_configured,
+            battery: if snapshot.identity == identity {
+                snapshot.battery
+            } else {
+                None
+            },
         });
+    }
+
+    pub fn observe_battery(&self, battery: BatteryReading) {
+        let mut snapshot = self.snapshot.get();
+        if snapshot.identity.is_some() && snapshot.battery != Some(battery) {
+            snapshot.battery = Some(battery);
+            self.snapshot.set(snapshot);
+        }
     }
 
     pub fn respond(&self, last_reload: &str) -> io::Result<()> {
@@ -65,6 +81,19 @@ impl StatusSocket {
             Some(DeviceModel::Other { .. }) => "unknown",
             None => "none",
         };
+        let battery_percent = snapshot.battery.and_then(|reading| reading.percent);
+        let percent: &dyn Display = match &battery_percent {
+            Some(percent) => percent,
+            None => &"none",
+        };
+        let battery_state = match snapshot.battery.map(|reading| reading.state) {
+            None => "none",
+            Some(BatteryState::Discharging) => "discharging",
+            Some(BatteryState::Charging) => "charging",
+            Some(BatteryState::Full) => "full",
+            Some(BatteryState::NotCharging) => "not_charging",
+            Some(BatteryState::Unknown) => "unknown",
+        };
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
             match self.listener.accept() {
@@ -75,7 +104,7 @@ impl StatusSocket {
                     // Disconnected or slow clients must not interrupt input.
                     let _ = write!(
                         stream,
-                        "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\n",
+                        "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\n",
                         snapshot.gyro_configured
                     );
                 }
@@ -145,11 +174,12 @@ mod tests {
         };
         let (_sender, input) = UnixStream::pair().unwrap();
 
-        for (identity, gyro, expected) in [
+        for (identity, gyro, battery, expected) in [
             (
                 None,
                 true,
-                "version=1\ncontroller=waiting\ngyro_configured=true\nlast_reload=unavailable\ntransport=none\nmodel=none\n",
+                None,
+                "version=1\ncontroller=waiting\ngyro_configured=true\nlast_reload=unavailable\ntransport=none\nmodel=none\nbattery_state=none\nbattery_percent=none\n",
             ),
             (
                 Some(Identity {
@@ -157,7 +187,11 @@ mod tests {
                     transport: Transport::Bluetooth,
                 }),
                 false,
-                "version=1\ncontroller=connected\ngyro_configured=false\nlast_reload=unavailable\ntransport=bluetooth\nmodel=dualsense\n",
+                Some(BatteryReading {
+                    percent: Some(65),
+                    state: BatteryState::Charging,
+                }),
+                "version=1\ncontroller=connected\ngyro_configured=false\nlast_reload=unavailable\ntransport=bluetooth\nmodel=dualsense\nbattery_state=charging\nbattery_percent=65\n",
             ),
             (
                 Some(Identity {
@@ -165,9 +199,32 @@ mod tests {
                     transport: Transport::Usb,
                 }),
                 true,
-                "version=1\ncontroller=connected\ngyro_configured=true\nlast_reload=unavailable\ntransport=usb\nmodel=dualsense_edge\n",
+                None,
+                "version=1\ncontroller=connected\ngyro_configured=true\nlast_reload=unavailable\ntransport=usb\nmodel=dualsense_edge\nbattery_state=none\nbattery_percent=none\n",
+            ),
+            (
+                Some(Identity {
+                    model: DeviceModel::DualSenseEdge,
+                    transport: Transport::Usb,
+                }),
+                true,
+                Some(BatteryReading {
+                    percent: None,
+                    state: BatteryState::NotCharging,
+                }),
+                "version=1\ncontroller=connected\ngyro_configured=true\nlast_reload=unavailable\ntransport=usb\nmodel=dualsense_edge\nbattery_state=not_charging\nbattery_percent=none\n",
+            ),
+            (
+                None,
+                true,
+                None,
+                "version=1\ncontroller=waiting\ngyro_configured=true\nlast_reload=unavailable\ntransport=none\nmodel=none\nbattery_state=none\nbattery_percent=none\n",
             ),
         ] {
+            status.update(identity, !gyro);
+            if let Some(reading) = battery {
+                status.observe_battery(reading);
+            }
             status.update(identity, gyro);
             let mut client = UnixStream::connect_addr(&address).unwrap();
             client

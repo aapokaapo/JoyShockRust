@@ -271,12 +271,35 @@ fn preserves_signed_counts_timestamps_and_counter() {
 }
 
 #[test]
+fn usb_decodes_battery_charge_and_error_states() {
+    use joyshockrust_input::{BatteryReading, BatteryState::*};
+
+    let mut frame = neutral_frame();
+    for (status, state, percent) in [
+        (0x06, Discharging, Some(65)),
+        (0x1a, Charging, Some(100)),
+        (0x29, Full, Some(100)),
+        (0xa7, NotCharging, None),
+        (0xb7, NotCharging, None),
+        (0xf7, Unknown, None),
+        (0x39, Unknown, None),
+    ] {
+        frame[53] = status;
+        assert_eq!(
+            decode(&frame).unwrap().battery,
+            BatteryReading { state, percent }
+        );
+    }
+}
+
+#[test]
 fn ignores_reserved_bits_and_tail() {
     let mut frame = neutral_frame();
     let expected = decode(&frame).unwrap();
     frame[10] |= 0x08;
     frame[11..16].fill(0xff);
-    frame[32..].fill(0xff);
+    frame[32..53].fill(0xff);
+    frame[54..].fill(0xff);
     assert_eq!(decode(&frame).unwrap(), expected);
 }
 

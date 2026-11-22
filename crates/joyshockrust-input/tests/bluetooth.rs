@@ -1,7 +1,7 @@
 use joyshockrust_core::Button;
 use joyshockrust_input::{
-    CalibrationReportError, DeviceModel, FactoryCalibration, ParseError, RawImuSample, Transport,
-    parse_report,
+    BatteryReading, BatteryState, CalibrationReportError, DeviceModel, FactoryCalibration,
+    ParseError, RawImuSample, Transport, parse_report,
 };
 
 fn full_bluetooth_frame() -> [u8; 78] {
@@ -16,8 +16,9 @@ fn full_bluetooth_frame() -> [u8; 78] {
         *chunk = sample.to_le_bytes();
     }
     frame[29..33].copy_from_slice(&0x1234_5678_u32.to_le_bytes());
+    frame[54] = 0x16;
     // Reference CRC generated with zlib over seed 0xa1 followed by bytes 0–73.
-    frame[74..].copy_from_slice(&0xd378_a50a_u32.to_le_bytes());
+    frame[74..].copy_from_slice(&0xb79d_93fa_u32.to_le_bytes());
     frame
 }
 
@@ -37,6 +38,13 @@ fn full_bluetooth_frame_decodes_the_same_common_payload_as_usb() {
     let expected =
         parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &usb, Some(43)).unwrap();
     assert_eq!(report, expected);
+    assert_eq!(
+        report.battery,
+        BatteryReading {
+            state: BatteryState::Charging,
+            percent: Some(65)
+        }
+    );
     assert!(report.controls.buttons.contains(Button::South));
     assert!(report.controls.buttons.contains(Button::RightPaddle));
     assert_eq!(report.imu.gyro_counts, [123, -456, 789]);
