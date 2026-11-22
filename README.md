@@ -29,7 +29,7 @@ Correct controller behavior first; then low input-to-output latency, low jitter,
 
 ## Status
 
-Development has started **Phase 5**, configuration and the control plane. The USB parser replays a
+Development has started **Phase 6**, controller and game compatibility. The USB parser replays a
 300-report capture. The Linux virtual gamepad, USB reconnect, gyro mouse
 startup, and digital hold and toggle gates have user-reported hardware tests.
 The analog trigger gate also passed the user's hardware check. Tap/hold and
@@ -176,6 +176,13 @@ The bridge exposes **JoyShockRust Virtual Gamepad** with standard buttons,
 D-pad, sticks and analog triggers. It releases held controls when the input
 session ends. Games can still see the physical controller. See the
 [uinput and Steam acceptance tests](TESTING_AND_PERFORMANCE.md#virtual-gamepad-acceptance).
+
+For compatibility testing, pass `--gamepad xbox360` to expose
+**JoyShockRust Virtual Xbox 360 Gamepad**. It advertises the wired Xbox 360
+input ID and uses analog-only virtual triggers. Physical trigger buttons
+still work with gyro bindings and as remap sources. The option can be used
+with a TOML profile and applies for the entire bridge run. Steam Input and
+Proton recognition still need hardware testing.
 
 Add `--stick-curve 2` to soften small movements on both virtual gamepad
 sticks. The radial curve preserves direction, center, and full travel.

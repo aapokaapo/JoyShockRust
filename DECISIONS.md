@@ -114,3 +114,9 @@ source bytes before renaming them into place. The default destination
 follows the user configuration directory. The installed file has private
 permissions. Profile installation and live reload are separate operations.
 [XDG configuration directory](https://specifications.freedesktop.org/basedir-spec/latest/)
+
+Updated 2026-11-22. The optional Xbox 360 output advertises USB input ID
+`045e:028e` and analog-only triggers. It shares the normalized controller
+state and event batching with the default virtual gamepad. The output
+identity is chosen when the bridge starts and stays fixed across profile
+reloads. [Linux xpad device ID](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/joystick/xpad.c#L153-L156) · [Linux xpad event layout](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/joystick/xpad.c#L908-L956)

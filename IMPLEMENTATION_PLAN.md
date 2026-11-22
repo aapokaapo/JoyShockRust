@@ -4,7 +4,7 @@ Each phase requires tests, documentation, a runnable demonstration when appropri
 
 ## Status on 2026-11-22
 
-Phase 5 configuration is the current development focus. Phases 0–3 established
+Phase 6 compatibility is the current development focus. Phases 0–3 established
 source evidence, captured USB replay, a Linux USB input/output bridge and
 opt-in gyro aiming. Hardware evidence is partial. Residual bias calibration,
 per-axis aiming accuracy and timing benchmarks still need validation.
@@ -57,10 +57,15 @@ Digital holds and toggles passed the user's hardware check. The next increment a
 ## Phase 5 — config, IPC, CLI and systemd
 Versioned TOML, snapshots, Unix socket protocol, diagnostics, udev permissions, systemd user service. **Exit:** live reload at sample boundaries and service restart/reconnect tested.
 
-The first Phase 5 increment loads a versioned TOML profile at startup and validates it before opening devices. An offline profile check and a device diagnostics command are available. Diagnostics reports udev candidates and open errors for hidraw and uinput. A systemd user unit can launch a startup profile. The user verified startup and USB reconnect in a Fedora user session. SIGHUP reload validates the profile before replacing settings and applies them between report batches. The user verified valid and invalid reloads on Fedora. Read-only IPC reports USB session and gyro configuration status through the service socket. The user verified that USB status changes on Fedora. The status snapshot now reports the last reload result, and the service stops retrying an invalid startup profile. The first write command reloads the current profile and returns its result to the caller. The systemd user unit uses this command for reload. The user verified synchronous reload success and rejection on Fedora. Validated preset installation persists a profile atomically, and Fedora validation of installation remains open. Per-controller gyro calibration persistence remains planned.
+The first Phase 5 increment loads a versioned TOML profile at startup and validates it before opening devices. An offline profile check and a device diagnostics command are available. Diagnostics reports udev candidates and open errors for hidraw and uinput. A systemd user unit can launch a startup profile. The user verified startup and USB reconnect in a Fedora user session. SIGHUP reload validates the profile before replacing settings and applies them between report batches. The user verified valid and invalid reloads on Fedora. Read-only IPC reports USB session and gyro configuration status through the service socket. The user verified that USB status changes on Fedora. The status snapshot now reports the last reload result, and the service stops retrying an invalid startup profile. The first write command reloads the current profile and returns its result to the caller. The systemd user unit uses this command for reload. The user verified synchronous reload success and rejection on Fedora. The user verified valid and invalid preset installation on Fedora. Per-controller gyro calibration persistence remains planned.
 
 ## Phase 6 — compatibility and transports
 Bluetooth DualSense Edge, DualSense, additional controllers, virtual output compatibility, optional game-launch visibility helpers. **Exit:** per-device and per-game compatibility evidence.
+
+The first step adds an opt-in Xbox 360-compatible uinput identity with the
+xpad button, hat and analog trigger layout. Automated coverage exercises
+USB report mapping to that layout. Steam Input and Proton tests remain
+pending. [Xbox 360 output acceptance](TESTING_AND_PERFORMANCE.md#xbox-360-output-acceptance)
 
 ## Phase 7 — optimize, harden, prepare GUI
 Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.

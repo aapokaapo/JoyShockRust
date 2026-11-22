@@ -235,6 +235,21 @@ gamepad returns. Finally stop the service and check that its virtual
 devices are gone. The user's Fedora run of `ac0df46` verified startup
 while disconnected, device detection, and gyro mouse recreation at reconnect.
 
+## Xbox 360 output acceptance
+
+Stop the user service if it is active, then run
+`cargo run --locked -p joyshockrust-linux -- --gamepad xbox360` with a
+DualSense Edge connected by USB. Open Steam's Test Device Inputs for the
+virtual controller. Check Cross/A, Circle/B, Square/X and Triangle/Y, the
+D-pad, both sticks and both analog triggers. Unplug and reconnect to
+verify the device returns with the same identity. In a Proton game, record
+the game, Proton version, Steam Input setting and whether a single press
+performs one action. The physical controller is still visible to games.
+
+For a kernel-level assertion of the virtual device ID and Cross events, run
+`cargo test --locked -p joyshockrust-linux uinput_xbox360_identity_and_cross_press -- --ignored`
+with the evdev permissions described in [Virtual gamepad acceptance](#virtual-gamepad-acceptance).
+
 ## Profile reload acceptance
 
 Install the updated executable and unit. Reload the systemd user manager
@@ -251,6 +266,8 @@ same bridge process running. The user's Fedora run of `4800d3b` also
 confirmed the systemd reload command reports success, failure and recovery.
 
 ## Profile installation acceptance
+
+The user verified valid and invalid installs on Fedora with `c703382`.
 
 Install a valid preset to a separate file with
 `joyshockrust-linux --install-profile SOURCE DESTINATION`. Compare the

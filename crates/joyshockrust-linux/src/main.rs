@@ -36,7 +36,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --diagnose [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
-        "bridge options: --status-socket SOCKET [--reload-socket SOCKET]\n",
+        "bridge options: [--gamepad generic|xbox360] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -59,6 +59,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut reload_query = false;
     let mut reload_path = None;
     let mut status_path = None;
+    let mut gamepad_kind = None;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
     let mut args = env::args_os().skip(1);
@@ -142,6 +143,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 _ => ProfileMode::Run,
             };
             profile_path = Some((PathBuf::from(file), mode));
+        } else if arg == "--gamepad" && gamepad_kind.is_none() {
+            let value = args
+                .next()
+                .ok_or("expected generic or xbox360 after --gamepad")?;
+            gamepad_kind = Some(match value.to_str() {
+                Some("generic") => gamepad::OutputKind::Generic,
+                Some("xbox360") => gamepad::OutputKind::Xbox360,
+                _ => return Err("expected generic or xbox360 after --gamepad".into()),
+            });
         } else if arg == "--flick-stick" {
             if options.flick_stick.is_some() {
                 return Err("select only one Flick Stick sensitivity".into());
@@ -188,12 +198,12 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         return Err("gyro options require --gyro-mouse".into());
     }
     let mapping_options = gyro_mouse || stick_curve.is_some() || !remaps.is_empty();
-    let sockets_configured = status_path.is_some() || reload_path.is_some();
+    let bridge_options = status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some();
     if status_query || reload_query {
         if (status_query && reload_query)
             || diagnose
             || profile_path.is_some()
-            || sockets_configured
+            || bridge_options
             || mapping_options
         {
             return Err("select one socket command with only an optional socket path".into());
@@ -207,7 +217,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         return Ok(ExitCode::SUCCESS);
     }
     if diagnose {
-        if profile_path.is_some() || sockets_configured || mapping_options {
+        if profile_path.is_some() || bridge_options || mapping_options {
             return Err("--diagnose takes only an optional hidraw path".into());
         }
         diagnostics::run(path.as_deref(), std::io::stdout().lock())?;
@@ -218,7 +228,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
         if mode == ProfileMode::Install {
-            if sockets_configured {
+            if bridge_options {
                 return Err("--install-profile takes a source and an optional destination".into());
             }
             let destination = match path {
@@ -229,7 +239,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             println!("Installed profile: {}", destination.display());
             return Ok(ExitCode::SUCCESS);
         }
-        if mode == ProfileMode::Check && (path.is_some() || sockets_configured) {
+        if mode == ProfileMode::Check && (path.is_some() || bridge_options) {
             return Err("--check-profile takes only a profile path".into());
         }
         let profile = match profile::load(&profile_path) {
@@ -273,14 +283,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         status.update(false, runtime.gyro.is_some());
     }
     let reload = reload.as_ref();
+    let gamepad_kind = gamepad_kind.unwrap_or_default();
     if let Some(path) = path {
         let mut input = discovery::open_wired_edge(&path)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-        serve_session(&mut input, &mut runtime, reload, status)?;
+        serve_session(&mut input, &mut runtime, reload, status, gamepad_kind)?;
     } else {
         discovery::run(reload, status, |event| match event {
             discovery::Event::Connected(input) => {
-                serve_session(input, &mut runtime, reload, status)
+                serve_session(input, &mut runtime, reload, status, gamepad_kind)
             }
             discovery::Event::Reload(reload) => {
                 if let Some(next) = reload.load() {
@@ -320,12 +331,13 @@ fn serve_session(
     runtime: &mut profile::RuntimeOptions,
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
+    gamepad_kind: gamepad::OutputKind,
 ) -> std::io::Result<()> {
     let mut mouse = open_mouse(input, runtime.gyro)?;
     let reload_input = reload.map(|_| input.try_clone()).transpose()?;
-    let mut output = gamepad::open()
+    let mut output = gamepad::open(gamepad_kind)
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
-    let mut state = gamepad::GamepadState::default();
+    let mut state = gamepad::GamepadState::new(gamepad_kind);
     let mut layer_state = gamepad::RemapState::default();
     if let Some(status) = status {
         status.update(true, runtime.gyro.is_some());

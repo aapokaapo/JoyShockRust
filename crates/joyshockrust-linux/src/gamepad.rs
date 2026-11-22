@@ -149,13 +149,14 @@ const BUTTONS: [(Button, Key); 13] = [
     (Button::North, Key::BTN_WEST), // BTN_Y
     (Button::LeftShoulder, Key::BTN_TL),
     (Button::RightShoulder, Key::BTN_TR),
-    (Button::LeftTrigger, Key::BTN_TL2),
-    (Button::RightTrigger, Key::BTN_TR2),
     (Button::Select, Key::BTN_SELECT),
     (Button::Start, Key::BTN_START),
     (Button::LeftStick, Key::BTN_THUMBL),
     (Button::RightStick, Key::BTN_THUMBR),
     (Button::Home, Key::BTN_MODE),
+    // The generic gamepad also advertises digital trigger buttons.
+    (Button::LeftTrigger, Key::BTN_TL2),
+    (Button::RightTrigger, Key::BTN_TR2),
 ];
 
 const STICK_SCALE: i32 = 32_767;
@@ -171,14 +172,45 @@ const AXES: [(Axis, i32, i32); 8] = [
     (Axis::ABS_HAT0Y, -1, 1),
 ];
 
-pub fn open() -> io::Result<VirtualDevice> {
-    let keys = BUTTONS
-        .into_iter()
-        .map(|(_, code)| code)
+#[derive(Clone, Copy, Default)]
+pub enum OutputKind {
+    #[default]
+    Generic,
+    Xbox360,
+}
+
+impl OutputKind {
+    fn identity(self) -> (&'static str, InputId) {
+        match self {
+            Self::Generic => (
+                "JoyShockRust Virtual Gamepad",
+                InputId::new(BusType::BUS_VIRTUAL, 0, 0, 1),
+            ),
+            Self::Xbox360 => (
+                "JoyShockRust Virtual Xbox 360 Gamepad",
+                InputId::new(BusType::BUS_USB, 0x045e, 0x028e, 0x0114),
+            ),
+        }
+    }
+
+    fn buttons(self) -> &'static [(Button, Key)] {
+        match self {
+            Self::Generic => &BUTTONS,
+            Self::Xbox360 => &BUTTONS[..BUTTONS.len() - 2],
+        }
+    }
+}
+
+pub fn open(kind: OutputKind) -> io::Result<VirtualDevice> {
+    let (name, id) = kind.identity();
+    let keys = kind
+        .buttons()
+        .iter()
+        .map(|&(_, code)| code)
         .collect::<AttributeSet<Key>>();
     let mut builder = VirtualDevice::builder()?
-        .name("JoyShockRust Virtual Gamepad")
-        .input_id(InputId::new(BusType::BUS_VIRTUAL, 0, 0, 1))
+        .name(name)
+        .input_id(id)
         .with_keys(&keys)?;
     for (code, min, max) in AXES {
         builder = builder.with_absolute_axis(&UinputAbsSetup::new(
@@ -191,10 +223,18 @@ pub fn open() -> io::Result<VirtualDevice> {
 
 #[derive(Default)]
 pub struct GamepadState {
+    kind: OutputKind,
     current: Controls,
 }
 
 impl GamepadState {
+    pub fn new(kind: OutputKind) -> Self {
+        Self {
+            kind,
+            current: Controls::default(),
+        }
+    }
+
     pub fn publish(
         &mut self,
         next: Controls,
@@ -202,7 +242,7 @@ impl GamepadState {
     ) -> io::Result<()> {
         let mut changes = [InputEvent::new(0, 0, 0); BUTTONS.len() + AXES.len()];
         let mut count = 0;
-        for (button, code) in BUTTONS {
+        for &(button, code) in self.kind.buttons() {
             let pressed = next.buttons.contains(button);
             if pressed != self.current.buttons.contains(button) {
                 changes[count] = InputEvent::new(EventType::KEY.0, code.0, i32::from(pressed));
@@ -453,6 +493,16 @@ mod tests {
     #[test]
     #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
     fn uinput_cross_press_and_release() {
+        assert_uinput_gamepad(OutputKind::Generic);
+    }
+
+    #[test]
+    #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
+    fn uinput_xbox360_identity_and_cross_press() {
+        assert_uinput_gamepad(OutputKind::Xbox360);
+    }
+
+    fn assert_uinput_gamepad(kind: OutputKind) {
         use std::{
             os::fd::AsFd,
             thread,
@@ -462,7 +512,7 @@ mod tests {
         use evdev::{Device, SynchronizationCode};
         use nix::poll::{PollFd, PollFlags, poll};
 
-        let mut virtual_device = open().expect("create the virtual gamepad");
+        let mut virtual_device = open(kind).expect("create the virtual gamepad");
         let node = virtual_device
             .enumerate_dev_nodes_blocking()
             .expect("enumerate the virtual gamepad's event nodes")
@@ -488,7 +538,20 @@ mod tests {
                 ),
             }
         };
-        assert_eq!(observer.name(), Some("JoyShockRust Virtual Gamepad"));
+        let (name, id) = kind.identity();
+        assert_eq!(observer.name(), Some(name));
+        assert_eq!(observer.input_id(), id);
+        let keys = observer.supported_keys().unwrap();
+        assert_eq!(
+            keys.contains(Key::BTN_TL2),
+            matches!(kind, OutputKind::Generic)
+        );
+        assert!(
+            observer
+                .supported_absolute_axes()
+                .unwrap()
+                .contains(Axis::ABS_Z)
+        );
         observer.set_nonblocking(true).unwrap();
 
         let mut report = [0; 64];
@@ -498,7 +561,7 @@ mod tests {
         let pressed = parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &report, None)
             .unwrap()
             .controls;
-        let mut state = GamepadState::default();
+        let mut state = GamepadState::new(kind);
         state
             .publish(pressed, |events| virtual_device.emit(events))
             .unwrap();
@@ -526,6 +589,35 @@ mod tests {
                 (EventType::KEY, Key::BTN_SOUTH.0, 0),
                 sync,
             ],
+        );
+    }
+
+    #[test]
+    fn xbox360_output_keeps_face_button_order_and_emits_analog_trigger_only() {
+        let mut frame = [0; 64];
+        frame[..10].copy_from_slice(&[1, 128, 128, 128, 128, 255, 0, 0, 0x98, 0x04]);
+        let controls = parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None)
+            .unwrap()
+            .controls;
+        let mut gamepad = GamepadState::new(OutputKind::Xbox360);
+        let mut events = Vec::new();
+        gamepad
+            .publish(controls, |batch| {
+                events.extend(
+                    batch
+                        .iter()
+                        .map(|event| (event.event_type(), event.code(), event.value())),
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            events,
+            [
+                (EventType::KEY, Key::BTN_NORTH.0, 1),
+                (EventType::KEY, Key::BTN_WEST.0, 1),
+                (EventType::ABSOLUTE, Axis::ABS_Z.0, 255),
+            ]
         );
     }
 
