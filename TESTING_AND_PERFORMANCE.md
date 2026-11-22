@@ -140,6 +140,17 @@ rotating, test L1 and R1 separately, then hold both in either order. Aim
 should move only while both are down. Release either button while rotating
 to check that motion stops, then press it again and check for a jump.
 
+The user reported that the two-button gyro chord worked as expected.
+
+## Stick response curve acceptance
+
+Start with `cargo run --locked -p joyshockrust-linux -- --stick-curve 2`.
+Open **Test Device Inputs** for **JoyShockRust Virtual Gamepad** in Steam.
+Move each stick about halfway along one axis. The displayed virtual movement
+should be about one quarter, before any Steam filtering. Try a diagonal and
+verify its direction stays the same. Full travel and return to center should
+match the linear mode. Compare with a separate run using `--stick-curve 1`.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

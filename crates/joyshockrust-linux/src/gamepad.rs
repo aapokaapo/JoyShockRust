@@ -4,7 +4,39 @@ use evdev::{
     AbsInfo, AbsoluteAxisCode as Axis, AttributeSet, BusType, EventType, InputEvent, InputId,
     KeyCode as Key, UinputAbsSetup, uinput::VirtualDevice,
 };
-use joyshockrust_core::{Button, Controls, DPad};
+use joyshockrust_core::{Button, Controls, DPad, Stick};
+
+#[derive(Clone, Copy)]
+pub struct StickCurve(f32);
+
+impl StickCurve {
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        let exponent: f32 = value.parse().map_err(|_| "invalid stick curve exponent")?;
+        if !(0.25..=4.0).contains(&exponent) {
+            return Err("stick curve exponent must be between 0.25 and 4");
+        }
+        Ok(Self(exponent))
+    }
+
+    pub fn apply(self, mut controls: Controls) -> Controls {
+        controls.left_stick = self.shape(controls.left_stick);
+        controls.right_stick = self.shape(controls.right_stick);
+        controls
+    }
+
+    fn shape(self, stick: Stick) -> Stick {
+        let radius_squared = stick.x * stick.x + stick.y * stick.y;
+        // Keep center and full travel unchanged, including square corners.
+        if self.0 == 1.0 || radius_squared == 0.0 || radius_squared >= 1.0 {
+            return stick;
+        }
+        let scale = radius_squared.powf((self.0 - 1.0) * 0.5);
+        Stick {
+            x: stick.x * scale,
+            y: stick.y * scale,
+        }
+    }
+}
 
 const BUTTONS: [(Button, Key); 13] = [
     (Button::South, Key::BTN_SOUTH),
@@ -117,6 +149,38 @@ fn axes(controls: Controls) -> [i32; AXES.len()] {
 mod tests {
     use super::*;
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+    #[test]
+    fn stick_curve_preserves_direction_and_shapes_both_sticks() {
+        let controls = Controls {
+            left_stick: Stick { x: 0.3, y: -0.4 },
+            right_stick: Stick { x: -0.5, y: 0.0 },
+            left_trigger: 0.5,
+            dpad: DPad::Up,
+            ..Controls::default()
+        };
+        let result = StickCurve::parse("2").unwrap().apply(controls);
+        assert!((result.left_stick.x - 0.15).abs() < 1e-6);
+        assert!((result.left_stick.y + 0.2).abs() < 1e-6);
+        assert_eq!(axes(result)[2], -8192);
+        assert_eq!(result.left_trigger, controls.left_trigger);
+        assert_eq!(result.dpad, controls.dpad);
+        assert_eq!(StickCurve::parse("1").unwrap().apply(controls), controls);
+    }
+
+    #[test]
+    fn stick_curve_accepts_center_and_full_travel_and_rejects_invalid_exponents() {
+        let controls = Controls {
+            left_stick: Stick { x: 1.0, y: -1.0 },
+            ..Controls::default()
+        };
+        let curve = StickCurve::parse("0.5").unwrap();
+        assert_eq!(curve.apply(controls), controls);
+        assert!(curve.shape(Stick { x: 0.25, y: 0.0 }).x > 0.25);
+        for invalid in ["NaN", "inf", "0", "-1", "4.1"] {
+            assert!(StickCurve::parse(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]

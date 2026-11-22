@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use joyshockrust_core::Button;
 
     const USAGE: &str = concat!(
-        "usage: joyshockrust-linux [--gyro-mouse [--calibrate-gyro] [BINDING]] [/dev/hidrawN]\n",
+        "usage: joyshockrust-linux [--stick-curve EXPONENT] [--gyro-mouse [--calibrate-gyro] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
         "--gyro-double-tap BUTTON | --gyro-chord BUTTON,BUTTON | --gyro-hold-l2 | ",
         "--gyro-trigger SIDE[:PRESS:RELEASE]",
@@ -26,6 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut gyro_mouse = false;
     let mut options = gyro_mouse::Options::default();
     let mut path = None;
+    let mut stick_curve = None;
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--help" {
@@ -79,6 +80,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => Binding::Toggle(button),
                 }
             };
+        } else if arg == "--stick-curve" {
+            if stick_curve.is_some() {
+                return Err("select only one stick curve".into());
+            }
+            let value = args.next().ok_or("expected a stick curve exponent")?;
+            stick_curve = Some(gamepad::StickCurve::parse(
+                value.to_str().ok_or("invalid stick curve exponent")?,
+            )?);
         } else if path.is_none() && !arg.as_encoded_bytes().starts_with(b"-") {
             path = Some(PathBuf::from(arg));
         } else {
@@ -92,9 +101,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = path {
         let mut input = discovery::open_wired_edge(&path)
             .map_err(|err| format!("could not use {}: {err}", path.display()))?;
-        serve_session(&mut input, options)?;
+        serve_session(&mut input, options, stick_curve)?;
     } else {
-        discovery::run(|input| serve_session(input, options))?;
+        discovery::run(|input| serve_session(input, options, stick_curve))?;
     }
     Ok(())
 }
@@ -103,6 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn serve_session(
     input: &mut std::fs::File,
     options: Option<gyro_mouse::Options>,
+    stick_curve: Option<gamepad::StickCurve>,
 ) -> std::io::Result<()> {
     let mut mouse = if let Some(options) = options {
         let mouse = gyro_mouse::GyroMouse::open(input, options)
@@ -119,7 +129,8 @@ fn serve_session(
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
     let mut state = gamepad::GamepadState::default();
     let result = forward_reports(input, |report| {
-        state.publish(report.controls, |events| output.emit(events))?;
+        let controls = stick_curve.map_or(report.controls, |curve| curve.apply(report.controls));
+        state.publish(controls, |events| output.emit(events))?;
         if let Some(mouse) = &mut mouse {
             mouse.publish(report)?;
         }

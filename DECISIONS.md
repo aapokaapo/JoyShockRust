@@ -69,3 +69,5 @@ The tap/hold gyro binding compares report arrival time with a 200 ms monotonic d
 Double-tap gyro toggling counts complete short taps. Each press must be shorter than 200 ms, and the second release must arrive within 300 ms of the first. A long press cancels a pending pair. Timing uses monotonic report arrival and each USB session starts with an empty gesture state. [Gyro acceptance](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
 
 The gyro chord holds aim active while two distinct digital buttons are down. Button order is irrelevant. It uses the same report-boundary gate as a single hold. [Gyro acceptance](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
+
+The optional stick curve raises the radial magnitude to a power inside the unit circle and scales both components together. Center, full travel and diagonal corners retain their original values. The curve affects virtual gamepad output after HID decoding. [Stick curve acceptance](TESTING_AND_PERFORMANCE.md#stick-response-curve-acceptance)

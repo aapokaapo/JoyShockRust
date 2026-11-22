@@ -99,6 +99,11 @@ D-pad, sticks and analog triggers. It releases held controls when the input
 session ends. Games can still see the physical controller. See the
 [uinput and Steam acceptance tests](TESTING_AND_PERFORMANCE.md#virtual-gamepad-acceptance).
 
+Add `--stick-curve 2` to soften small movements on both virtual gamepad
+sticks. The radial curve preserves direction, center, and full travel.
+Exponent 1 is linear. Values below 1 amplify small movement and values
+above 1 reduce it. The accepted range is 0.25–4.
+
 ## Experimental gyro mouse
 
 On Linux, enable relative pointer output from a wired DualSense Edge:
