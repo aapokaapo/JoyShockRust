@@ -251,8 +251,9 @@ same bridge process running.
 
 ## Service status acceptance
 
-Install the updated executable and unit and restart the service. Run
-`$HOME/.local/bin/joyshockrust-linux --status` with USB disconnected, after
+Install the updated executable and unit and restart the service. As soon
+as the restart returns, run `$HOME/.local/bin/joyshockrust-linux --status`
+with USB disconnected. Repeat after
 plugging the Edge in, and after unplugging it. Expect `controller=waiting`,
 `controller=connected` and `controller=waiting`, respectively. Check that
 `gyro_configured` matches the profile's gyro section. A successful reload

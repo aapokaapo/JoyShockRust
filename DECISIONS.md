@@ -91,3 +91,8 @@ The optional systemd user unit starts the installed bridge in discovery mode wit
 Profiles can be reloaded with SIGHUP. Linux polls a signalfd alongside hidraw or udev readiness, and the session validates new settings between report batches. Rejection preserves the previous profile. A mapping change resets layer selection, and gyro option changes prepare a replacement mouse before dropping the current one. [Reload acceptance](TESTING_AND_PERFORMANCE.md#profile-reload-acceptance)
 
 The user service publishes a read-only snapshot on a Unix stream socket in its private runtime directory. Each connection receives one versioned status response and closes. The bridge serves a bounded number of status connections per readiness wake. [Service status acceptance](TESTING_AND_PERFORMANCE.md#service-status-acceptance)
+
+Updated 2026-11-22. The user unit uses `Type=notify`. The bridge sends
+`READY=1` after binding the status socket and starting the udev monitor, so a
+status query can connect as soon as the service start command completes.
+[systemd startup notification](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#Type=)

@@ -2,7 +2,8 @@
 Description=JoyShockRust USB controller bridge
 
 [Service]
-Type=exec
+Type=notify
+NotifyAccess=main
 ExecStart=%h/.local/bin/joyshockrust-linux --profile %E/joyshockrust/profile.toml --status-socket %t/joyshockrust/status.sock
 RuntimeDirectory=joyshockrust
 RuntimeDirectoryMode=0700

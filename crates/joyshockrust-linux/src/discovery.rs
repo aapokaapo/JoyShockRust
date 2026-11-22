@@ -11,6 +11,7 @@ use nix::poll::PollFlags;
 use super::{
     reload::{self, Reload},
     status::StatusSocket,
+    systemd,
 };
 
 pub fn open_wired_edge(path: &Path) -> io::Result<File> {
@@ -42,6 +43,8 @@ pub fn run(
     let monitor = udev::MonitorBuilder::new()?
         .match_subsystem("hidraw")?
         .listen()?;
+    // The startup profile, status listener and udev monitor are ready.
+    systemd::notify_ready()?;
     let mut disconnected = None;
     let mut waiting = false;
     loop {

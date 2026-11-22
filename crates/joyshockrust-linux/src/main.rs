@@ -19,6 +19,8 @@ mod profile;
 mod reload;
 #[cfg(target_os = "linux")]
 mod status;
+#[cfg(target_os = "linux")]
+mod systemd;
 
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
