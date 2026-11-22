@@ -4,60 +4,85 @@ use evdev::{
     AbsInfo, AbsoluteAxisCode as Axis, AttributeSet, BusType, EventType, InputEvent, InputId,
     KeyCode as Key, UinputAbsSetup, uinput::VirtualDevice,
 };
-use joyshockrust_core::{Button, Controls, DPad, Stick};
+use joyshockrust_core::{Button, Buttons, Controls, DPad, Stick};
 
 #[derive(Default)]
 pub struct ButtonRemaps {
+    base: Vec<(Button, Button)>,
+    layers: Vec<RemapLayer>,
+}
+
+struct RemapLayer {
+    modifier: Button,
     rules: Vec<(Button, Button)>,
-    layer: Option<Button>,
 }
 
 impl ButtonRemaps {
     pub fn add(&mut self, spec: &str) -> Result<(), &'static str> {
-        let (source, target) = spec.split_once('=').ok_or("expected SOURCE=TARGET")?;
-        let source = super::gyro_gate::button_by_name(source).ok_or("unknown source button")?;
-        let target = super::gyro_gate::button_by_name(target).ok_or("unknown target button")?;
-        if !BUTTONS.iter().any(|&(button, _)| button == target) {
-            return Err("target button is unavailable on the virtual gamepad");
-        }
-        if self.rules.iter().any(|&(button, _)| button == source) {
-            return Err("source button already has a remap");
-        }
-        self.rules.push((source, target));
-        Ok(())
+        add_rule(&mut self.base, parse_rule(spec)?)
     }
 
-    pub fn set_layer(&mut self, name: &str) -> Result<(), &'static str> {
-        if self.layer.is_some() {
-            return Err("select only one remap layer button");
+    pub fn add_layer(&mut self, spec: &str) -> Result<(), &'static str> {
+        let (modifier, rule) = spec
+            .split_once(':')
+            .ok_or("expected MODIFIER:SOURCE=TARGET")?;
+        let modifier =
+            super::gyro_gate::button_by_name(modifier).ok_or("unknown remap layer button")?;
+        let rule = parse_rule(rule)?;
+        if let Some(layer) = self
+            .layers
+            .iter_mut()
+            .find(|layer| layer.modifier == modifier)
+        {
+            add_rule(&mut layer.rules, rule)
+        } else {
+            self.layers.push(RemapLayer {
+                modifier,
+                rules: vec![rule],
+            });
+            Ok(())
         }
-        let button = super::gyro_gate::button_by_name(name).ok_or("unknown remap layer button")?;
-        self.layer = Some(button);
-        Ok(())
-    }
-
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.layer.is_some() && self.rules.is_empty() {
-            return Err("--remap-layer requires at least one --remap-button");
-        }
-        Ok(())
     }
 
     pub fn apply(&self, mut controls: Controls) -> Controls {
         let physical = controls.buttons;
-        if self.layer.is_some_and(|button| !physical.contains(button)) {
-            return controls;
-        }
-        for &(source, _) in &self.rules {
-            controls.buttons.remove(source);
-        }
-        for &(source, target) in &self.rules {
-            if physical.contains(source) {
-                controls.buttons.insert(target);
+        let mut remaining = physical;
+        let mut targets = Buttons::default();
+        let active_layers = self
+            .layers
+            .iter()
+            .rev()
+            .filter(|layer| physical.contains(layer.modifier));
+        for &(source, target) in active_layers
+            .flat_map(|layer| &layer.rules)
+            .chain(&self.base)
+        {
+            if remaining.contains(source) {
+                remaining.remove(source);
+                targets.insert(target);
             }
         }
+        controls.buttons = remaining.union(targets);
         controls
     }
+}
+
+fn parse_rule(spec: &str) -> Result<(Button, Button), &'static str> {
+    let (source, target) = spec.split_once('=').ok_or("expected SOURCE=TARGET")?;
+    let source = super::gyro_gate::button_by_name(source).ok_or("unknown source button")?;
+    let target = super::gyro_gate::button_by_name(target).ok_or("unknown target button")?;
+    if !BUTTONS.iter().any(|&(button, _)| button == target) {
+        return Err("target button is unavailable on the virtual gamepad");
+    }
+    Ok((source, target))
+}
+
+fn add_rule(rules: &mut Vec<(Button, Button)>, rule: (Button, Button)) -> Result<(), &'static str> {
+    if rules.iter().any(|&(source, _)| source == rule.0) {
+        return Err("source button already has a remap in this layer");
+    }
+    rules.push(rule);
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -205,13 +230,45 @@ mod tests {
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
 
     #[test]
+    fn independent_layers_override_only_their_own_sources() {
+        let mut remaps = ButtonRemaps::default();
+        remaps.add("cross=triangle").unwrap();
+        remaps.add("options=create").unwrap();
+        remaps.add_layer("l1:cross=circle").unwrap();
+        remaps.add_layer("r1:cross=square").unwrap();
+        remaps.add_layer("l1:l3=r3").unwrap();
+        assert!(remaps.add_layer("l1:cross=square").is_err());
+
+        for (left, right, expected) in [
+            (false, false, Button::North),
+            (true, false, Button::East),
+            (false, true, Button::West),
+            (true, true, Button::West),
+        ] {
+            let mut physical = Controls::default();
+            for button in [Button::South, Button::Start, Button::LeftStick] {
+                physical.buttons.insert(button);
+            }
+            if left {
+                physical.buttons.insert(Button::LeftShoulder);
+            }
+            if right {
+                physical.buttons.insert(Button::RightShoulder);
+            }
+            let mapped = remaps.apply(physical).buttons;
+            for face in [Button::South, Button::East, Button::West, Button::North] {
+                assert_eq!(mapped.contains(face), face == expected);
+            }
+            assert!(mapped.contains(Button::Select));
+            assert_eq!(mapped.contains(Button::RightStick), left);
+            assert_eq!(mapped.contains(Button::LeftStick), !left);
+        }
+    }
+
+    #[test]
     fn layer_switch_releases_and_rebinds_held_buttons_in_one_batch() {
         let mut remaps = ButtonRemaps::default();
-        remaps.set_layer("l1").unwrap();
-        assert!(remaps.validate().is_err());
-        assert!(remaps.set_layer("r1").is_err());
-        remaps.add("cross=circle").unwrap();
-        remaps.validate().unwrap();
+        remaps.add_layer("l1:cross=circle").unwrap();
 
         let mut base = Controls::default();
         base.buttons.insert(Button::South);

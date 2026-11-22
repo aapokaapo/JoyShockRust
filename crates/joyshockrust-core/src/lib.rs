@@ -40,6 +40,10 @@ impl Buttons {
         self.0 &= !(1 << button as u32);
     }
 
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
     pub const fn contains(self, button: Button) -> bool {
         self.0 & (1 << button as u32) != 0
     }

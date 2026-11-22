@@ -108,9 +108,17 @@ Use repeatable `--remap-button SOURCE=TARGET` options to change virtual
 gamepad buttons, for example `--remap-button cross=circle --remap-button circle=cross`.
 Rules use physical button names and apply simultaneously. Gyro bindings
 continue to read physical buttons. Remapping L2 or R2 changes its digital
-button. Analog trigger travel is forwarded independently. Add `--remap-layer l1`
-to apply all configured remaps only while physical L1 is held. L1 still
-sends its usual virtual button unless it has a remap of its own.
+button. Analog trigger travel is forwarded independently.
+
+Layer rules use a separate, repeatable `--layer-remap MODIFIER:SOURCE=TARGET`
+option. For example, use `--layer-remap l1:cross=circle --layer-remap r1:cross=square`.
+Rules sharing a modifier belong to the same layer. Held layers override
+base rules for their own sources. If active layers conflict, the layer
+introduced later on the command line wins. The modifier still follows
+its own button mapping.
+
+Replace the former `--remap-layer l1 --remap-button cross=circle` syntax
+with `--layer-remap l1:cross=circle`.
 
 ## Experimental gyro mouse
 

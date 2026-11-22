@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use joyshockrust_core::Button;
 
     const USAGE: &str = concat!(
-        "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--remap-layer BUTTON] ",
+        "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
         "--gyro-double-tap BUTTON | --gyro-chord BUTTON,BUTTON | --gyro-hold-l2 | ",
@@ -95,9 +95,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .next()
                 .ok_or("expected SOURCE=TARGET after --remap-button")?;
             remaps.add(spec.to_str().ok_or("invalid button remap specification")?)?;
+        } else if arg == "--layer-remap" {
+            let spec = args
+                .next()
+                .ok_or("expected MODIFIER:SOURCE=TARGET after --layer-remap")?;
+            remaps.add_layer(spec.to_str().ok_or("invalid layer remap specification")?)?;
         } else if arg == "--remap-layer" {
-            let name = args.next().ok_or("expected a button after --remap-layer")?;
-            remaps.set_layer(name.to_str().ok_or("invalid remap layer button")?)?;
+            return Err("use --layer-remap MODIFIER:SOURCE=TARGET for each layer rule".into());
         } else if path.is_none() && !arg.as_encoded_bytes().starts_with(b"-") {
             path = Some(PathBuf::from(arg));
         } else {
@@ -107,7 +111,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if (options.calibrate || !matches!(options.binding, Binding::Always)) && !gyro_mouse {
         return Err("gyro options require --gyro-mouse".into());
     }
-    remaps.validate()?;
     let options = gyro_mouse.then_some(options);
     if let Some(path) = path {
         let mut input = discovery::open_wired_edge(&path)
