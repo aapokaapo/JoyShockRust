@@ -41,7 +41,7 @@ pub struct TriggerGate {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum TriggerSide {
+pub(crate) enum TriggerSide {
     Left,
     Right,
 }
@@ -74,6 +74,23 @@ impl TriggerGate {
             press,
             release,
         })
+    }
+
+    pub(crate) fn partial(spec: &str) -> Result<Option<(Self, Self)>, &'static str> {
+        let fields = spec.split(':').collect::<Vec<_>>();
+        let &[side, press, release, full_press, full_release] = fields.as_slice() else {
+            return Ok(None);
+        };
+        let lower = Self::parse(&format!("{side}:{press}:{release}"))?;
+        let upper = Self::parse(&format!("{side}:{full_press}:{full_release}"))?;
+        if lower.press >= upper.release {
+            return Err("partial trigger thresholds must satisfy partial press < full release");
+        }
+        Ok(Some((lower, upper)))
+    }
+
+    pub(crate) fn side(self) -> TriggerSide {
+        self.side
     }
 
     pub(crate) fn pressed(self, controls: &Controls, was_pressed: bool) -> bool {

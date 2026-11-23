@@ -8,17 +8,23 @@ use evdev::{
     AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode, RelativeAxisCode as Axis,
     uinput::VirtualDevice,
 };
+use joyshockrust_core::Button;
 use joyshockrust_input::{
     FactoryCalibration, InputReport, RawImuSample, Timebase, TimestampUpdate, Transport,
 };
 use joyshockrust_motion::{
     Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
+    aim_response::{
+        DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse,
+    },
 };
 
 use super::{
     flick_stick::FlickStick,
     game_calibration::GameCalibration,
+    gyro_calibration::BiasWriter,
     gyro_gate::{Binding, GyroGate},
+    haptics::{Cue, Haptics},
 };
 
 pub struct GyroMouse {
@@ -26,15 +32,67 @@ pub struct GyroMouse {
     output: VirtualDevice,
     gate: GyroGate,
     flick: Option<FlickStick>,
+    hold: Option<HoldDetector>,
+    shortcut: Option<ShortcutCalibration>,
+    haptics: Option<Haptics>,
+    bias_writer: Option<BiasWriter>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Options {
     pub calibrate: bool,
+    pub calibration_hold: Option<HoldBinding>,
     pub binding: Binding,
     pub flick_stick: Option<f64>,
+    pub flick_axial_threshold_deg: Option<f64>,
+    pub flick_steering_sensitivity: Option<f64>,
+    pub response: GyroResponse,
     pub sensitivity: Sensitivity,
     pub game_calibration: GameCalibration,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct HoldBinding {
+    pub button: Button,
+    pub duration: Duration,
+}
+
+struct HoldDetector {
+    binding: HoldBinding,
+    pressed_since: Option<Instant>,
+    fired: bool,
+}
+
+impl HoldDetector {
+    fn new(binding: HoldBinding) -> Self {
+        Self {
+            binding,
+            pressed_since: None,
+            fired: true,
+        }
+    }
+
+    fn observe(&mut self, pressed: bool, now: Instant) -> bool {
+        if !pressed {
+            self.pressed_since = None;
+            self.fired = false;
+            return false;
+        }
+        if self.fired {
+            return false;
+        }
+        if now.duration_since(*self.pressed_since.get_or_insert(now)) >= self.binding.duration {
+            self.fired = true;
+            return true;
+        }
+        false
+    }
+}
+
+struct ShortcutCalibration {
+    settle_at: Instant,
+    deadline: Instant,
+    measuring: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -65,6 +123,16 @@ impl Options {
         self.sensitivity
             .0
             .map(|scale| self.game_calibration.scale(f64::from(scale)))
+    }
+
+    pub fn flick_axial_threshold(self) -> f64 {
+        self.flick_axial_threshold_deg
+            .unwrap_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
+    }
+
+    fn flick_steering_sensitivity(self) -> f64 {
+        self.flick_steering_sensitivity
+            .unwrap_or(DEFAULT_FLICK_STEERING_SENSITIVITY)
     }
 
     fn flick_scale(self) -> Option<f64> {
@@ -111,31 +179,110 @@ impl GyroMouse {
         let factory = super::hidraw::read_factory_calibration(input, transport).map_err(|err| {
             io::Error::other(format!("could not read factory calibration: {err}"))
         })?;
+        let stored = super::gyro_calibration::load(input);
+        let output = open_output("JoyShockRust Gyro Mouse")?;
+        let bias_writer = if options.calibration_hold.is_some() {
+            BiasWriter::open(input).unwrap_or_else(|error| {
+                eprintln!("Could not prepare controller gyro calibration storage: {error}");
+                None
+            })
+        } else {
+            None
+        };
+        if stored.is_some() {
+            eprintln!("Applied saved controller gyro calibration");
+        }
         Ok(Self {
-            aim: GyroAim::new(factory, options.calibrate, options.gyro_scale()),
-            output: open_output("JoyShockRust Gyro Mouse")?,
+            aim: GyroAim::new(factory, options.calibrate, options.gyro_scale(), stored)
+                .with_response(options.response),
+            output,
+            hold: options.calibration_hold.map(HoldDetector::new),
+            shortcut: None,
+            haptics: options
+                .calibration_hold
+                .and_then(|_| Haptics::open(input, transport)),
+            bias_writer,
             gate: GyroGate::new(options.binding),
-            flick: options.flick_scale().map(FlickStick::new),
+            flick: options.flick_scale().map(|scale| {
+                FlickStick::new(scale)
+                    .with_axial_threshold(options.flick_axial_threshold())
+                    .with_steering_sensitivity(options.flick_steering_sensitivity())
+            }),
         })
     }
 
     pub fn set_scaling(&mut self, options: Options) {
         self.aim.set_sensitivity(options.gyro_scale());
+        if self.aim.response != options.response {
+            self.aim.set_response(options.response);
+        }
         if let (Some(flick), Some(scale)) = (&mut self.flick, options.flick_scale()) {
             flick.set_counts_per_degree(scale);
+            flick.set_axial_threshold(options.flick_axial_threshold());
+            flick.set_steering_sensitivity(options.flick_steering_sensitivity());
         }
     }
 
     pub fn publish(&mut self, report: InputReport) -> io::Result<bool> {
+        let mut suppress_flick = false;
+        if let Some(hold) = &mut self.hold {
+            let pressed = report.controls.buttons.contains(hold.binding.button);
+            let now = Instant::now();
+            if hold.observe(pressed, now) && self.shortcut.is_none() {
+                self.shortcut = Some(ShortcutCalibration {
+                    settle_at: now + Duration::from_millis(500),
+                    deadline: now + Duration::from_secs(15),
+                    measuring: false,
+                });
+                self.aim.calibration = None;
+                self.aim.reset_motion();
+                self.aim.was_enabled = false;
+                if let Some(haptics) = &self.haptics {
+                    haptics.send(Cue::CalibrationStart);
+                }
+                eprintln!(
+                    "Gyro calibration requested. Release the button and keep the controller still for {} seconds.",
+                    StationaryCalibration::SAMPLE_DURATION.as_secs(),
+                );
+            }
+            if let Some(shortcut) = &mut self.shortcut {
+                suppress_flick = true;
+                if now >= shortcut.deadline {
+                    self.shortcut = None;
+                    self.aim.calibration = None;
+                    self.aim.reset_motion();
+                    eprintln!("Gyro calibration timed out. Previous calibration retained.");
+                    return Ok(false);
+                }
+                if !shortcut.measuring {
+                    if pressed || now < shortcut.settle_at {
+                        return Ok(false);
+                    }
+                    shortcut.measuring = true;
+                    self.aim.calibration = Some(StationaryCalibration::default());
+                }
+            }
+        }
         let was_calibrating = self.aim.calibration.is_some();
         let enabled = self
             .gate
             .enabled(&report.controls, &report.touch_contacts, Instant::now);
         let mut movement = self.aim.advance(report.imu, enabled);
-        if !was_calibrating && let Some(flick) = &mut self.flick {
+        if !was_calibrating
+            && !suppress_flick
+            && let Some(flick) = &mut self.flick
+        {
             movement[0] += flick.advance(report.controls.right_stick, report.imu.device_ticks);
         }
-        if was_calibrating && self.aim.calibration.is_none() {
+        if let Some(bias) = self.aim.completed_bias.take() {
+            if self.shortcut.take().is_some() {
+                if let Some(writer) = &self.bias_writer {
+                    writer.send(bias);
+                }
+                if let Some(haptics) = &self.haptics {
+                    haptics.send(Cue::CalibrationDone);
+                }
+            }
             eprintln!("Gyro rest calibration complete");
         }
         emit_movement(movement, |events| self.output.emit(events))
@@ -165,26 +312,45 @@ struct GyroAim {
     timebase: Timebase,
     motion: MotionEngine,
     calibration: Option<StationaryCalibration>,
+    completed_bias: Option<Calibration>,
     remainder: [f64; 2],
     sensitivity: [f64; 2],
+    response: GyroResponse,
     was_enabled: bool,
 }
 
 impl GyroAim {
-    fn new(factory: FactoryCalibration, calibrate: bool, sensitivity: [f64; 2]) -> Self {
+    fn new(
+        factory: FactoryCalibration,
+        calibrate: bool,
+        sensitivity: [f64; 2],
+        stored: Option<Calibration>,
+    ) -> Self {
         let config = Self::config();
         // The sensor clock advances at three ticks per microsecond.
         let max_gap_ticks = (config.max_gap_ns * 3 / 1_000) as u32;
         Self {
             factory,
             timebase: Timebase::new(max_gap_ticks).expect("valid default sensor gap limit"),
-            motion: MotionEngine::new(config, Calibration::default())
+            motion: MotionEngine::new(config, stored.unwrap_or_default())
                 .expect("valid gyro mouse defaults"),
-            calibration: calibrate.then(StationaryCalibration::default),
+            calibration: (calibrate && stored.is_none()).then(StationaryCalibration::default),
+            completed_bias: None,
             remainder: [0.0; 2],
             sensitivity,
+            response: GyroResponse::default(),
             was_enabled: false,
         }
+    }
+
+    fn with_response(mut self, response: GyroResponse) -> Self {
+        self.set_response(response);
+        self
+    }
+
+    fn set_response(&mut self, response: GyroResponse) {
+        self.response = response;
+        self.remainder = [0.0; 2];
     }
 
     fn config() -> MotionConfig {
@@ -214,15 +380,15 @@ impl GyroAim {
         if !emit_motion {
             self.remainder = [0.0; 2];
         }
-        let elapsed = match self.timebase.observe(sample.device_ticks) {
-            TimestampUpdate::FirstSample => Duration::ZERO,
-            TimestampUpdate::Advanced { elapsed, .. } => elapsed,
+        let (elapsed, interval) = match self.timebase.observe(sample.device_ticks) {
+            TimestampUpdate::FirstSample => (Duration::ZERO, Duration::ZERO),
+            TimestampUpdate::Advanced { elapsed, delta, .. } => (elapsed, delta),
             TimestampUpdate::Gap { .. } => {
                 self.reset_motion();
                 if let Some(calibration) = &mut self.calibration {
                     calibration.reset();
                 }
-                Duration::ZERO
+                (Duration::ZERO, Duration::ZERO)
             }
             TimestampUpdate::Repeated { .. } | TimestampUpdate::OutOfOrder { .. } => return [0; 2],
         };
@@ -237,6 +403,7 @@ impl GyroAim {
                 self.motion = MotionEngine::new(Self::config(), bias)
                     .expect("stationary calibration returns a bounded finite bias");
                 self.calibration = None;
+                self.completed_bias = Some(bias);
             }
             return [0; 2];
         }
@@ -249,11 +416,18 @@ impl GyroAim {
             return [0; 2];
         }
 
+        // Match the speed used for the gain to the interval being integrated.
+        let gain = self.response.interval_gain(output.aim_delta, interval);
+        if gain == 0.0 {
+            self.remainder = [0.0; 2];
+            return [0; 2];
+        }
+
         // Retain fractional movement so repeated sub-count deltas still move
         // the pointer. Clear these fractions on discontinuities.
         std::array::from_fn(|axis| {
-            let total =
-                self.remainder[axis] + f64::from(output.aim_delta[axis]) * self.sensitivity[axis];
+            let total = self.remainder[axis]
+                + f64::from(output.aim_delta[axis]) * self.sensitivity[axis] * gain;
             let whole = total as i32;
             self.remainder[axis] = total - f64::from(whole);
             whole
@@ -289,6 +463,10 @@ mod tests {
     }
 
     fn aim(calibrate: bool) -> GyroAim {
+        aim_with_bias(calibrate, None)
+    }
+
+    fn aim_with_bias(calibrate: bool, bias: Option<Calibration>) -> GyroAim {
         let mut report = [0; 41];
         report[0] = 5;
         for (offset, value) in [
@@ -313,6 +491,7 @@ mod tests {
             FactoryCalibration::from_report(&report).unwrap(),
             calibrate,
             Options::default().gyro_scale(),
+            bias,
         )
     }
 
@@ -388,6 +567,47 @@ mod tests {
     }
 
     #[test]
+    fn gyro_response_gates_small_motion_and_boosts_both_axes() {
+        let mut aim = aim(false).with_response(GyroResponse::new(4.0, 10.0, 100.0, 2.0).unwrap());
+        let mut slow = sample(0);
+        slow.gyro_counts = [0, 16, 0]; // 1 °/s yaw
+        for step in 0..=10 {
+            slow.device_ticks = step * 3000;
+            assert_eq!(aim.advance(slow, true), [0, 0]);
+        }
+        // A gap starts the fast segment without carrying an interval over.
+        assert_eq!(aim.advance(sample(300_000), true), [0, 0]);
+        let mut total = [0, 0];
+        for step in 1..=10 {
+            let delta = aim.advance(sample(300_000 + step * 3000), true);
+            total[0] += delta[0];
+            total[1] += delta[1];
+        }
+        assert_eq!(total, [-8, 4]);
+    }
+
+    #[test]
+    fn acceleration_preserves_balanced_small_motion_with_uneven_report_timing() {
+        let mut aim = aim(false).with_response(GyroResponse::new(0.2, 0.2, 1.0, 4.0).unwrap());
+        aim.set_sensitivity([200.0, 200.0]);
+        let sample = |ms: u32, yaw| RawImuSample {
+            gyro_counts: [0, yaw, 0],
+            device_ticks: ms * 3_000,
+            ..sample(0)
+        };
+        assert_eq!(aim.advance(sample(0, 0), true), [0, 0]);
+        // Equal positive and negative rotations, with the fast end of the
+        // interval alternating between the short and long reporting gaps.
+        let mut total = 0;
+        for start in (0..1000).step_by(50) {
+            for (offset, yaw) in [(5, 16), (25, 0), (45, -16), (50, 0)] {
+                total += aim.advance(sample(start + offset, yaw), true)[0];
+            }
+        }
+        assert_eq!(total, 0);
+    }
+
+    #[test]
     fn changing_one_sensitivity_does_not_change_other_axis_or_restart_motion() {
         let mut aim = aim(false);
         assert_eq!(aim.advance(sample(0), true), [0, 0]);
@@ -434,6 +654,89 @@ mod tests {
     }
 
     #[test]
+    fn calibration_hold_rearms_only_after_release() {
+        let mut detector = HoldDetector::new(HoldBinding {
+            button: Button::Home,
+            duration: Duration::from_millis(1500),
+        });
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        assert!(!detector.observe(true, at(0)));
+        assert!(!detector.observe(true, at(2000)));
+        assert!(!detector.observe(false, at(2100)));
+        assert!(!detector.observe(true, at(2200)));
+        assert!(!detector.observe(false, at(2300)));
+        assert!(!detector.observe(true, at(2400)));
+        assert!(!detector.observe(true, at(3899)));
+        assert!(detector.observe(true, at(3900)));
+        assert!(!detector.observe(true, at(6000)));
+        assert!(!detector.observe(false, at(6100)));
+        assert!(!detector.observe(true, at(6200)));
+        assert!(detector.observe(true, at(7700)));
+    }
+
+    #[test]
+    fn saved_controller_bias_is_applied_on_open() {
+        let raw = RawImuSample {
+            gyro_counts: [0, 8, 0],
+            ..sample(0)
+        };
+        let gyro_bias_dps = aim(false).factory.convert(raw).gyro_dps;
+        let mut corrected = aim_with_bias(true, Some(Calibration { gyro_bias_dps }));
+        assert!(corrected.calibration.is_none());
+        let mut uncorrected = aim(false);
+        let mut horizontal = 0;
+        for ms in (0..=2000).step_by(10) {
+            let sample = RawImuSample {
+                device_ticks: ms * 3_000,
+                ..raw
+            };
+            assert_eq!(corrected.advance(sample, true), [0; 2]);
+            horizontal += uncorrected.advance(sample, true)[0];
+        }
+        assert!(horizontal < 0);
+    }
+
+    #[test]
+    fn small_residual_drift_after_saved_calibration_does_not_move_the_pointer() {
+        let rest = RawImuSample {
+            gyro_counts: [0, 8, 0],
+            ..sample(0)
+        };
+        let gyro_bias_dps = aim(false).factory.convert(rest).gyro_dps;
+        let mut aim = aim_with_bias(false, Some(Calibration { gyro_bias_dps }));
+        aim.set_sensitivity([200.0, 200.0]);
+
+        for ms in (0..=5000).step_by(10) {
+            let drift = RawImuSample {
+                // 0.125 degrees per second above the saved bias.
+                gyro_counts: [0, 10, 0],
+                device_ticks: ms * 3000,
+                ..rest
+            };
+            assert_eq!(aim.advance(drift, true), [0; 2]);
+        }
+        let deliberate_turn = RawImuSample {
+            // 0.25 degrees per second above the saved bias.
+            gyro_counts: [0, 12, 0],
+            ..rest
+        };
+        let horizontal: i32 = (5010..=5100)
+            .step_by(10)
+            .map(|ms| {
+                aim.advance(
+                    RawImuSample {
+                        device_ticks: ms * 3000,
+                        ..deliberate_turn
+                    },
+                    true,
+                )[0]
+            })
+            .sum();
+        assert!(horizontal < 0);
+    }
+
+    #[test]
     fn optional_calibration_removes_rest_bias_but_preserves_slow_aim() {
         let mut aim = aim(true);
         let rest = |ms: u32| RawImuSample {
@@ -442,15 +745,17 @@ mod tests {
             ..sample(0)
         };
 
-        for ms in (0..=1000).step_by(10) {
+        for ms in (0..5000).step_by(10) {
             assert_eq!(aim.advance(rest(ms), true), [0; 2]);
         }
+        assert!(aim.calibration.is_some());
+        assert_eq!(aim.advance(rest(5000), true), [0; 2]);
         assert!(aim.calibration.is_none());
-        for ms in (1010..=1500).step_by(10) {
+        for ms in (5010..=5500).step_by(10) {
             assert_eq!(aim.advance(rest(ms), true), [0; 2]);
         }
         let mut horizontal = 0;
-        for ms in (1510..=3000).step_by(10) {
+        for ms in (5510..=7000).step_by(10) {
             let mut sample = rest(ms);
             sample.gyro_counts[1] = 12;
             horizontal += aim.advance(sample, true)[0];

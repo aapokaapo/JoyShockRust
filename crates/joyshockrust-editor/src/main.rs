@@ -9,7 +9,11 @@ use adw::{gtk, prelude::*};
 
 mod bindings;
 mod calibration;
+mod calibration_navigation;
 mod controller;
+mod controller_input;
+mod flick_preview;
+mod gyro_activation;
 mod sensitivity;
 mod stick_keys;
 mod touchpad;
@@ -70,6 +74,8 @@ struct Editor {
     name: String,
     selected: &'static str,
     calibration: sensitivity::CalibrationDraft,
+    link_gyro_sensitivity: bool,
+    invalid_gyro_sensitivity: [Option<String>; 2],
 }
 
 impl Editor {
@@ -86,11 +92,60 @@ impl Editor {
             name: String::new(),
             selected: "cross",
             calibration: sensitivity::CalibrationDraft::default(),
+            link_gyro_sensitivity: false,
+            invalid_gyro_sensitivity: [None, None],
+        })
+    }
+
+    fn has_unsaved_changes(&self) -> bool {
+        self.text != self.original
+            || (self.path.is_none() && !self.name.trim().is_empty())
+            || self.draft_error().is_some()
+    }
+
+    fn profile_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<_> = fs::read_dir(&self.directory)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "toml") && path.is_file())
+            .collect();
+        paths.sort();
+        if let Some(startup) = self
+            .directory
+            .parent()
+            .map(|root| root.join("profile.toml"))
+            && startup.is_file()
+        {
+            paths.insert(0, startup);
+        }
+        if let Some(path) = &self.path
+            && !paths.contains(path)
+        {
+            paths.insert(0, path.clone());
+        }
+        paths
+    }
+
+    fn switch_profile(&mut self, path: Option<PathBuf>) -> io::Result<()> {
+        if self.path != path || path.is_none() {
+            *self = Self::open(self.bridge.clone(), self.directory.clone(), path)?;
+        }
+        Ok(())
+    }
+
+    fn draft_error(&self) -> Option<&'static str> {
+        self.calibration.error.or_else(|| {
+            self.invalid_gyro_sensitivity
+                .iter()
+                .any(Option::is_some)
+                .then_some(sensitivity::GYRO_SENSITIVITY_ERROR)
         })
     }
 
     fn validate(&self) -> Result<String, String> {
-        if let Some(error) = self.calibration.error {
+        if let Some(error) = self.draft_error() {
             return Err(error.into());
         }
         self.validate_profile_text(&self.text)?;
@@ -103,7 +158,7 @@ impl Editor {
     }
 
     fn save(&mut self) -> Result<PathBuf, String> {
-        if let Some(error) = self.calibration.error {
+        if let Some(error) = self.draft_error() {
             return Err(error.into());
         }
         if let Some(path) = &self.path {
@@ -149,9 +204,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let [Some(profile), Some(node), None] = [args.next(), args.next(), args.next()] else {
             return Err("usage: joyshockrust-editor --calibrate-game PROFILE HIDRAW".into());
         };
-        return calibration::run(bridge, profile.into(), node.into());
+        return calibration::run(
+            bridge,
+            Some(calibration::GameProfiles {
+                active: Some(profile.into()),
+                available: Vec::new(),
+            }),
+            node.into(),
+        );
     }
-    let path = args.next().map(PathBuf::from);
+    if args
+        .next_if(|arg| arg == "--calibrate-game-select")
+        .is_some()
+    {
+        let node = args.next().ok_or("expected a controller node")?;
+        let active = if args.next_if(|arg| arg == "--active-profile").is_some() {
+            Some(args.next().ok_or("expected an active profile path")?.into())
+        } else {
+            None
+        };
+        let available = args.map(PathBuf::from).collect();
+        return calibration::run(
+            bridge,
+            Some(calibration::GameProfiles { active, available }),
+            node.into(),
+        );
+    }
+    if args
+        .next_if(|arg| arg == "--calibrate-controller-gyro")
+        .is_some()
+    {
+        let [Some(node), None] = [args.next(), args.next()] else {
+            return Err("usage: joyshockrust-editor --calibrate-controller-gyro HIDRAW".into());
+        };
+        return calibration::run(bridge, None, node.into());
+    }
+    let path = args.next().map(std::path::absolute).transpose()?;
     if args.next().is_some() {
         return Err("usage: joyshockrust-editor [PROFILE]".into());
     }

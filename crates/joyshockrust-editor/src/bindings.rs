@@ -52,21 +52,68 @@ pub(crate) fn region_input(input: &str) -> Option<(&str, i64, i64)> {
     Some((kind, row.parse().ok()?, column.parse().ok()?))
 }
 
-fn binding_index(bindings: &ArrayOfTables, button: &str) -> Result<Option<usize>, &'static str> {
-    let cell = region_input(button);
+#[derive(Clone, Copy)]
+pub enum BindingInput<'a> {
+    Button(&'a str),
+    Trigger(&'a str),
+}
+
+impl BindingInput<'_> {
+    fn field(self) -> &'static str {
+        match self {
+            Self::Button(_) => "button",
+            Self::Trigger(_) => "trigger",
+        }
+    }
+
+    fn matches(self, source: &str) -> bool {
+        match self {
+            Self::Button(button) => {
+                source == button
+                    || region_input(button).is_some_and(|cell| region_input(source) == Some(cell))
+            }
+            Self::Trigger(spec) => matching_triggers(spec, source),
+        }
+    }
+}
+
+fn matching_triggers(first: &str, second: &str) -> bool {
+    let mut left = first.split(':');
+    let mut right = second.split(':');
+    if left.next() != right.next() {
+        return false;
+    }
+    loop {
+        match (left.next(), right.next()) {
+            (Some(a), Some(b))
+                if a.parse::<f32>()
+                    .ok()
+                    .is_some_and(|value| b.parse::<f32>() == Ok(value)) => {}
+            (None, None) => return true,
+            _ => return false,
+        }
+    }
+}
+
+fn binding_index(
+    bindings: &ArrayOfTables,
+    input: BindingInput<'_>,
+) -> Result<Option<usize>, &'static str> {
     let mut matching = bindings.iter().enumerate().filter(|(_, table)| {
         table
-            .get("button")
+            .get(input.field())
             .and_then(Item::as_str)
-            .is_some_and(|name| {
-                name == button || cell.is_some_and(|cell| region_input(name) == Some(cell))
-            })
+            .is_some_and(|source| input.matches(source))
     });
     let Some((index, binding)) = matching.next() else {
         return Ok(None);
     };
-    if matching.next().is_some() || binding.contains_key("trigger") || binding.contains_key("chord")
-    {
+    let other = if input.field() == "button" {
+        "trigger"
+    } else {
+        "button"
+    };
+    if matching.next().is_some() || binding.contains_key(other) || binding.contains_key("chord") {
         return Err("Edit this input in Advanced TOML.");
     }
     Ok(Some(index))
@@ -76,12 +123,18 @@ pub fn keyboard_binding<'a>(
     doc: &'a DocumentMut,
     button: &str,
 ) -> Result<Option<&'a Table>, &'static str> {
+    binding(doc, BindingInput::Button(button))
+}
+
+pub fn binding<'a>(
+    doc: &'a DocumentMut,
+    input: BindingInput<'_>,
+) -> Result<Option<&'a Table>, &'static str> {
     let Some(bindings) = keyboard_bindings(doc)? else {
         return Ok(None);
     };
-    Ok(binding_index(bindings, button)?.and_then(|index| bindings.get(index)))
+    Ok(binding_index(bindings, input)?.and_then(|index| bindings.get(index)))
 }
-
 pub fn gesture_output(binding: &Table, gesture: Gesture) -> Option<&Item> {
     binding.get(gesture.field())
 }
@@ -92,8 +145,17 @@ pub fn set_key(
     gesture: Gesture,
     output: Option<&str>,
 ) -> Result<(), &'static str> {
+    set_action(doc, BindingInput::Button(button), gesture, output)
+}
+
+pub fn set_action(
+    doc: &mut DocumentMut,
+    input: BindingInput<'_>,
+    gesture: Gesture,
+    output: Option<&str>,
+) -> Result<(), &'static str> {
     let existing = keyboard_bindings(doc)?
-        .map(|bindings| binding_index(bindings, button))
+        .map(|bindings| binding_index(bindings, input))
         .transpose()?
         .flatten();
     if output.is_none() && existing.is_none() {
@@ -140,9 +202,72 @@ pub fn set_key(
         }
     } else if let Some(output) = output {
         let mut binding = Table::new();
-        binding.insert("button", value(button));
+        let source = match input {
+            BindingInput::Button(button) | BindingInput::Trigger(button) => button,
+        };
+        binding.insert(input.field(), value(source));
         binding.insert(gesture.field(), value(output));
         bindings.push(binding);
+    }
+    Ok(())
+}
+
+const KEEP_PARTIAL_ERROR: &str = "Edit this trigger setting in Advanced TOML.";
+
+pub fn keep_partial(doc: &DocumentMut, trigger: &str) -> Result<bool, &'static str> {
+    let Some(keyboard) = doc.get("keyboard") else {
+        return Ok(false);
+    };
+    let keyboard = keyboard.as_table_like().ok_or(KEEP_PARTIAL_ERROR)?;
+    let Some(modes) = keyboard.get("keep_partial") else {
+        return Ok(false);
+    };
+    let modes = modes.as_table_like().ok_or(KEEP_PARTIAL_ERROR)?;
+    modes
+        .get(trigger)
+        .map_or(Ok(false), |item| item.as_bool().ok_or(KEEP_PARTIAL_ERROR))
+}
+
+pub fn set_keep_partial(
+    doc: &mut DocumentMut,
+    trigger: &str,
+    enabled: bool,
+) -> Result<(), &'static str> {
+    let keyboard = doc
+        .entry("keyboard")
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_like_mut()
+        .ok_or(KEEP_PARTIAL_ERROR)?;
+    let modes = keyboard
+        .entry("keep_partial")
+        .or_insert_with(|| value(toml_edit::InlineTable::new()))
+        .as_table_like_mut()
+        .ok_or(KEEP_PARTIAL_ERROR)?;
+    if let Some(previous) = modes.get_mut(trigger).and_then(Item::as_value_mut) {
+        replace_value(previous, Value::from(enabled));
+    } else {
+        modes.insert(trigger, value(enabled));
+    }
+    Ok(())
+}
+
+pub fn set_output_kind(doc: &mut DocumentMut, kind: Option<&str>) -> Result<(), &'static str> {
+    if kind.is_none() && !doc.contains_key("bridge") {
+        return Ok(());
+    }
+    let bridge = doc
+        .entry("bridge")
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_like_mut()
+        .ok_or("Edit the bridge table in Advanced TOML.")?;
+    if let Some(kind) = kind {
+        if let Some(old) = bridge.get_mut("gamepad").and_then(Item::as_value_mut) {
+            replace_value(old, Value::from(kind));
+        } else {
+            bridge.insert("gamepad", value(kind));
+        }
+    } else {
+        bridge.remove("gamepad");
     }
     Ok(())
 }

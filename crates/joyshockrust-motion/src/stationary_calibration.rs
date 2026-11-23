@@ -1,6 +1,7 @@
+use std::time::Duration;
+
 use super::{Calibration, ImuSample, length};
 
-const MIN_DURATION_NS: u64 = 1_000_000_000;
 const MAX_GAP_NS: u64 = 50_000_000;
 const MIN_SAMPLES: u32 = 64;
 
@@ -19,13 +20,15 @@ struct Window {
 }
 
 impl StationaryCalibration {
+    pub const SAMPLE_DURATION: Duration = Duration::from_secs(5);
+
     /// Discard the current window at a device-clock discontinuity.
     pub fn reset(&mut self) {
         self.window = None;
     }
 
-    /// Return a bias once at least one second of consistent samples has been
-    /// observed. Motion, invalid input and interrupted timing restart the window.
+    /// Return a bias after the full window of consistent samples.
+    /// Motion, invalid input and interrupted timing restart the window.
     pub fn observe(&mut self, sample: ImuSample) -> Option<Calibration> {
         if !(0.9..=1.1).contains(&length(sample.accel_g.map(f64::from)))
             || !(0.0..=3.0).contains(&length(sample.gyro_dps.map(f64::from)))
@@ -48,7 +51,8 @@ impl StationaryCalibration {
                 *mean += (f64::from(reading) - *mean) / f64::from(window.samples);
             }
             if window.samples >= MIN_SAMPLES
-                && sample.timestamp_ns - window.first.timestamp_ns >= MIN_DURATION_NS
+                && Duration::from_nanos(sample.timestamp_ns - window.first.timestamp_ns)
+                    >= Self::SAMPLE_DURATION
             {
                 let bias = window.mean.map(|axis| axis as f32);
                 self.reset();
@@ -87,13 +91,13 @@ mod tests {
     #[test]
     fn averages_noise_over_a_full_stationary_window() {
         let mut calibration = StationaryCalibration::default();
-        for index in 0..100 {
+        for index in 0..500 {
             let mut sample = resting(index * 10);
             sample.gyro_dps[0] += if index % 2 == 0 { 0.125 } else { -0.125 };
             assert!(calibration.observe(sample).is_none());
         }
         assert_eq!(
-            calibration.observe(resting(1000)).unwrap().gyro_bias_dps,
+            calibration.observe(resting(5000)).unwrap().gyro_bias_dps,
             resting(0).gyro_dps,
         );
     }
@@ -101,34 +105,34 @@ mod tests {
     #[test]
     fn gaps_motion_and_invalid_samples_discard_the_incomplete_window() {
         for interruption in [
-            resting(900), // repeated timestamp
-            resting(970), // gap
+            resting(4900), // repeated timestamp
+            resting(4970), // gap
             ImuSample {
                 gyro_dps: [3.5, 0.0, 0.0],
-                ..resting(910)
+                ..resting(4910)
             },
             ImuSample {
                 gyro_dps: [2.0, 0.0, 0.0],
-                ..resting(910)
+                ..resting(4910)
             },
             ImuSample {
                 accel_g: [0.0, 0.8, 0.6],
-                ..resting(910)
+                ..resting(4910)
             },
             ImuSample {
                 accel_g: [f32::NAN, 1.0, 0.0],
-                ..resting(910)
+                ..resting(4910)
             },
         ] {
             let mut calibration = StationaryCalibration::default();
-            for ms in (0..=900).step_by(10) {
+            for ms in (0..=4900).step_by(10) {
                 assert!(calibration.observe(resting(ms)).is_none());
             }
             assert!(calibration.observe(interruption).is_none());
-            for ms in (1000..2000).step_by(10) {
+            for ms in (5000..10000).step_by(10) {
                 assert!(calibration.observe(resting(ms)).is_none());
             }
-            assert!(calibration.observe(resting(2000)).is_some());
+            assert!(calibration.observe(resting(10000)).is_some());
         }
     }
 }

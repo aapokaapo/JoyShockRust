@@ -223,25 +223,12 @@ const GYRO_MODES: [(&str, &str); 5] = [
     ("tap-hold", "Toggle on tap, enable while held"),
     ("double-tap", "Toggle on double tap"),
 ];
-const ADVANCED_GYRO: &str = "Edit the existing gyro binding in Advanced TOML.";
+const ADVANCED_GYRO: &str = "Use the Gyro tab to edit this activation binding.";
 
 fn gyro_binding(doc: &DocumentMut) -> Result<Option<(Cell, &str)>, &'static str> {
-    let Some(gyro) = doc.get("gyro") else {
+    let Some((mode, input)) = crate::gyro_activation::binding(doc)? else {
         return Ok(None);
     };
-    let gyro = gyro.as_table_like().ok_or(ADVANCED_GYRO)?;
-    let Some(binding) = gyro.get("binding") else {
-        return Ok(None);
-    };
-    let binding = binding.as_table_like().ok_or(ADVANCED_GYRO)?;
-    let mode = binding
-        .get("mode")
-        .and_then(Item::as_str)
-        .ok_or(ADVANCED_GYRO)?;
-    let input = binding
-        .get("input")
-        .and_then(Item::as_str)
-        .ok_or(ADVANCED_GYRO)?;
     let (kind, row, column) = region_input(input).ok_or(ADVANCED_GYRO)?;
     if kind != "touch" || !GYRO_MODES.iter().any(|(key, _)| *key == mode) {
         return Err(ADVANCED_GYRO);
@@ -256,37 +243,32 @@ fn set_gyro_binding(
 ) -> Result<(), &'static str> {
     let current = gyro_binding(doc)?;
     if let Some(mode) = mode {
-        let size = grid(doc)?;
-        if !cell.in_grid(size) {
-            return Err(ADVANCED);
-        }
-        resize(doc, size)?;
-        let gyro = doc
-            .entry("gyro")
-            .or_insert_with(|| Item::Table(Table::new()))
-            .as_table_like_mut()
-            .ok_or(ADVANCED_GYRO)?;
-        let binding = gyro
-            .entry("binding")
-            .or_insert_with(|| Item::Table(Table::new()))
-            .as_table_like_mut()
-            .ok_or(ADVANCED_GYRO)?;
-        for (key, text) in [("mode", mode), ("input", &cell.input("touch"))] {
-            if let Some(old) = binding.get_mut(key).and_then(Item::as_value_mut) {
-                if old.as_str() != Some(text) {
-                    replace_value(old, Value::from(text));
-                }
-            } else {
-                binding.insert(key, value(text));
-            }
-        }
+        crate::gyro_activation::set_binding(doc, mode, &cell.input("touch"))?;
     } else if current.is_some_and(|(configured, _)| configured == cell) {
-        doc["gyro"]
-            .as_table_like_mut()
-            .ok_or(ADVANCED_GYRO)?
-            .remove("binding");
+        crate::gyro_activation::clear_binding(doc)?;
     }
     Ok(())
+}
+
+pub fn gyro_inputs(doc: &DocumentMut) -> impl Iterator<Item = (String, String)> {
+    grid(doc).ok().into_iter().flat_map(|size| {
+        (1..=size.row).flat_map(move |row| {
+            (1..=size.column).map(move |column| {
+                (
+                    Cell { row, column }.input("touch"),
+                    format!("Touch region {row}:{column}"),
+                )
+            })
+        })
+    })
+}
+
+pub fn prepare_gyro_input(doc: &mut DocumentMut, input: &str) -> Result<(), &'static str> {
+    let size = grid(doc)?;
+    if !Cell::from_input(input).is_some_and(|cell| cell.in_grid(size)) {
+        return Err("Choose a touch region inside the configured grid.");
+    }
+    resize(doc, size)
 }
 
 fn set_keyboard_action(

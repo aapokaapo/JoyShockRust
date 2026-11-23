@@ -153,7 +153,9 @@ rumble = true
 ```
 
 The gamepad options are `generic`, `xbox360` and `xbox-series`. The profile
-sets the startup identity, rumble and `virtual_gamepad` default. To switch
+sets the startup identity, rumble and `virtual_gamepad` default. A live
+profile can select a different gamepad identity. Loading a profile
+without a gamepad choice restores the startup identity. To switch
 virtual gamepad emulation for the current process, use
 `joyshockrust-linux --set-gamepad off` or `--set-gamepad on`. The command
 keeps the physical controller session, gyro and keyboard mappings active.
@@ -245,7 +247,13 @@ tap = ["KEY_LEFTSHIFT", "BTN_LEFT"]
 Use `trigger` in place of `button` for an analog L2 or R2 binding.
 The optional suffix sets the engagement and release thresholds on a
 scale from 0 to 1. The defaults are 0.45 and 0.35. Bindings at different
-thresholds can overlap, so a deeper pull can add a second key.
+thresholds can overlap, so a deeper pull can add a second key. For a
+partial-only binding, add a second pair of thresholds, for example
+`l2:0.45:0.35:0.95:0.85`. It uses the first pair for the lower edge and
+the second pair to switch to the full stage. A full pull suppresses the
+partial tap during that pull by default. To keep the partial stage
+active through full travel, set `l2 = true` or `r2 = true` under
+`[keyboard.keep_partial]` for the relevant trigger.
 
 ```toml
 [[keyboard.bindings]]
@@ -649,17 +657,31 @@ systemctl --user daemon-reload
 
 Open **JoyShockRust** from the application menu or run
 `systemctl --user start joyshockrust-tray.service`. The tray starts the
-bridge, shows its current controller, connection, decoded report rate,
-and battery state, and shows the charge percentage while discharging.
-Use **Active controller** to choose a connected controller with an HID ID,
-or select **Automatic**. Place named TOML profiles in
-`$config_dir/joyshockrust/profiles/` for the **Profiles** submenu.
-The tray shows the active profile's filename, including profiles loaded
-from the command line.
-**Default mappings** unloads the profile. **Quit JoyShockRust** stops the
-bridge and closes the tray.
+bridge and shows the connection icon and decoded report rate in Hz.
+After updating an existing installation, reinstall both user unit files
+and run `systemctl --user daemon-reload` before restarting the services.
+On Bluetooth, the same row shows the battery icon and the percentage
+while discharging. Under **Active controller**, open the submenu to
+choose a connected controller with an HID ID or select **Automatic**.
+Under **Active profile**, open the submenu to load a different
+profile from `$config_dir/joyshockrust/profiles/` or choose **Default
+mappings** to unload it. The user service restores the last active
+profile or the explicit **Default mappings** choice on restart. If a
+remembered file cannot be loaded, it falls back to the startup profile.
+**Quit JoyShockRust** stops the bridge and closes the tray.
 
-Use **Profile editor** to open a named profile or choose **New profile**.
+**Gamepad and gyro mouse** is the master switch. With it off, both
+outputs are disabled and the **Gyro mouse** and **Gamepad emulation**
+choices are grayed out. Turning the master back on restores the two
+selections. Enabling gyro mouse on a profile without gyro settings uses
+the default gyro mapping. These settings apply for the life of the
+bridge process. The corresponding CLI flags are
+`--set-emulation-master`, `--set-gyro-mouse` and `--set-gamepad`, each
+followed by `on` or `off`.
+
+**Profile editor** opens the editor on the active file when available.
+Use the profile dropdown inside the editor to open a saved profile or
+choose **New profile**. Use **Save & Apply** to make a profile active.
 The editor follows the system’s light or dark appearance. The page
 switcher moves to the bottom when the window is narrow.
 Select a physical control on the DualSense diagram or choose a DualSense
@@ -668,6 +690,15 @@ hold and double-tap keyboard or mouse actions, along with its base virtual
 gamepad remap when available. Choose **No action** to clear a gesture or
 **Same as controller** to remove the base remap. Use the **Advanced**
 page for TOML settings such as chords and layers.
+
+At the top of **Buttons**, choose the **Virtual gamepad type**. Selecting
+L2 or R2 shows **Partial pull** and **Full pull** keyboard and mouse
+actions in addition to the digital button. A partial pull engages at
+45%, and a full pull at 95%. The release thresholds are 35% and 85%.
+Turn on **Keep partial action at full pull** to hold both assigned keys
+at full travel. The switch is off by default, so the full action takes
+over. L2 and R2 have separate switches.
+Choose **Save & Apply** to use the new settings.
 
 In **Touchpad**, set the number of rows and columns, select a grid
 cell, and assign separate virtual gamepad buttons to **Touch** and
@@ -694,26 +725,68 @@ leave the release radius empty to use the bridge default. Select
 **Update Mapping** to validate the settings and return to the profile,
 then **Save & Apply** to load them into the running bridge.
 
-The **Gyro** page has separate horizontal and vertical sensitivity
-sliders, from 0 to 100 counts per degree in 0.1 increments. Edit RWC
+In **Gyro → Gyro activation**, choose **Always active** or select a
+physical button, touch region, two-input chord, or analog trigger. The
+available modes include enabling or disabling while held and toggling
+on a press, tap, or double tap. The analog trigger mode lets you set
+separate press and release thresholds.
+
+The **Gyro** page has matching horizontal and vertical sensitivity
+sliders. Enable **Link horizontal and vertical** to use one slider and
+one numeric field for both axes. Linking copies the horizontal value to
+the vertical axis. Turning the link off lets you adjust them separately
+again. Saving stores both axis values in the profile. The sliders cover
+0–20 counts per degree in increments of 0.1.
+Type any value from 0 to 100 in the fields, using a decimal point or comma.
+For values above 20, the field shows the actual sensitivity and the slider
+rests at its upper limit. Edit RWC
 and in-game sensitivity in the **Game calibration** text fields.
 Changing these settings creates a `[gyro]` section if needed, which
 enables the profile's gyro mouse.
+
+Under **Gyro response**, set a minimum aim speed and the start and end
+speeds for acceleration, in degrees per second. The acceleration
+multiplier ramps up between those speeds and caps at the selected value.
+Turn off **Gyro acceleration** to suspend the boost while retaining its
+settings. **Minimum speed** still applies independently. Its default of
+0.2°/s filters small residual movement after calibration. Set it to 0 to
+use every measured movement.
+Under **Flick Stick**, **Axial threshold** snaps the initial flick to
+the nearest cardinal direction inside the chosen angle, with a smooth
+transition outside it. The default is 4°. While the stick is held,
+**Steering sensitivity** scales subsequent turns from their physical
+angle changes. Its default is 0.50, so a 30° movement after the flick
+turns the camera about 15° with a calibrated profile. At 0, only the
+initial flick moves the camera. At 1, held steering uses the full
+sensitivity. The preview compares physical input with the Flick Stick
+response using both draft settings.
 
 Open the profile actions menu to **Validate Profile** or **Save** to
 disk. **Save & Apply** writes the profile and loads it into the running
 bridge. Use Ctrl+S to save or Ctrl+Shift+S to save and apply.
 
-Choose a file under **Calibrate game sensitivity (RWC)** while a controller
-is connected. The tray pauses virtual outputs and opens the Wayland
-calibration window. Enter the game's mouse sensitivity and select **Start
-Measurement**. Wait for **Ready**, then focus the game, aim at a landmark
+Select **Calibrate game sensitivity (RWC)** while a controller is connected. The tray pauses virtual outputs and opens the Wayland
+calibration window. During measurement, the right stick uses its physical
+angle with full resolution near the cardinal directions. Enter the game's
+mouse sensitivity and select **Start Measurement**. Wait for **Ready**, then focus the game, aim at a landmark
 and press Options with the right stick centered. The window shows when
 measurement starts and whether the stick needs to be centered or more
 movement is needed. Sweep the stick around its edge until the camera has
 completed one or more whole turns and has returned to the landmark. Center
-the stick and press Options again. Return to the calibration window, enter
-the number of complete turns and select **Save Calibration**.
+the stick and press Options again. Return to the calibration window and
+enter the number of complete turns. The active profile is preselected if
+its file is available. **Save game calibration** shows both the calculated RWC
+and the in-game sensitivity. The RWC value updates when you change the
+turn count. Choose another profile or use **Browse Profiles…**
+to find a different file. Select **Save Calibration** to store the result.
+
+In either calibration window, use **D-pad up/down** to move focus,
+**Cross** to activate the focused button and **Circle** to close. In the
+game calibration window, **D-pad left/right** adjusts the focused value
+or changes the selected profile. **L1/R1** adjusts sensitivity in
+smaller steps. Return focus to the calibration window after the in-game
+measurement. The system file picker opened by **Browse Profiles…**
+uses keyboard and mouse.
 
 Select **Done** to resume the bridge with the same in-memory profile and
 controller selection. To apply the saved calibration, select the
@@ -721,7 +794,7 @@ updated profile in **Profiles**. If the tray was interrupted and the
 bridge is still paused, use **Resume virtual outputs** or run
 `joyshockrust-linux --set-outputs resume`.
 
-Check **Start when I log in** to enable desktop login startup. If you
+Check **Start with system** to enable desktop login startup. If you
 previously enabled the bridge unit directly, run
 `systemctl --user disable joyshockrust.service` once so the tray controls
 login startup. The tray requires a StatusNotifierItem host. Some desktops,
@@ -919,6 +992,63 @@ Supported button names are `cross`, `circle`, `square`, `triangle`,
 
 [USB gyro test](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
 
+## Controller gyroscope calibration
+
+With a controller connected, choose **Calibrate Controller Gyro** from the
+tray. Put the controller on a flat, stable surface and select **Start Gyro
+Calibration**. Keep it still for five uninterrupted seconds, then select
+**Save Gyro Calibration** and **Done**. The bridge resumes and uses the
+correction whenever it opens gyro output for that controller. Calibration
+is stored by controller ID in `$XDG_CONFIG_HOME/joyshockrust/gyro-calibration/`
+or under `~/.config` if XDG_CONFIG_HOME is unset. Cancel before saving to
+discard the measurement. A saved correction takes precedence over the
+optional session-start stationary calibration. Look for
+`Applied saved controller gyro calibration` in the bridge log to verify
+the stored correction was loaded.
+
+In the profile editor, open **Gyro → Controller gyro calibration** and
+choose **PS button** under **Hold button**. Save and apply the profile.
+Hold PS for 1.5 seconds, release it, and leave the controller still. The
+new correction applies immediately and is saved for this controller.
+The shortcut reads the physical button, and the usual button mapping
+still runs. To customize the hold duration in TOML, use:
+
+```toml
+[gyro.calibration_hold]
+button = "ps"
+hold_ms = 1500
+```
+
+For advanced haptics, connect the controller by USB and install
+`alsa-utils` for `aplay`. The controller's four-channel ALSA playback
+device must be available. A single pulse marks the start and a double
+pulse marks completion. During RWC measurement, sweeping the stick
+produces short tactile detents every 15 degrees of relative stick
+rotation. Camera movement remains continuous. Bluetooth calibration
+is available with visual status or bridge logs.
+
+### Test USB actuator haptics from the command line
+
+Connect the controller via USB and run:
+
+```sh
+joyshockrust-linux --test-haptics
+joyshockrust-linux --test-haptics --pattern sweep
+```
+
+The first command plays the start pulse, completion double pulse and a
+series of detents. Use `--pattern start`, `done` or `detent` to isolate an
+effect. The sweep command runs for 12 seconds and counts detents as you
+rotate the right stick. Add the controller's `/dev/hidrawN` path to select
+it explicitly. The commands report the ALSA device and playback errors.
+Playback success reports what ALSA accepted. Check the tactile feedback
+on the controller.
+
+Use `aplay -l` to find the controller's playback device. To try a known
+endpoint directly, pass `--pcm hw:CARD,DEVICE` with the card and device
+numbers from that list. `--pcm null` checks the software playback path
+without a controller or a physical effect.
+
 ## Game sensitivity calibration
 
 Use the right stick to turn the camera through whole rotations. Enable raw
@@ -970,7 +1100,17 @@ change. Load the resulting preset with `--load-profile`.
 Add `--flick-stick 4` with `--gyro-mouse` to use the right stick for
 horizontal mouse turns. The argument sets relative counts per degree and
 accepts values from 0.01 to 100. Flicking from center turns toward the stick
-angle over 100 ms. Rotating the held stick follows its angle changes.
+angle over 100 ms. After the initial flick, rotations use relative
+stick motion until the stick returns within 25% of center.
 The virtual gamepad's right-stick axes are centered while this mode is
 enabled. Gyro gating still controls gyro input independently.
+
+For a TOML profile, set `flick_axial_threshold_deg` in `[gyro]` to a
+value from 0 to 30. Use 0 to disable cardinal snapping. Set
+`flick_steering_sensitivity` in the same table to a value from 0 to 1.
+Gyro response
+uses `threshold_dps`, `accel_start_dps`, `accel_end_dps`, and
+`accel_multiplier` in the same table. Set `accel_enabled` to `true` or
+`false` to control the boost independently. Profiles without this setting
+use acceleration if their multiplier exceeds 1.
 See the [Flick Stick test](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance).

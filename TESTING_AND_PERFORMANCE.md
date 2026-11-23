@@ -205,6 +205,23 @@ recenter. Hold the stick near the outside and rotate it across the rear
 axis. Confirm the camera follows smoothly without a full-turn jump. Set
 the counts-per-degree value for the game's sensitivity before measuring
 the angles. Confirm the left stick still drives the virtual gamepad.
+Set the axial threshold to 12° and flick just left and right of forward.
+Verify both initial flicks snap to forward. Without centering, turn the
+stick through a shaded sector and check that each movement remains
+proportional, even within the sector. Pull the stick inward to about half
+travel and rotate it, then return it to the outside. Check that movement
+continues as steering until the stick returns near center. Compare
+steering at 0, 0.5 and 1 with the same initial flick. Measure RWC with the
+same profile. Verify small corrections near forward still use the full
+measurement sensitivity.
+Set the threshold to 0° and repeat to compare the response. Open
+**Gyro → Flick Stick** with the bridge running. Move the active right
+stick near a sector edge and change the threshold in the editor.
+Check that both previews follow the stick, that the adjusted marker
+snaps on initial flick within a shaded sector, and that both the sector
+and held steering response update before saving.
+Switch controllers or reconnect and check that the preview follows the
+active controller.
 
 The user reported that Flick Stick worked as expected.
 
@@ -403,8 +420,14 @@ success response. Compare equal rotations on each axis. Change only the
 vertical sensitivity and load the preset again. Confirm that horizontal
 aim retains its sensitivity and that calibration continues. Check that a
 negative sensitivity is rejected and that the last valid profile remains
-active. Run `joyshockrust-linux --reload-profile` to restore the startup
-profile.
+active. Set a minimum speed and 2× acceleration in the editor. Compare
+slow turns below the cutoff, turns between the two acceleration
+thresholds, and fast turns above the upper threshold. Turn the
+acceleration switch off and verify the boost stops while the cutoff
+still applies. Turn it back on and check the curve settings are retained.
+A replay with uneven report timing checks that equal and opposite small
+rotations produce zero net pointer movement with acceleration enabled. Run
+`joyshockrust-linux --reload-profile` to restore the startup profile.
 
 A manual bridge needs `--profile PATH --reload-socket SOCKET`. Pass the same
 `SOCKET` as the optional final argument to `--load-profile`.
@@ -831,15 +854,41 @@ an in-game landmark.
 
 ## Desktop tray acceptance
 
+Open both calibration windows using the tray. Use the physical
+controller to start, save and close the gyro workflow. In game
+calibration, verify D-pad left/right changes sensitivity by 0.1,
+L1/R1 changes it by 0.01, and D-pad up/down moves focus. While the game
+has focus, verify Cross and Circle leave the calibration window alone
+and Options still controls measurement. Refocus calibration, change the
+whole-turn count with the D-pad and check the RWC preview changes while
+the in-game sensitivity stays constant. Choose a profile and save with
+Cross.
+Check Circle cancels and the tray resumes the bridge.
+
 Install the tray and bridge using the [desktop tray instructions](README.md#desktop-tray).
 Run JoyShockRust from the applications menu in a Wayland session with a
 StatusNotifierItem host. Verify the menu with no controller connected,
 then connect a supported controller over USB and Bluetooth. Check the
-reported transport, decoded report rate and battery state against
-`joyshockrust-linux --status`. Select a controller and then a profile.
-Confirm the profile load keeps the selected controller active.
+connection icon and decoded report rate match `joyshockrust-linux
+--status` and that the battery indicator only appears over Bluetooth.
+Under **Active controller**, open the submenu and check its title updates
+after selection. Under **Active profile**, load another profile and check
+that its name updates while the selected controller stays active.
+Restart both services with `systemctl --user restart joyshockrust.service
+joyshockrust-tray.service` and verify that both are active and the same
+profile comes back. Restart the tray alone and verify the bridge
+keeps its PID. Repeat the combined restart
+with **Default mappings** selected. Toggle **Gamepad emulation** and
+**Gyro mouse** separately, then turn off **Gamepad and gyro mouse**.
+Check both outputs stop and the two selections are grayed out. Turn on
+the master and verify each previous selection takes effect. Load
+another profile with the master off and verify the outputs stay off.
 
-Under **Profile editor**, open **New profile** and name it. Switch the
+Click **Profile editor** and check it opens the active profile. Choose a
+different file in the editor's dropdown and check that the tray still
+shows the previous active profile. Edit a setting, choose **New profile**,
+then use **Keep Editing** and confirm the draft remains. Choose **New
+profile** again, discard the draft, and name the new profile. Switch the
 desktop between light and dark appearance and resize the editor to verify
 the page switcher moves between the header and bottom bar. Use Tab and
 the keyboard to select controls and change bindings. Edit a setting and
@@ -852,11 +901,31 @@ both choices remain visible. Choose a virtual gamepad target, then use
 the **Advanced** page, enter invalid TOML syntax and check that validation or
 saving displays an error while the saved profile remains usable.
 
+Choose **Xbox Series X|S** under **Virtual gamepad type**, save and apply,
+then check `virtual_gamepad_kind=xbox-series` and the replacement device
+in Steam. In the L2 inspector set **Partial pull → Hold** to Q and
+**Full pull → Hold** to E. Check that Q is held partway and E takes over
+at full travel. With partial **Tap** configured, check that a full pull
+and release does not emit that partial tap. Enable **Keep partial action
+at full pull** for L2 and save. Verify Q stays held when E engages, then
+ease off until E releases at 85% and Q releases at 35%. Check that R2
+still switches stages with its default setting.
+
+In **Gyro → Gyro activation**, select **Disable while held** and L2,
+apply the profile, then check that holding and releasing L2 stops and
+resumes aim. Configure a touch region, a chord and an analog trigger in
+turn. Reopen the profile to check that the selected mode and inputs persist.
+
 In **Sticks**, move each response slider one step and verify its own
 preview updates. Save and check the two per-stick values in
-**Advanced**. In **Gyro**, move X and Y separately. Enter RWC and
-in-game sensitivity, verify the values round-trip through saving and
-reopening, and confirm an invalid value prevents saving.
+**Advanced**. In **Gyro**, move X and Y separately and check each slider
+stops at 20. Check that both tracks have the same length and alignment.
+Enable **Link horizontal and vertical** and verify that the shared
+slider and entry update both axes. Disable the link and verify that
+changes to one axis leave the other at its last shared value.
+Type a value above 20 with a decimal comma and verify it
+survives saving and reopening. Confirm that invalid text prevents saving.
+Enter RWC and in-game sensitivity and verify they also round-trip.
 
 For the left stick, open **Keyboard mapping**. Bind Up, Left, Down and
 Right to W, A, S and D. Set inner **Key** to **Left Shift** in **Hold**
@@ -893,7 +962,7 @@ controller in a Wayland session.
 cargo test --locked -p joyshockrust-editor touchpad_widgets_edit_the_selected_cell -- --ignored
 ```
 
-Choose **Calibrate game sensitivity (RWC)** and a profile. While the
+Choose **Calibrate game sensitivity (RWC)** with a named profile active. While the
 Wayland window is open, check `outputs_paused=true` and verify the
 regular virtual outputs are removed. Start measurement and confirm the
 window shows **Ready**. Press Options with the stick off-center to see
@@ -901,8 +970,9 @@ the centering prompt. Center the stick and press Options to see
 **Measuring**. With the stick still centered, press Options again and
 check for the no-movement prompt. Perform one or more complete turns and
 press Options with the stick centered to finish the sweep.
-Enter the total number of turns in the window. Verify that **Save
-Calibration** displays the result and updates the profile. Select
+Enter the total number of turns in the window. Verify the active file
+is preselected. Select a different destination and verify that **Save
+Calibration** displays the result and updates the selected profile. Select
 **Done** and verify `outputs_paused=false`, the controller reconnects,
 and the previous live profile remains active. Select the calibrated
 profile to apply the new values. Repeat, cancel during measurement,
@@ -917,7 +987,37 @@ also checks Save and Cancel.
 cargo test --locked -p joyshockrust-editor calibration_window_completes_and_cancels -- --ignored
 ```
 
-Enable **Start when I log in**, log out and back in, and confirm the tray
+Choose **Calibrate Controller Gyro** with a controller connected. Place
+the controller on a stable surface and start measurement. Check that
+confirmation appears after five continuous seconds of steady readings.
+Move the controller just before the window completes and verify it
+needs a fresh five-second interval. Cancel at the confirmation step. Check that the earlier correction is preserved and
+that virtual outputs resume. Repeat and save, then open a gyro-enabled
+profile and compare stationary drift and deliberate slow aim. Verify that
+the bridge logs the saved correction after reconnect and that a second
+controller keeps its own correction. With the default minimum speed,
+leave the controller on the surface and check the cursor stays still,
+then turn it slowly to confirm that deliberate aim still moves it.
+
+Bind **Gyro → Controller gyro calibration → Hold button** to PS. Verify
+a tap leaves calibration idle. Hold PS for 1.5 seconds, then release it
+and set the controller down. On USB with `aplay`, verify the single
+start and double completion pulses. Repeat while moving for 15 seconds
+and verify the previous correction remains active. Run RWC over USB and
+rotate slowly around the right stick edge. Check that tactile steps
+follow rotation in either direction and cease when the stick centers.
+
+For diagnosis without the game, run `joyshockrust-linux --test-haptics`
+on the USB device. Verify that the selected PCM matches the controller
+and report which effects are perceptible. Run with `--pattern sweep`
+to compare the count of detected stick detents with the felt clicks.
+The automated CLI test checks the actuator-channel PCM and propagation
+of an ALSA playback failure using a simulated player. On the reported
+Fedora setup, moving the system's audio output away from the controller
+freed the ALSA playback device. The test then completed PCM playback
+with both DualSense and DualSense Edge.
+
+Enable **Start with system**, log out and back in, and confirm the tray
 and bridge start. Clear the setting and repeat to confirm manual
 launch is needed. Use **Quit JoyShockRust** and verify both user units
 are inactive.

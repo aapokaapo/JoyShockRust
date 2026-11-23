@@ -11,7 +11,7 @@ use joyshockrust_core::{Button, Controls, DPad};
 use joyshockrust_input::{InputReport, TouchContact};
 use serde::Deserialize;
 
-use crate::gyro_gate::{self, DOUBLE_TAP_WINDOW, HOLD_TIME, TriggerGate};
+use crate::gyro_gate::{self, DOUBLE_TAP_WINDOW, HOLD_TIME, TriggerGate, TriggerSide};
 use crate::status::StatusSocket;
 use crate::touchpad::{Grid, TouchRegion};
 
@@ -32,9 +32,27 @@ pub struct Settings {
     #[serde(default)]
     bindings: Vec<RawBinding>,
     #[serde(default)]
+    keep_partial: KeepPartial,
+    #[serde(default)]
     sticks: Vec<stick::Settings>,
     touch_scroll: Option<touch_motion::ScrollSettings>,
     touch_pointer: Option<touch_motion::PointerSettings>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct KeepPartial {
+    l2: bool,
+    r2: bool,
+}
+
+impl KeepPartial {
+    fn for_side(&self, side: TriggerSide) -> bool {
+        match side {
+            TriggerSide::Left => self.l2,
+            TriggerSide::Right => self.r2,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -238,12 +256,29 @@ impl Binding {
 enum BindingSource {
     Single(Source),
     Chord(Source, Source),
+    PartialTrigger {
+        lower: TriggerGate,
+        upper: TriggerGate,
+        keep_partial: bool,
+    },
 }
 
 impl PartialEq for BindingSource {
     fn eq(&self, other: &Self) -> bool {
         match (*self, *other) {
             (Self::Single(a), Self::Single(b)) => a == b,
+            (
+                Self::PartialTrigger {
+                    lower: a,
+                    upper: b,
+                    keep_partial: keep_a,
+                },
+                Self::PartialTrigger {
+                    lower: c,
+                    upper: d,
+                    keep_partial: keep_b,
+                },
+            ) => a == c && b == d && keep_a == keep_b,
             (Self::Chord(a, b), Self::Chord(c, d)) => (a == c && b == d) || (a == d && b == c),
             _ => false,
         }
@@ -320,7 +355,17 @@ impl Settings {
                 (Some(name), None, None) => {
                     (BindingSource::Single(Source::parse(&name, grid)?), name)
                 }
-                (None, Some(spec), None) => (BindingSource::Single(Source::trigger(&spec)?), spec),
+                (None, Some(spec), None) => {
+                    let source = match TriggerGate::partial(&spec)? {
+                        Some((lower, upper)) => BindingSource::PartialTrigger {
+                            lower,
+                            upper,
+                            keep_partial: self.keep_partial.for_side(lower.side()),
+                        },
+                        None => BindingSource::Single(Source::trigger(&spec)?),
+                    };
+                    (source, spec)
+                }
                 (None, None, Some(members)) => {
                     let [first, second] = members.as_slice() else {
                         return Err("keyboard chord requires exactly two inputs".into());
@@ -414,6 +459,7 @@ enum Press {
 struct Gesture {
     binding: Binding,
     source_pressed: [bool; 2],
+    reached_full_trigger: bool,
     press: Press,
     pending_tap: Option<Instant>,
     next_scroll: Option<Instant>,
@@ -426,10 +472,38 @@ impl Gesture {
         click: Option<TouchContact>,
         now: Instant,
     ) -> Option<&Action> {
+        let mut suppress_tap = false;
         let pressed = match self.binding.source {
             BindingSource::Single(source) => {
                 self.source_pressed[0] = source.pressed(input, click, self.source_pressed[0]);
                 self.source_pressed[0]
+            }
+            BindingSource::PartialTrigger {
+                lower,
+                keep_partial: true,
+                ..
+            } => {
+                self.source_pressed[0] = lower.pressed(&input.controls, self.source_pressed[0]);
+                self.source_pressed[0]
+            }
+            BindingSource::PartialTrigger {
+                lower,
+                upper,
+                keep_partial: false,
+            } => {
+                self.source_pressed[0] = lower.pressed(&input.controls, self.source_pressed[0]);
+                self.source_pressed[1] = upper.pressed(&input.controls, self.source_pressed[1]);
+                if self.source_pressed[1] {
+                    // A full pull cancels the partial gesture instead of completing a tap.
+                    self.reached_full_trigger = true;
+                    self.press = Press::Up;
+                    self.next_scroll = None;
+                }
+                suppress_tap = self.reached_full_trigger;
+                if !self.source_pressed[0] {
+                    self.reached_full_trigger = false;
+                }
+                self.source_pressed[0] && !self.source_pressed[1]
             }
             BindingSource::Chord(first, second) => {
                 // Update both inputs even while the chord is inactive. A trigger
@@ -455,7 +529,7 @@ impl Gesture {
             Press::Up if pressed => self.press = Press::Down(now),
             Press::Down(start) if !pressed => {
                 self.press = Press::Up;
-                if now.duration_since(start) < self.binding.hold_time {
+                if !suppress_tap && now.duration_since(start) < self.binding.hold_time {
                     if let Some(double_tap) = &self.binding.double_tap {
                         if self.pending_tap.take().is_some() {
                             pulse = Some(double_tap);
@@ -549,6 +623,7 @@ impl State {
             .map(|binding| Gesture {
                 binding,
                 source_pressed: [false; 2],
+                reached_full_trigger: false,
                 press: Press::Up,
                 pending_tap: None,
                 next_scroll: None,
@@ -1852,7 +1927,143 @@ mod tests {
             "version = 1\n[bridge]\nvirtual_gamepad = false\n{binding}"
         ))
         .unwrap();
-        assert!(!profile.bridge.unwrap().virtual_gamepad);
+        assert!(!profile.bridge.unwrap().startup().virtual_gamepad);
+    }
+
+    #[test]
+    fn partial_and_full_trigger_holds_switch_at_distinct_thresholds() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            trigger = "l2:0.45:0.35:0.95:0.85"
+            hold = "KEY_Q"
+            [[keyboard.bindings]]
+            trigger = "l2:0.95:0.85"
+            hold = "KEY_E"
+        "#,
+        );
+        let mut state = State::new(&config);
+        for (travel, expected) in [
+            (0.3, [false, false]),
+            (0.9, [true, false]),
+            (0.95, [false, true]),
+            (0.9, [false, true]),
+            (0.85, [true, false]),
+            (0.4, [true, false]),
+            (0.35, [false, false]),
+        ] {
+            let controls = Controls {
+                left_trigger: travel,
+                right_trigger: 1.0,
+                ..Default::default()
+            };
+            state
+                .update(input(controls), Instant::now(), |_| Ok(()))
+                .unwrap();
+            assert_eq!(
+                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
+                expected,
+                "{travel}"
+            );
+        }
+    }
+
+    #[test]
+    fn keeping_partial_holds_applies_only_to_the_configured_trigger() {
+        let config = config(
+            r#"
+            [keyboard.keep_partial]
+            l2 = true
+            [[keyboard.bindings]]
+            trigger = "l2:0.45:0.35:0.95:0.85"
+            hold = "KEY_Q"
+            [[keyboard.bindings]]
+            trigger = "l2:0.95:0.85"
+            hold = "KEY_E"
+            [[keyboard.bindings]]
+            trigger = "r2:0.45:0.35:0.95:0.85"
+            hold = "KEY_A"
+            [[keyboard.bindings]]
+            trigger = "r2:0.95:0.85"
+            hold = "KEY_D"
+        "#,
+        );
+        let mut state = State::new(&config);
+        for (travel, expected) in [
+            (0.35, [false, false, false, false]),
+            (0.50, [true, false, true, false]),
+            (0.95, [true, true, false, true]),
+            (0.90, [true, true, false, true]),
+            (0.85, [true, false, true, false]),
+            (0.40, [true, false, true, false]),
+            (0.35, [false, false, false, false]),
+            (1.00, [true, true, false, true]),
+            (0.00, [false, false, false, false]),
+        ] {
+            let controls = Controls {
+                left_trigger: travel,
+                right_trigger: travel,
+                ..Default::default()
+            };
+            state
+                .update(input(controls), Instant::now(), |_| Ok(()))
+                .unwrap();
+            let keys = [
+                KeyCode::KEY_Q,
+                KeyCode::KEY_E,
+                KeyCode::KEY_A,
+                KeyCode::KEY_D,
+            ];
+            assert_eq!(
+                keys.map(|key| state.held.contains(key)),
+                expected,
+                "{travel}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_full_trigger_pull_never_fires_the_partial_tap_on_its_way_back() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            trigger = "r2:0.45:0.35:0.95:0.85"
+            tap = "KEY_Q"
+            [[keyboard.bindings]]
+            trigger = "r2:0.95:0.85"
+            tap = "KEY_E"
+        "#,
+        );
+        let mut state = State::new(&config);
+        let now = Instant::now();
+        for (step, (travel, taps)) in [
+            (0.5, [false, false]),
+            (1.0, [false, false]),
+            (0.5, [false, true]),
+            (0.0, [false, true]),
+            (0.5, [false, true]),
+            (0.0, [true, true]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let controls = Controls {
+                right_trigger: travel,
+                ..Default::default()
+            };
+            state
+                .update(
+                    input(controls),
+                    now + Duration::from_millis(step as u64),
+                    |_| Ok(()),
+                )
+                .unwrap();
+            assert_eq!(
+                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
+                taps,
+                "{step}"
+            );
+        }
     }
 
     #[test]

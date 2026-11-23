@@ -6,6 +6,10 @@ publish.workspace = true
 
 [dependencies]
 adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
+joyshockrust-core = { path = "../joyshockrust-core" }
+joyshockrust-input = { path = "../joyshockrust-input" }
+joyshockrust-motion = { path = "../joyshockrust-motion" }
+libc = "0.2"
 tempfile = "3"
 toml_edit = { version = "0.24", default-features = false, features = ["parse", "display"] }
 

@@ -210,6 +210,14 @@ pub enum OutputKind {
 }
 
 impl OutputKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Generic => "generic",
+            Self::Xbox360 => "xbox360",
+            Self::XboxSeries => "xbox-series",
+        }
+    }
+
     fn identity(self) -> (&'static str, InputId) {
         match self {
             Self::Generic => (

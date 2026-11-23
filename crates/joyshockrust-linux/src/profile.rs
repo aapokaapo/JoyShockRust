@@ -1,9 +1,14 @@
+use joyshockrust_motion::aim_response::{GyroResponse, validate_flick_axial_threshold};
+
 use std::{
     env,
     error::Error,
     fs::{self, OpenOptions},
     io::{self, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::OpenOptionsExt,
+    },
     path::{Path, PathBuf},
     process,
 };
@@ -42,12 +47,42 @@ struct Profile {
 struct Gyro {
     #[serde(default)]
     calibrate: bool,
+    calibration_hold: Option<CalibrationHold>,
     flick_stick: Option<f64>,
+    flick_axial_threshold_deg: Option<f64>,
+    flick_steering_sensitivity: Option<f64>,
+    threshold_dps: Option<f64>,
+    accel_start_dps: Option<f64>,
+    accel_end_dps: Option<f64>,
+    accel_multiplier: Option<f64>,
+    accel_enabled: Option<bool>,
     sensitivity_x: Option<f32>,
     sensitivity_y: Option<f32>,
     real_world_calibration: Option<f64>,
     in_game_sens: Option<f64>,
     binding: Option<GyroBinding>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CalibrationHold {
+    button: String,
+    hold_ms: Option<u64>,
+}
+
+impl CalibrationHold {
+    fn resolve(self) -> Result<gyro_mouse::HoldBinding, &'static str> {
+        let button = gyro_gate::button_by_name(&self.button)
+            .ok_or("gyro.calibration_hold.button must name a physical controller button")?;
+        let ms = self.hold_ms.unwrap_or(1500);
+        if !(250..=10_000).contains(&ms) {
+            return Err("gyro.calibration_hold.hold_ms must be between 250 and 10000");
+        }
+        Ok(gyro_mouse::HoldBinding {
+            button,
+            duration: std::time::Duration::from_millis(ms),
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -100,21 +135,38 @@ struct BridgeFile {
 }
 
 impl BridgeFile {
-    fn outputs(self) -> Option<BridgeOptions> {
+    fn outputs(self) -> Option<BridgeSettings> {
         if self.gamepad.is_none() && self.rumble.is_none() && self.virtual_gamepad.is_none() {
             return None;
         }
-        Some(BridgeOptions {
+        Some(BridgeSettings {
+            gamepad: self.gamepad,
+            rumble: self.rumble,
+            virtual_gamepad: self.virtual_gamepad,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BridgeSettings {
+    pub gamepad: Option<OutputKind>,
+    pub rumble: Option<bool>,
+    pub virtual_gamepad: Option<bool>,
+}
+
+impl BridgeSettings {
+    pub fn startup(self) -> BridgeOptions {
+        BridgeOptions {
             gamepad: self.gamepad.unwrap_or_default(),
             rumble: self.rumble.unwrap_or_default(),
             virtual_gamepad: self.virtual_gamepad.unwrap_or(true),
-        })
+        }
     }
 }
 
 #[derive(Default)]
 pub struct RuntimeOptions {
-    pub bridge: Option<BridgeOptions>,
+    pub bridge: Option<BridgeSettings>,
     pub stick_curve: Option<StickCurve>,
     pub remaps: ButtonRemaps,
     pub gyro: Option<gyro_mouse::Options>,
@@ -126,6 +178,65 @@ pub struct RuntimeOptions {
 pub fn load(path: &Path) -> Result<RuntimeOptions, Box<dyn Error>> {
     let source = fs::read_to_string(path)?;
     parse(&source)
+}
+
+pub fn selection_path(startup: &Path) -> Option<PathBuf> {
+    let mut name = startup.file_name()?.to_os_string();
+    name.push(".active");
+    Some(startup.with_file_name(name))
+}
+
+pub fn restore_selection(selection: &Path) -> Option<(RuntimeOptions, Option<PathBuf>)> {
+    let data = match fs::read(selection) {
+        Ok(data) => data,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            eprintln!(
+                "Could not read active profile selection {}: {error}",
+                selection.display()
+            );
+            return None;
+        }
+    };
+    if data == b"defaults\n" {
+        return Some((RuntimeOptions::default(), None));
+    }
+    if let Some(raw_path) = data.strip_prefix(b"profile\n") {
+        let path = PathBuf::from(std::ffi::OsString::from_vec(raw_path.to_vec()));
+        if path.is_absolute() {
+            match load(&path) {
+                Ok(runtime) => return Some((runtime, Some(path))),
+                Err(error) => {
+                    eprintln!(
+                        "Could not restore active profile {}: {error}",
+                        path.display()
+                    );
+                    return None;
+                }
+            }
+        }
+    }
+    eprintln!(
+        "Invalid active profile selection in {}",
+        selection.display()
+    );
+    None
+}
+
+pub fn remember_selection(file: &Path, selected: Option<&Path>, defaults: bool) -> io::Result<()> {
+    if let Some(path) = selected {
+        let path = std::path::absolute(path)?;
+        let mut data = b"profile\n".to_vec();
+        data.extend_from_slice(path.as_os_str().as_bytes());
+        replace_file(file, &data)
+    } else if defaults {
+        replace_file(file, b"defaults\n")
+    } else {
+        match fs::remove_file(file) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
 }
 
 pub fn default_path() -> io::Result<PathBuf> {
@@ -308,6 +419,12 @@ impl Gyro {
             .flick_stick
             .map(gyro_mouse::validate_flick_scale)
             .transpose()?;
+        if self
+            .flick_steering_sensitivity
+            .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        {
+            return Err("Flick Stick steering sensitivity must be between 0 and 1".into());
+        }
         let resolve_input = |name: &str| -> Result<DigitalInput, String> {
             if let Some(spec) = name.strip_prefix("touch:") {
                 let region = touchpad
@@ -331,10 +448,30 @@ impl Gyro {
             Some(GyroBinding::Chord(spec)) => gyro_gate::parse_chord(&spec, resolve_input)?,
             Some(GyroBinding::Trigger(spec)) => Binding::AnalogTrigger(TriggerGate::parse(&spec)?),
         };
+        let [threshold, start, end, multiplier] = GyroResponse::default().values();
+        let mut response = GyroResponse::new(
+            self.threshold_dps.unwrap_or(threshold),
+            self.accel_start_dps.unwrap_or(start),
+            self.accel_end_dps.unwrap_or(end),
+            self.accel_multiplier.unwrap_or(multiplier),
+        )?;
+        if let Some(enabled) = self.accel_enabled {
+            response = response.with_acceleration_enabled(enabled);
+        }
         Ok(gyro_mouse::Options {
             calibrate: self.calibrate,
+            calibration_hold: self
+                .calibration_hold
+                .map(CalibrationHold::resolve)
+                .transpose()?,
             binding,
             flick_stick,
+            flick_axial_threshold_deg: self
+                .flick_axial_threshold_deg
+                .map(validate_flick_axial_threshold)
+                .transpose()?,
+            flick_steering_sensitivity: self.flick_steering_sensitivity,
+            response,
             game_calibration: GameCalibration::new(
                 self.real_world_calibration.unwrap_or(1.0),
                 self.in_game_sens.unwrap_or(1.0),
@@ -351,6 +488,31 @@ impl Gyro {
 mod tests {
     use super::*;
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+    #[test]
+    fn controller_gyro_calibration_bindings_are_opt_in_and_validated() {
+        let config = |button, hold| {
+            format!("version = 1\n[gyro.calibration_hold]\nbutton = {button:?}\n{hold}")
+        };
+        let configured = parse(&config("ps", ""))
+            .unwrap()
+            .gyro
+            .unwrap()
+            .calibration_hold
+            .unwrap();
+        assert_eq!(configured.button, joyshockrust_core::Button::Home);
+        assert_eq!(configured.duration.as_millis(), 1500);
+        assert!(parse(&config("ps", "hold_ms = 100")).is_err());
+        assert!(parse(&config("not-a-button", "")).is_err());
+        assert!(
+            parse("version = 1\n[gyro]")
+                .unwrap()
+                .gyro
+                .unwrap()
+                .calibration_hold
+                .is_none()
+        );
+    }
 
     #[test]
     fn touch_region_controls_gyro_independently_of_gamepad_bindings() {
@@ -454,7 +616,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            profile.bridge.unwrap(),
+            profile.bridge.unwrap().startup(),
             BridgeOptions {
                 gamepad: OutputKind::XboxSeries,
                 rumble: true,
@@ -465,7 +627,7 @@ mod tests {
             .unwrap()
             .bridge;
         assert_eq!(
-            partial.unwrap(),
+            partial.unwrap().startup(),
             BridgeOptions {
                 gamepad: OutputKind::Xbox360,
                 ..BridgeOptions::default()
@@ -502,6 +664,39 @@ mod tests {
         );
         assert!(render_game_calibration("version = 1", 40.0, 2.0).is_ok());
         assert!(render_game_calibration(source, 0.0, 2.0).is_err());
+    }
+
+    #[test]
+    fn aim_response_profile_validates_thresholds_and_acceleration() {
+        let valid = parse("version = 1\n[gyro]\nflick_axial_threshold_deg = 12\nflick_steering_sensitivity = 0.35\nthreshold_dps = 2\naccel_start_dps = 25\naccel_end_dps = 120\naccel_multiplier = 2.5").unwrap().gyro.unwrap();
+        assert_eq!(valid.flick_axial_threshold(), 12.0);
+        assert_eq!(valid.flick_steering_sensitivity, Some(0.35));
+        assert_eq!(valid.response.values(), [2.0, 25.0, 120.0, 2.5]);
+        let second = std::time::Duration::from_secs(1);
+        assert_eq!(valid.response.interval_gain([0.0, 200.0], second), 2.5);
+        for (enabled, gain) in [(false, 1.0), (true, 2.5)] {
+            let profile = parse(&format!(
+                "version = 1\n[gyro]\nthreshold_dps = 2\naccel_multiplier = 2.5\naccel_enabled = {enabled}"
+            )).unwrap();
+            let response = profile.gyro.unwrap().response;
+            assert_eq!(response.interval_gain([0.0, 200.0], second), gain);
+            assert_eq!(response.interval_gain([0.0, 1.0], second), 0.0);
+        }
+        for settings in [
+            "flick_axial_threshold_deg = -1",
+            "flick_axial_threshold_deg = 31",
+            "flick_steering_sensitivity = -0.1",
+            "flick_steering_sensitivity = 1.1",
+            "flick_steering_sensitivity = nan",
+            "threshold_dps = -1",
+            "accel_multiplier = 0.5",
+            "accel_end_dps = 20",
+        ] {
+            assert!(
+                parse(&format!("version = 1\n[gyro]\n{settings}")).is_err(),
+                "{settings}"
+            );
+        }
     }
 
     #[test]

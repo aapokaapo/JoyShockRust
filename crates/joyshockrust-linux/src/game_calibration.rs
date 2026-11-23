@@ -11,56 +11,18 @@ use std::{
 use evdev::{EventType, InputEvent, RelativeAxisCode};
 
 use joyshockrust_core::{Button, Stick};
+use joyshockrust_motion::aim_response::validate_flick_axial_threshold;
 
 use crate::{
-    SessionEvent, discovery, flick_stick::FlickStick, forward_reports, gyro_mouse, profile,
+    SessionEvent, discovery,
+    flick_stick::FlickStick,
+    forward_reports, gyro_mouse,
+    haptics::{Cue, Haptics},
+    profile,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GameCalibration(f64);
-
-impl Default for GameCalibration {
-    fn default() -> Self {
-        Self(1.0)
-    }
-}
-
-impl GameCalibration {
-    pub fn new(real_world_calibration: f64, in_game_sens: f64) -> Result<Self, &'static str> {
-        if !positive(real_world_calibration) {
-            return Err("gyro.real_world_calibration must be finite and greater than zero");
-        }
-        if !positive(in_game_sens) {
-            return Err("gyro.in_game_sens must be finite and greater than zero");
-        }
-        let factor = real_world_calibration / in_game_sens;
-        // Keep effective pointer scales representable even at the maximum
-        // gyro and Flick Stick sensitivities and a large angle per report.
-        if !positive(factor) || factor > 10_000.0 {
-            return Err(
-                "real_world_calibration / in_game_sens must be greater than 0 and at most 10000",
-            );
-        }
-        Ok(Self(factor))
-    }
-
-    pub fn scale(self, sensitivity: f64) -> f64 {
-        sensitivity * self.0
-    }
-}
-
-fn positive(value: f64) -> bool {
-    value.is_finite() && value > 0.0
-}
-
-fn calculate(counts: i32, in_game_sens: f64, turns: f64) -> Result<f64, &'static str> {
-    if !positive(turns) {
-        return Err("measured turns must be finite and greater than zero");
-    }
-    let real_world_calibration = (f64::from(counts) / 360.0 / turns) * in_game_sens;
-    GameCalibration::new(real_world_calibration, in_game_sens)?;
-    Ok(real_world_calibration)
-}
+pub use joyshockrust_motion::game_calibration::GameCalibration;
+use joyshockrust_motion::game_calibration::{calculate, positive};
 
 pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
     let mut args = args.peekable();
@@ -68,6 +30,14 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
         let sensitivity = parse_arg(args.next(), "invalid in-game sensitivity")?;
         let hidraw = args.next().ok_or("expected a controller node")?;
         let parent: i32 = parse_arg(args.next(), "invalid calibration window process ID")?;
+        // Older editors supplied the profile's threshold. Keep accepting the
+        // argument while measuring with the physical angle in all cases.
+        if let Some(arg) = args.next() {
+            validate_flick_axial_threshold(parse_arg(
+                Some(arg),
+                "invalid Flick Stick axial threshold",
+            )?)?;
+        }
         if args.next().is_some() || !positive(sensitivity) || parent <= 1 {
             return Err(
                 "expected sensitivity, controller node and calibration window process ID".into(),
@@ -233,6 +203,7 @@ fn measure_with_stick(
         }
     };
     let mut output = gyro_mouse::open_output("JoyShockRust Game Calibration Mouse")?;
+    let haptics = Haptics::open(&controller, identity.transport);
     let mut sweep = StickSweep::new((40.0 / in_game_sens).clamp(0.25, 10_000.0));
     let mut measured_counts = None;
     progress(Progress::Ready)?;
@@ -248,11 +219,14 @@ fn measure_with_stick(
             let SessionEvent::Report(report) = event else {
                 return Ok(ControlFlow::Continue(()));
             };
-            let (delta, confirmation) = sweep.advance(
+            let (delta, confirmation, detent) = sweep.advance(
                 report.controls.right_stick,
                 report.imu.device_ticks,
                 report.controls.buttons.contains(Button::Start),
             );
+            if detent && let Some(haptics) = &haptics {
+                haptics.send(Cue::Detent);
+            }
             if delta != 0 {
                 output.emit(&[InputEvent::new(
                     EventType::RELATIVE.0,
@@ -262,7 +236,12 @@ fn measure_with_stick(
             }
             match confirmation {
                 Confirmation::None => {}
-                Confirmation::Started => progress(Progress::Started)?,
+                Confirmation::Started => {
+                    if let Some(haptics) = &haptics {
+                        haptics.send(Cue::CalibrationStart);
+                    }
+                    progress(Progress::Started)?;
+                }
                 Confirmation::CenterStick => progress(Progress::CenterStick)?,
                 Confirmation::NoMotion => progress(Progress::NoMotion)?,
                 Confirmation::Finished(counts) => {
@@ -274,6 +253,9 @@ fn measure_with_stick(
         },
     )?;
     let counts = measured_counts.ok_or("controller disconnected before calibration finished")?;
+    if let Some(haptics) = haptics {
+        haptics.finish(Cue::CalibrationDone);
+    }
     Ok(i32::try_from(counts)?)
 }
 
@@ -299,6 +281,28 @@ struct StickSweep {
     measuring: bool,
     options_pressed: bool,
     counts: i64,
+    dial: Dial,
+}
+
+#[derive(Default)]
+pub(crate) struct Dial {
+    travel: f64,
+}
+
+impl Dial {
+    pub(crate) fn rotate(&mut self, degrees: Option<f64>) -> bool {
+        const STEP: f64 = 15.0;
+        let Some(degrees) = degrees else {
+            self.travel = 0.0;
+            return false;
+        };
+        self.travel += degrees;
+        if self.travel.abs() >= STEP {
+            self.travel %= STEP;
+            return true;
+        }
+        false
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -313,18 +317,24 @@ enum Confirmation {
 impl StickSweep {
     fn new(scale: f64) -> Self {
         Self {
-            flick: FlickStick::new(scale),
+            flick: FlickStick::new(scale)
+                .with_axial_threshold(0.0)
+                .with_steering_sensitivity(1.0),
             measuring: false,
             options_pressed: true,
             counts: 0,
+            dial: Dial::default(),
         }
     }
 
-    fn advance(&mut self, stick: Stick, ticks: u32, options: bool) -> (i32, Confirmation) {
+    fn advance(&mut self, stick: Stick, ticks: u32, options: bool) -> (i32, Confirmation, bool) {
         let pressed = options && !self.options_pressed;
         self.options_pressed = options;
+        let mut detent = false;
         let delta = if self.measuring {
-            self.flick.advance(stick, ticks)
+            self.flick.advance_with_rotation(stick, ticks, |degrees| {
+                detent = self.dial.rotate(degrees);
+            })
         } else {
             0
         };
@@ -342,7 +352,7 @@ impl StickSweep {
         } else {
             Confirmation::Finished(self.counts.unsigned_abs())
         };
-        (delta, confirmation)
+        (delta, confirmation, detent)
     }
 }
 
@@ -405,21 +415,46 @@ mod tests {
             sweep.advance(stick, ticks, options)
         };
 
-        assert_eq!(advance(up, true), (0, Confirmation::None));
+        assert_eq!(advance(up, true), (0, Confirmation::None, false));
         advance(center, false);
-        assert_eq!(advance(center, true), (0, Confirmation::Started));
-        assert_eq!(advance(up, true), (0, Confirmation::None));
+        assert_eq!(advance(center, true), (0, Confirmation::Started, false));
+        assert_eq!(advance(up, true), (0, Confirmation::None, false));
         for direction in [right, down, left, up].into_iter().cycle().take(8) {
-            assert_eq!(advance(direction, false), (1800, Confirmation::None));
+            assert_eq!(advance(direction, false), (1800, Confirmation::None, true));
         }
-        assert_eq!(advance(up, true), (0, Confirmation::CenterStick));
+        assert_eq!(advance(up, true), (0, Confirmation::CenterStick, false));
         for _ in 0..3 {
             advance(center, false);
         }
-        let (delta, confirmation) = advance(center, true);
+        let (delta, confirmation, detent) = advance(center, true);
+        assert!(!detent);
         assert_eq!(delta, 0);
         assert_eq!(confirmation, Confirmation::Finished(14_400));
         assert_eq!(calculate(14_400, 2.0, 2.0).unwrap(), 40.0);
+    }
+
+    #[test]
+    fn measurement_can_make_fine_adjustments_next_to_forward() {
+        let mut sweep = StickSweep::new(20.0);
+        let center = Stick::default();
+        sweep.advance(center, 0, false);
+        assert_eq!(sweep.advance(center, 30_000, true).1, Confirmation::Started);
+        sweep.advance(Stick { x: 0.0, y: -1.0 }, 60_000, false);
+        let (x, forward) = 2.0_f32.to_radians().sin_cos();
+        let (counts, _, _) = sweep.advance(Stick { x, y: -forward }, 90_000, false);
+        assert!((39..=40).contains(&counts));
+    }
+
+    #[test]
+    fn dial_uses_relative_steps_and_resets_when_the_stick_recenters() {
+        let mut dial = Dial::default();
+        assert!(!dial.rotate(Some(10.0)));
+        assert!(!dial.rotate(Some(-2.0)));
+        assert!(dial.rotate(Some(8.0)));
+        assert!(!dial.rotate(Some(-14.0)));
+        assert!(dial.rotate(Some(-3.0)));
+        assert!(!dial.rotate(None));
+        assert!(!dial.rotate(Some(-10.0)));
     }
 
     #[test]

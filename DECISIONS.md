@@ -78,7 +78,7 @@ Only one remap layer is active at a time. The selected layer remains active unti
 
 The generic uinput gamepad emits Linux `BTN_X` for physical Square and `BTN_Y` for Triangle. Linux aliases those codes to `BTN_NORTH` and `BTN_WEST` respectively. SDL's Linux fallback uses X/Y for generic devices and position names for Sony devices. The USB parser retains the physical face positions. Sources checked 2026-11-22. [Linux event codes](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/include/uapi/linux/input-event-codes.h#L380-L389) · [SDL mapping](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/src/joystick/linux/SDL_sysjoystick.c#L2342-L2374)
 
-Experimental Flick Stick uses physical right-stick direction and device report timing. It starts an initial 100 ms turn at 90% radial travel, follows the shortest angular change while held, and re-arms below 75%. It clears queued motion on timestamp gaps and keeps the virtual right stick centered. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
+Experimental Flick Stick uses physical right-stick direction and device report timing. It starts an initial 100 ms turn at 90% radial travel, follows the shortest angular change while held, and re-arms within 25% radial travel. It clears queued motion on timestamp gaps and keeps the virtual right stick centered. An angular axial threshold snaps directions close to each cardinal axis and blends continuously back to the physical angle. Only the initial flick uses this response. Held steering tracks physical angle changes from the starting position with a separate multiplier. Calibration sweeps use the physical angle and full sensitivity so small corrections remain possible near each axis. The editor shares the runtime angle calculation and reads the active controller directly while the preview page is visible. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
 
 ## Phase 5 first increment
 
@@ -476,6 +476,20 @@ Keyboard bindings can override hold and double-tap deadlines independently.
 Both timers use the existing monotonic report and readiness clock. The
 default timings and immediate behavior of hold-only bindings are retained.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)
+## Desktop profile selection
+
+The tray profile submenu controls the loaded profile. The editor's own
+picker controls the file being edited and asks before discarding a draft.
+Save & Apply remains the action that applies the draft to the bridge.
+When run with an optional startup profile, the bridge remembers successful
+live profile selections in a separate file next to the startup profile.
+An explicit unload is remembered as default mappings. The startup file
+is still the target of a startup profile reload and serves as fallback
+if a remembered profile cannot be opened or validated.
+Gamepad and gyro mouse selections are process-local and independent.
+The master switch suppresses both outputs while retaining the selections.
+Status exposes the master, individual choices, and effective output states.
+
 ## Desktop process lifecycle
 
 2026-11-23. The input bridge stays supervised by systemd in the user
@@ -483,8 +497,13 @@ session. The separate tray process owns the StatusNotifierItem menu and
 uses the bridge's existing control and status interfaces. Put the login
 preference in XDG autostart, which launches the same tray unit as the
 application menu. Systemd serializes launches of the tray unit. The
-tray's Quit action stops the bridge before its menu disappears. Desktop
-polling and command execution stay outside the input process.
+tray's Quit action stops the bridge before its menu disappears. Both
+services stop with the graphical session. A tray restart is ordered
+after a simultaneous bridge restart, so the tray can start the bridge
+when opened without propagating a stop job during a tray restart.
+Desktop polling and command execution stay outside the input process.
+[systemd.unit](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
+· [graphical-session.target](https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html#graphical-session.target)
 [XDG Autostart](https://specifications.freedesktop.org/autostart-spec/latest/)
 · [StatusNotifierItem](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/)
 
@@ -492,6 +511,11 @@ For tray RWC calibration, the bridge ends its active output session
 before acknowledging the pause and keeps serving control requests.
 Discovery resumes with the existing profile and controller filter.
 The tray waits for the GTK calibration window, then resumes the bridge.
+The calibration window opens the selected hidraw node read-only and
+watches it through a bounded nonblocking source on the GTK main loop.
+It handles navigation presses only while focused. Options remains
+available to the measurement worker. The review screen uses the same
+RWC calculation as the save command.
 The window runs the same Flick Stick sweep as the interactive CLI.
 Measurement emits line-delimited status on readiness and Options
 transitions. The GTK window drains these messages asynchronously before
@@ -500,6 +524,26 @@ save command validates
 and atomically updates the profile. Closing the window during measurement
 stops and waits for the measurement process before the tray resumes
 normal outputs.
+
+The tray also offers controller gyro calibration. A dedicated measurement
+reads the selected controller without creating a virtual pointer, using
+factory calibration and the same five-second stationary window as gyro
+startup and the controller shortcut.
+Saving is explicit and stores the residual bias by stable controller ID.
+The bridge reads that correction when opening gyro output. A saved
+correction takes precedence over optional session-start estimation.
+
+2026-11-23. An opt-in physical hold binding starts the stationary
+estimator after the button is released and the start cue has time to
+settle. The report loop hands off persistence and feedback through
+bounded queues. Calibration cues and RWC detents use native USB
+actuator PCM. An audio worker finds the playback device under the
+same USB parent as the active controller. It sends 48 kHz four-channel
+PCM and keeps the audible channels silent. Bluetooth actuator streaming
+is pending hardware validation. RWC detents use the angular sweep
+before conversion to mouse counts. The diagnostic command uses the same
+PCM player and angular detector for standalone testing.
+[USB audio descriptor](https://github.com/nondebug/dualsense/blob/02338358b6b4be2d64dbf661ae2a47842156cfcf/lsusb-descriptor-info.txt#L143-L156) · [Actuator channel routing](https://github.com/nondebug/dualsense/blob/02338358b6b4be2d64dbf661ae2a47842156cfcf/web-haptics-polyfill/README.md#L19-L24)
 
 The editor is a separate native window. Its controller diagram
 selects a physical input, and the inspector edits keyboard and mouse
@@ -539,7 +583,33 @@ for enforcing radius ordering and the requirement for a movement key
 when a zone uses keep sprint. The dialog keeps existing deadzone and
 direction hysteresis settings.
 
-The status reply includes the filename of the last applied profile,
-without its directory. Named live loads carry the filename with the
-TOML bytes. The bridge accepts legacy name-free loads and preserves
-the current name when an update is rejected.
+The profile editor can choose the virtual gamepad identity. A live
+change replaces the virtual gamepad and preserves the physical input
+session. Profiles without a type use the startup identity. Analog
+partial-only trigger gestures use two hysteresis gates and suppress
+partial tap actions if the same pull reaches the full stage by default.
+The per-trigger `keyboard.keep_partial` setting keeps the lower gate
+active through full travel when enabled.
+
+The Gyro tab edits the profile’s single activation binding. Its button,
+touch, chord and trigger choices use the bridge’s existing profile schema.
+The touchpad’s cell editor edits the same binding for single touch inputs.
+
+The gyro editor offers 0–20 sliders for fine adjustment and text fields
+for the full 0–100 profile range. Opening a profile or typing a value
+above 20 keeps the recorded sensitivity and caps only the slider position.
+Linking uses the horizontal value as the starting point and edits both
+TOML values together. The link switch is part of the editor session. The gyro acceleration
+switch is saved with the profile. Disabling it retains the configured
+curve and keeps applying the minimum-speed cutoff. The default cutoff
+of 0.2°/s suppresses small residual bias after calibration. An explicit
+zero retains unfiltered slow aim. Speed-dependent gain uses the average
+speed over the same device-time interval as the integrated aim delta,
+so the gain is independent of which end of the interval is faster.
+
+The status reply includes a display filename and, when known, the
+active profile's absolute path as encoded bytes. RWC uses the exact path
+to preselect a destination even when profiles share a filename. Live
+loads carry path metadata and the TOML bytes. The bridge still accepts
+legacy name-only and name-free loads. Rejections preserve the current
+profile identity, and unloading clears it.

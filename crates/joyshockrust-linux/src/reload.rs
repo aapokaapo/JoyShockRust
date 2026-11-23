@@ -37,13 +37,18 @@ use crate::{
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
 const MAX_PROFILE_NAME_BYTES: usize = 4096;
 const LOAD_PROFILE_PREFIX: &[u8] = b"\0load-profile\n";
+const LOAD_PROFILE_PATH_PREFIX: &[u8] = b"\0load-profile-path\n";
 const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
 const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
 const SET_GAMEPAD_PREFIX: &[u8] = b"\0set-gamepad\n";
+const SET_GYRO_MOUSE_PREFIX: &[u8] = b"\0set-gyro-mouse\n";
+const SET_EMULATION_PREFIX: &[u8] = b"\0set-emulation\n";
+const SET_EMULATION_MASTER_PREFIX: &[u8] = b"\0set-emulation-master\n";
 const SET_OUTPUTS_PREFIX: &[u8] = b"\0set-outputs\n";
 
 pub struct Reload {
     path: Option<PathBuf>,
+    selection_path: Option<PathBuf>,
     bridge_at_startup: BridgeOptions,
     allow_controller_switch: bool,
     signal: SignalFd,
@@ -65,6 +70,7 @@ impl Reload {
         socket: Option<&Path>,
         bridge_at_startup: BridgeOptions,
         allow_controller_switch: bool,
+        selection_path: Option<PathBuf>,
     ) -> io::Result<Self> {
         let listener = socket
             .map(|path| {
@@ -109,6 +115,7 @@ impl Reload {
             SignalFd::with_flags(&signals, SfdFlags::SFD_CLOEXEC | SfdFlags::SFD_NONBLOCK)?;
         Ok(Self {
             path,
+            selection_path,
             bridge_at_startup,
             allow_controller_switch,
             signal,
@@ -141,12 +148,56 @@ enum Client {
 pub enum Update {
     Profile(Box<RuntimeOptions>),
     Selection(ControllerFilter),
-    Gamepad(bool),
+    Emulation(OutputTarget, bool),
     OutputsPaused(bool),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputTarget {
+    Gamepad,
+    GyroMouse,
+    Both,
+    Master,
+}
+
+impl OutputTarget {
+    pub fn from_flag(flag: &str) -> Option<Self> {
+        match flag {
+            "--set-gamepad" => Some(Self::Gamepad),
+            "--set-gyro-mouse" => Some(Self::GyroMouse),
+            "--set-emulation" => Some(Self::Both),
+            "--set-emulation-master" => Some(Self::Master),
+            _ => None,
+        }
+    }
+
+    fn prefix(self) -> &'static [u8] {
+        match self {
+            Self::Gamepad => SET_GAMEPAD_PREFIX,
+            Self::GyroMouse => SET_GYRO_MOUSE_PREFIX,
+            Self::Both => SET_EMULATION_PREFIX,
+            Self::Master => SET_EMULATION_MASTER_PREFIX,
+        }
+    }
+
+    pub fn settings(
+        self,
+        enabled: bool,
+        gamepad: bool,
+        gyro: Option<bool>,
+    ) -> (bool, Option<bool>) {
+        match self {
+            Self::Gamepad => (enabled, gyro),
+            Self::GyroMouse => (gamepad, Some(enabled)),
+            Self::Both => (enabled, Some(enabled)),
+            Self::Master => (gamepad, gyro),
+        }
+    }
 }
 
 struct InlineProfile<'a> {
     name: Option<&'a OsStr>,
+    path: Option<&'a Path>,
     contents: &'a [u8],
 }
 
@@ -166,27 +217,60 @@ impl Request<'_> {
         }
     }
 
+    fn emulation_payload(&self) -> Option<(OutputTarget, &[u8])> {
+        [
+            OutputTarget::Gamepad,
+            OutputTarget::GyroMouse,
+            OutputTarget::Both,
+            OutputTarget::Master,
+        ]
+        .into_iter()
+        .find_map(|target| {
+            self.command_payload(target.prefix())
+                .map(|payload| (target, payload))
+        })
+    }
+
     fn inline_profile(&self) -> Result<Option<InlineProfile<'_>>, &'static str> {
         let Some(Client::Load(_, data)) = &self.client else {
             return Ok(None);
         };
-        let Some(data) = data.strip_prefix(LOAD_PROFILE_PREFIX) else {
+        let (data, has_path) = if let Some(data) = data.strip_prefix(LOAD_PROFILE_PATH_PREFIX) {
+            (data, true)
+        } else if let Some(data) = data.strip_prefix(LOAD_PROFILE_PREFIX) {
+            (data, false)
+        } else {
             // Older clients send only the TOML bytes.
             return Ok(Some(InlineProfile {
                 name: None,
+                path: None,
                 contents: data,
             }));
         };
         let end = data
             .iter()
             .position(|&byte| byte == 0)
-            .ok_or("named profile request needs a filename and profile")?;
-        let name = &data[..end];
-        if name.is_empty() || name.len() > MAX_PROFILE_NAME_BYTES || name.contains(&b'/') {
-            return Err("invalid profile filename");
+            .ok_or("profile request needs a source and profile")?;
+        let source = &data[..end];
+        if source.is_empty() || source.len() > MAX_PROFILE_NAME_BYTES {
+            return Err("invalid profile source");
         }
+        let name = OsStr::from_bytes(source);
+        let path = Path::new(name);
+        let (name, path) = if has_path {
+            if !path.is_absolute() || path.file_name().is_none() {
+                return Err("expected an absolute profile path");
+            }
+            (path.file_name(), Some(path))
+        } else {
+            if source.contains(&b'/') {
+                return Err("invalid profile filename");
+            }
+            (Some(name), None)
+        };
         Ok(Some(InlineProfile {
-            name: Some(OsStr::from_bytes(name)),
+            name,
+            path,
             contents: &data[end + 1..],
         }))
     }
@@ -206,10 +290,10 @@ impl Request<'_> {
                 }
             };
         }
-        if let Some(payload) = self.command_payload(SET_GAMEPAD_PREFIX) {
+        if let Some((target, payload)) = self.emulation_payload() {
             return match payload {
-                b"on" => Some(Update::Gamepad(true)),
-                b"off" => Some(Update::Gamepad(false)),
+                b"on" => Some(Update::Emulation(target, true)),
+                b"off" => Some(Update::Emulation(target, false)),
                 _ => {
                     self.rejected("expected on or off");
                     None
@@ -260,17 +344,15 @@ impl Request<'_> {
         };
         match profile {
             Ok(profile) => {
-                if profile.bridge.is_none() {
-                    return Some(profile);
-                }
                 let next = profile.bridge.unwrap_or_default();
                 let startup = self.reload.bridge_at_startup;
-                if next.gamepad != startup.gamepad
-                    || next.rumble != startup.rumble
-                    || next.virtual_gamepad != startup.virtual_gamepad
+                if next.rumble.is_some_and(|value| value != startup.rumble)
+                    || next
+                        .virtual_gamepad
+                        .is_some_and(|value| value != startup.virtual_gamepad)
                 {
                     self.rejected(
-                        "virtual gamepad and rumble changes require restarting JoyShockRust",
+                        "profile changes to rumble or gamepad enablement require restarting JoyShockRust",
                     );
                     return None;
                 }
@@ -283,13 +365,20 @@ impl Request<'_> {
         }
     }
 
+    pub fn profile_gamepad(&self, profile: &RuntimeOptions) -> crate::gamepad::OutputKind {
+        profile
+            .bridge
+            .and_then(|settings| settings.gamepad)
+            .unwrap_or(self.reload.bridge_at_startup.gamepad)
+    }
+
     pub fn applied(self, status: Option<&StatusSocket>) {
         if self.command_payload(SET_OUTPUTS_PREFIX).is_some() {
             self.reply(b"applied\n");
             return;
         }
-        if self.command_payload(SET_GAMEPAD_PREFIX).is_some() {
-            eprintln!("Virtual gamepad setting updated from CLI");
+        if self.emulation_payload().is_some() {
+            eprintln!("Emulation setting updated from CLI");
             self.reply(b"applied\n");
             return;
         }
@@ -299,34 +388,45 @@ impl Request<'_> {
             return;
         }
         self.reload.outcome.set(Outcome::Applied);
-        let (source, name) = if self.is_unload() {
+        let (source, name, path) = if self.is_unload() {
             eprintln!("Profile unloaded from CLI");
-            (ProfileSource::Defaults, None)
+            (ProfileSource::Defaults, None, None)
         } else if matches!(self.client, Some(Client::Load(_, _))) {
             eprintln!("Profile loaded from CLI");
-            let name = self
-                .inline_profile()
-                .ok()
-                .flatten()
-                .and_then(|profile| profile.name);
-            (ProfileSource::Loaded, name)
+            let profile = self.inline_profile().ok().flatten();
+            let name = profile.as_ref().and_then(|profile| profile.name);
+            let path = profile.and_then(|profile| profile.path);
+            (ProfileSource::Loaded, name, path)
         } else {
-            if let Some(path) = &self.reload.path {
+            let path = self.reload.path.as_deref();
+            if let Some(path) = path {
                 eprintln!("Profile reloaded: {}", path.display());
             }
-            (
-                ProfileSource::Startup,
-                self.reload.path.as_deref().and_then(Path::file_name),
-            )
+            (ProfileSource::Startup, path.and_then(Path::file_name), path)
         };
+        if let Some(selection) = self.reload.selection_path.as_deref() {
+            let selected = matches!(source, ProfileSource::Loaded)
+                .then_some(path)
+                .flatten();
+            if let Err(error) = profile::remember_selection(
+                selection,
+                selected,
+                matches!(source, ProfileSource::Defaults),
+            ) {
+                eprintln!(
+                    "Could not remember active profile {}: {error}",
+                    selection.display()
+                );
+            }
+        }
         if let Some(status) = status {
-            status.set_profile(source, name);
+            status.set_profile(source, name, path);
         }
         self.reply(b"applied\n");
     }
     pub fn rejected(&self, err: impl Display) {
-        if self.command_payload(SET_GAMEPAD_PREFIX).is_some() {
-            eprintln!("Virtual gamepad setting rejected: {err}");
+        if self.emulation_payload().is_some() {
+            eprintln!("Emulation setting rejected: {err}");
             self.reply(b"rejected\n");
             return;
         }
@@ -412,20 +512,18 @@ pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<(
         ));
     }
 
-    let name = source
-        .file_name()
-        .map(OsStr::as_bytes)
-        .filter(|name| name.len() <= MAX_PROFILE_NAME_BYTES)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "expected a valid profile filename",
-            )
-        })?;
+    let absolute = std::path::absolute(source)?;
+    let path = absolute.as_os_str().as_bytes();
+    if path.len() > MAX_PROFILE_NAME_BYTES || absolute.file_name().is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid profile path",
+        ));
+    }
     let mut payload =
-        Vec::with_capacity(LOAD_PROFILE_PREFIX.len() + name.len() + 1 + profile.len());
-    payload.extend_from_slice(LOAD_PROFILE_PREFIX);
-    payload.extend_from_slice(name);
+        Vec::with_capacity(LOAD_PROFILE_PATH_PREFIX.len() + path.len() + 1 + profile.len());
+    payload.extend_from_slice(LOAD_PROFILE_PATH_PREFIX);
+    payload.extend_from_slice(path);
     payload.push(0);
     payload.extend_from_slice(&profile);
     send_update(&payload, reload_socket, "profile reload")
@@ -435,10 +533,14 @@ pub fn unload_profile(reload_socket: Option<&Path>) -> io::Result<()> {
     send_update(UNLOAD_PROFILE_REQUEST, reload_socket, "profile unload")
 }
 
-pub fn set_gamepad(enabled: bool, reload_socket: Option<&Path>) -> io::Result<()> {
-    let mut payload = SET_GAMEPAD_PREFIX.to_vec();
+pub fn set_emulation(
+    target: OutputTarget,
+    enabled: bool,
+    reload_socket: Option<&Path>,
+) -> io::Result<()> {
+    let mut payload = target.prefix().to_vec();
     payload.extend_from_slice(if enabled { b"on" } else { b"off" });
-    send_update(&payload, reload_socket, "virtual gamepad update")
+    send_update(&payload, reload_socket, "emulation update")
 }
 
 pub fn set_outputs_paused(paused: bool, reload_socket: Option<&Path>) -> io::Result<()> {
@@ -629,11 +731,14 @@ pub fn wait<'a>(
             return Err(io::Error::other("profile load socket lost"));
         }
         if !requested && client.is_none() && flags.contains(PollFlags::POLLIN) {
-            let mut data =
-                vec![
-                    0;
-                    LOAD_PROFILE_PREFIX.len() + MAX_PROFILE_NAME_BYTES + 1 + MAX_PROFILE_BYTES + 1
-                ];
+            let mut data = vec![
+                0;
+                LOAD_PROFILE_PATH_PREFIX.len()
+                    + MAX_PROFILE_NAME_BYTES
+                    + 1
+                    + MAX_PROFILE_BYTES
+                    + 1
+            ];
             match socket.recv_from(&mut data) {
                 Ok((len, address)) if !address.is_unnamed() => {
                     data.truncate(len);
@@ -674,6 +779,7 @@ mod tests {
     #[test]
     fn reload_rejects_changes_to_bridge_settings() {
         let reload = Reload {
+            selection_path: None,
             path: Some(
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml"),
             ),
@@ -723,6 +829,7 @@ mod tests {
     #[test]
     fn direct_controller_selection_preserves_the_profile_and_other_filters() {
         let mut reload = Reload {
+            selection_path: None,
             path: Some(PathBuf::from("/dev/null")),
             bridge_at_startup: BridgeOptions::default(),
             allow_controller_switch: true,
@@ -787,6 +894,7 @@ mod tests {
         let load_socket = UnixDatagram::bind_addr(&address).unwrap();
         load_socket.set_nonblocking(true).unwrap();
         let reload = Reload {
+            selection_path: None,
             path: Some(PathBuf::from("/dev/null")),
             bridge_at_startup: BridgeOptions {
                 rumble: true,
@@ -848,6 +956,7 @@ mod tests {
         let listener = UnixListener::bind_addr(&address).unwrap();
         listener.set_nonblocking(true).unwrap();
         let reload = Reload {
+            selection_path: None,
             path: Some(PathBuf::from("/dev/null")),
             bridge_at_startup: BridgeOptions::default(),
             allow_controller_switch: false,
@@ -890,6 +999,7 @@ mod tests {
         let load_socket = UnixDatagram::bind_addr(&address).unwrap();
         load_socket.set_nonblocking(true).unwrap();
         let reload = Reload {
+            selection_path: None,
             path: None,
             bridge_at_startup: BridgeOptions::default(),
             allow_controller_switch: false,
@@ -930,13 +1040,13 @@ mod tests {
             Some(&feedback),
             crate::ReportTimers {
                 measurement: Some(&mut measurement),
-                keyboard: None,
+                ..Default::default()
             },
             |event| match event {
                 crate::SessionEvent::Reload(request) => {
                     assert!(matches!(
                         request.resolve(ControllerFilter::default()),
-                        Some(Update::Gamepad(true))
+                        Some(Update::Emulation(OutputTarget::Gamepad, true))
                     ));
                     feedback.replace(new_feedback.take());
                     request.applied(None);

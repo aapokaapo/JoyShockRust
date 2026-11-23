@@ -214,10 +214,37 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
             ),
             format!("native_touchpad_grab_requested={}", source == "startup"),
             "native_touchpad_grabbed=false".to_owned(),
+            format!(
+                "virtual_gamepad_kind={}",
+                if source == "loaded" {
+                    "xbox-series"
+                } else {
+                    "generic"
+                }
+            ),
             "controller_id_configured=true".to_owned(),
         ] {
             assert!(stdout.lines().any(|entry| entry == line), "{stdout}");
         }
+        let expected_path = match source {
+            "startup" => Some(&startup),
+            "loaded" => Some(&preset),
+            _ => None,
+        };
+        let path_field = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("profile_path_hex="));
+        let encoded = expected_path.map(|path| {
+            use std::fmt::Write;
+            path.as_os_str()
+                .as_encoded_bytes()
+                .iter()
+                .fold(String::new(), |mut hex, byte| {
+                    write!(&mut hex, "{byte:02x}").unwrap();
+                    hex
+                })
+        });
+        assert_eq!(path_field, encoded.as_deref());
         assert!(!stdout.contains("ff:ff:ff:ff:ff:ff"), "{stdout}");
     };
     check("auto", "dualsense-edge", false, "defaults");
@@ -234,7 +261,14 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
     assert!(result.status.success(), "{result:?}");
     check("auto", "dualsense-edge", true, "startup");
 
-    fs::write(&preset, settings("bluetooth", "dualsense")).unwrap();
+    fs::write(
+        &preset,
+        format!(
+            "{}gamepad = 'xbox-series'\n",
+            settings("bluetooth", "dualsense")
+        ),
+    )
+    .unwrap();
     let load = || {
         Command::new(binary)
             .arg("--load-profile")
@@ -444,6 +478,167 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
 }
 
 #[test]
+fn remembered_profile_and_emulation_controls_work_across_service_restarts() {
+    let directory = TestDirectory::new("remembered");
+    let startup = directory.0.join("profile.toml");
+    let preset = directory.0.join("gyro preset.toml");
+    let invalid = directory.0.join("invalid.toml");
+    let status = directory.0.join("status");
+    let reload = directory.0.join("reload");
+    let notify = directory.0.join("notify");
+    let listener = UnixDatagram::bind(&notify).unwrap();
+    listener
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    fs::write(&startup, "version = 1\n[bridge]\nvirtual_gamepad = false\n").unwrap();
+    fs::write(&preset, "version = 1\n[gyro]\n").unwrap();
+    fs::write(&invalid, "version = 2\n").unwrap();
+    let binary = env!("CARGO_BIN_EXE_joyshockrust-linux");
+    let start = || {
+        for path in [&status, &reload, &directory.0.join("reload.load")] {
+            let _ = fs::remove_file(path);
+        }
+        let bridge = Bridge(
+            Command::new(binary)
+                .env("NOTIFY_SOCKET", &notify)
+                .env("XDG_CONFIG_HOME", &directory.0)
+                .arg("--profile-if-present")
+                .arg(&startup)
+                .args(["--controller-id", "ff:ff:ff:ff:ff:ff"])
+                .arg("--status-socket")
+                .arg(&status)
+                .arg("--reload-socket")
+                .arg(&reload)
+                .spawn()
+                .unwrap(),
+        );
+        let mut ready = [0; 64];
+        let len = listener.recv(&mut ready).expect("bridge readiness");
+        assert_eq!(&ready[..len], b"READY=1");
+        bridge
+    };
+    let run = |args: &[&std::ffi::OsStr]| {
+        Command::new(binary)
+            .args(args)
+            .arg(&reload)
+            .output()
+            .unwrap()
+    };
+    let check = |expected: &[&str]| {
+        let result = Command::new(binary)
+            .arg("--status")
+            .arg(&status)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        let text = String::from_utf8(result.stdout).unwrap();
+        for line in expected {
+            assert!(text.lines().any(|actual| actual == *line), "{text}");
+        }
+    };
+
+    let bridge = start();
+    check(&[
+        "profile_name=profile.toml",
+        "virtual_gamepad_enabled=false",
+        "gyro_mouse_enabled=false",
+    ]);
+    assert!(
+        run(&["--set-gyro-mouse".as_ref(), "on".as_ref()])
+            .status
+            .success()
+    );
+    check(&["virtual_gamepad_enabled=false", "gyro_mouse_enabled=true"]);
+    assert!(
+        run(&["--set-emulation-master".as_ref(), "off".as_ref()])
+            .status
+            .success()
+    );
+    check(&[
+        "emulation_master_enabled=false",
+        "virtual_gamepad_enabled=false",
+        "gyro_mouse_enabled=false",
+        "virtual_gamepad_selected=false",
+        "gyro_mouse_selected=true",
+    ]);
+    assert!(
+        !run(&["--set-gamepad".as_ref(), "on".as_ref()])
+            .status
+            .success()
+    );
+    assert!(
+        !run(&["--set-gyro-mouse".as_ref(), "off".as_ref()])
+            .status
+            .success()
+    );
+    assert!(
+        run(&["--set-emulation-master".as_ref(), "on".as_ref()])
+            .status
+            .success()
+    );
+    check(&[
+        "emulation_master_enabled=true",
+        "virtual_gamepad_enabled=false",
+        "gyro_mouse_enabled=true",
+    ]);
+    assert!(
+        run(&["--set-emulation".as_ref(), "on".as_ref()])
+            .status
+            .success()
+    );
+    check(&["virtual_gamepad_enabled=true", "gyro_mouse_enabled=true"]);
+    assert!(
+        run(&["--set-emulation".as_ref(), "off".as_ref()])
+            .status
+            .success()
+    );
+    check(&["virtual_gamepad_enabled=false", "gyro_mouse_enabled=false"]);
+    assert!(
+        run(&["--load-profile".as_ref(), preset.as_os_str()])
+            .status
+            .success()
+    );
+    assert!(
+        !run(&["--load-profile".as_ref(), invalid.as_os_str()])
+            .status
+            .success()
+    );
+    check(&[
+        "profile_name=gyro preset.toml",
+        "gyro_configured=true",
+        "gyro_mouse_enabled=false",
+    ]);
+    drop(bridge);
+
+    let bridge = start();
+    check(&[
+        "profile_name=gyro preset.toml",
+        "profile_source=loaded",
+        "virtual_gamepad_enabled=false",
+        "gyro_mouse_enabled=true",
+    ]);
+    assert!(run(&["--unload-profile".as_ref()]).status.success());
+    drop(bridge);
+
+    let bridge = start();
+    check(&[
+        "profile_name=",
+        "profile_source=defaults",
+        "gyro_mouse_enabled=false",
+    ]);
+    assert!(
+        run(&["--load-profile".as_ref(), preset.as_os_str()])
+            .status
+            .success()
+    );
+    drop(bridge);
+
+    fs::remove_file(&preset).unwrap();
+    let _bridge = start();
+    check(&["profile_name=profile.toml", "profile_source=startup"]);
+}
+
+#[test]
 fn whole_turn_calibration_saves_only_a_valid_measurement() {
     let directory = TestDirectory::new("whole-turn-calibration");
     let profile = directory.0.join("profile.toml");
@@ -467,4 +662,26 @@ fn whole_turn_calibration_saves_only_a_valid_measurement() {
     assert!(text.contains("sensitivity_x = 2.5 # keep this"));
     assert!(text.contains("real_world_calibration = 40.0"));
     assert!(text.contains("in_game_sens = 2.0"));
+}
+
+#[test]
+fn gyro_calibration_is_saved_separately_for_each_controller() {
+    let directory = TestDirectory::new("gyro-calibration");
+    let first = "00:11:22:33:44:55";
+    let second = "00:11:22:33:44:66";
+    let save = |id, x| {
+        Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
+            .env("XDG_CONFIG_HOME", &directory.0)
+            .args(["--gyro-calibration", "--save", id, x, "0", "-0.1"])
+            .output()
+            .unwrap()
+    };
+    assert!(save(first, "0.25").status.success());
+    assert!(save(second, "0.5").status.success());
+    assert!(!save(first, "nan").status.success());
+    let bias_dir = directory.0.join("joyshockrust/gyro-calibration");
+    let first_bias = fs::read_to_string(bias_dir.join(format!("{first}.toml"))).unwrap();
+    let second_bias = fs::read_to_string(bias_dir.join(format!("{second}.toml"))).unwrap();
+    assert!(first_bias.contains("gyro_bias_dps = [0.25, 0.0, -0.1]"));
+    assert!(second_bias.contains("gyro_bias_dps = [0.5, 0.0, -0.1]"));
 }

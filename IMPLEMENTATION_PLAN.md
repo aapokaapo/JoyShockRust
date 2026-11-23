@@ -251,16 +251,35 @@ profile. The bridge releases its virtual outputs while retaining the live
 profile and controller selection. The window uses the existing Flick
 Stick measurement and validates and saves the selected profile through
 the bridge CLI. The window follows readiness and sweep progress as they
-happen. The tray resumes the bridge after the window exits.
+happen and asks for the destination profile after measurement. It
+preselects the active file when available. The tray resumes the bridge
+after the window exits. Both calibration windows accept controller
+navigation while focused, including numeric adjustment and profile
+selection and a live result preview in the real-world calibration window.
+Flick Stick can snap to cardinal axes within a configurable angular
+threshold for the initial turn, with independently scaled held steering
+and a live physical and adjusted preview in the editor. RWC measurement
+uses the physical stick angle and full steering sensitivity.
+Gyro aim has a minimum movement speed and optional bounded
+speed-dependent gain that can be toggled per profile. The default minimum
+speed filters small residual bias after calibration.
 
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects
 physical controls and shows their keyboard, mouse and base gamepad
 bindings in an inspector. Advanced TOML covers the full profile schema.
-The Sticks and Gyro pages expose stepped sensitivity controls, radial
+The Sticks and Gyro pages expose stepped sensitivity controls, typed gyro values, radial
 response previews and editable game calibration values. The GTK 4 editor
-uses libadwaita navigation and follows the system appearance. The tray shows the active profile's
-filename for startup profiles and successful live loads.
+uses libadwaita navigation and follows the system appearance. The tray
+summarizes controller telemetry on one row, omits USB battery status,
+and labels the active controller and profile submenus. It can enable and
+disable gamepad and gyro mouse individually, with a master switch
+that retains both selections. The
+bridge restores the previous active profile on service startup. The
+user units order a simultaneous restart and tie desktop shutdown to
+the graphical session. The Gyro page
+supports gyro activation bindings and separate or linked sensitivity adjustment. The editor has a separate
+picker for opening and creating profile drafts.
 
 The Touchpad page edits grid dimensions and per-cell gamepad, keyboard
 and mouse actions for contact and click independently. It also lets a
@@ -271,7 +290,21 @@ The Sticks page edits keyboard direction keys and inner and outer zones
 independently for each stick. The mapping dialog validates the draft with
 the bridge before returning to the profile.
 
-Next, verify the desktop calibration workflow and cancellation on hardware.
+The tray can also guide stationary gyro calibration and retain the
+correction per controller across restarts. Synthetic tests cover saving,
+cancellation and application of the correction.
+
+Profiles can bind the shared five-second stationary calibration to a physical button hold.
+USB actuator feedback marks calibration boundaries and RWC sweep steps.
+A standalone CLI test plays the USB cues and counts detents from a physical
+right-stick sweep through the existing PCM path.
+The editor exposes virtual gamepad identity and separate partial and full
+keyboard or mouse trigger actions. Each trigger can keep both stages active
+at full travel. Live profile application replaces the virtual gamepad when
+its type changes.
+
+Next, verify the tactile cues, Bluetooth behavior and both desktop
+calibration workflows on hardware.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

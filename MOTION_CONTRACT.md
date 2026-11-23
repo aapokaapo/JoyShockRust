@@ -39,7 +39,7 @@ Identical initial state, configuration and ordered samples must produce identica
 
 ## Calibration
 `StationaryCalibration` estimates residual bias from factory-converted samples
-while the user keeps the controller still. It needs at least one second and
+while the user keeps the controller still. It needs at least five uninterrupted seconds and
 64 samples of stable gyro and accelerometer readings. A gap above 50 ms,
 invalid reading or motion outside the quality limits discards the window.
 Once accepted, the bias is fixed for the session. The Linux adapter withholds

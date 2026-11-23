@@ -1,20 +1,20 @@
-use std::{
-    f64::consts::{PI, TAU},
-    time::Duration,
-};
+use std::time::Duration;
 
 use joyshockrust_core::Stick;
 use joyshockrust_input::{Timebase, TimestampUpdate};
+use joyshockrust_motion::aim_response::{
+    DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, FlickDirection,
+    FlickUpdate, snap_flick_angle,
+};
 
 const FLICK_DURATION: Duration = Duration::from_millis(100);
-const ENGAGE_RADIUS: f32 = 0.90;
-const RELEASE_RADIUS: f32 = 0.75;
 
 pub struct FlickStick {
     counts_per_degree: f64,
+    axial_threshold: f64,
     timebase: Timebase,
-    armed: bool,
-    angle: Option<f64>,
+    direction: FlickDirection,
+    steering_sensitivity: f64,
     remaining_degrees: f64,
     remaining_time: Duration,
     remainder: f64,
@@ -24,12 +24,34 @@ impl FlickStick {
     pub fn new(counts_per_degree: f64) -> Self {
         Self {
             counts_per_degree,
+            axial_threshold: DEFAULT_FLICK_AXIAL_THRESHOLD_DEG.to_radians(),
             timebase: Timebase::new(150_000).expect("valid 50 ms sensor gap"),
-            armed: false,
-            angle: None,
+            direction: FlickDirection::default(),
+            steering_sensitivity: DEFAULT_FLICK_STEERING_SENSITIVITY,
             remaining_degrees: 0.0,
             remaining_time: Duration::ZERO,
             remainder: 0.0,
+        }
+    }
+
+    pub fn with_axial_threshold(mut self, degrees: f64) -> Self {
+        self.axial_threshold = degrees.to_radians();
+        self
+    }
+
+    pub fn set_axial_threshold(&mut self, degrees: f64) {
+        self.axial_threshold = degrees.to_radians();
+    }
+
+    pub fn with_steering_sensitivity(mut self, multiplier: f64) -> Self {
+        self.set_steering_sensitivity(multiplier);
+        self
+    }
+
+    pub fn set_steering_sensitivity(&mut self, multiplier: f64) {
+        if self.steering_sensitivity != multiplier {
+            self.steering_sensitivity = multiplier;
+            self.remainder = 0.0;
         }
     }
 
@@ -41,17 +63,25 @@ impl FlickStick {
     }
 
     pub fn is_settled(&self, stick: Stick) -> bool {
-        stick.x * stick.x + stick.y * stick.y <= RELEASE_RADIUS * RELEASE_RADIUS
-            && self.remaining_time.is_zero()
+        FlickDirection::is_released(stick.x, stick.y) && self.remaining_time.is_zero()
     }
 
     pub fn advance(&mut self, stick: Stick, ticks: u32) -> i32 {
+        self.advance_with_rotation(stick, ticks, |_| {})
+    }
+
+    pub fn advance_with_rotation(
+        &mut self,
+        stick: Stick,
+        ticks: u32,
+        mut rotation: impl FnMut(Option<f64>),
+    ) -> i32 {
         let delta = match self.timebase.observe(ticks) {
             TimestampUpdate::FirstSample => Duration::ZERO,
             TimestampUpdate::Advanced { delta, .. } => delta,
             TimestampUpdate::Gap { .. } => {
-                self.armed = false;
-                self.angle = None;
+                rotation(None);
+                self.direction = FlickDirection::default();
                 self.remaining_degrees = 0.0;
                 self.remaining_time = Duration::ZERO;
                 self.remainder = 0.0;
@@ -69,20 +99,18 @@ impl FlickStick {
             self.remaining_time -= elapsed;
         }
 
-        let radius_squared = stick.x * stick.x + stick.y * stick.y;
-        if radius_squared <= RELEASE_RADIUS * RELEASE_RADIUS {
-            self.armed = true;
-            self.angle = None;
-        } else if self.armed
-            && (self.angle.is_some() || radius_squared >= ENGAGE_RADIUS * ENGAGE_RADIUS)
-        {
-            let current = f64::from(stick.x).atan2(-f64::from(stick.y));
-            if let Some(previous) = self.angle.replace(current) {
-                let turn = (current - previous + PI).rem_euclid(TAU) - PI;
-                degrees += turn.to_degrees();
-            } else {
-                self.remaining_degrees += current.to_degrees();
+        match self.direction.update(stick.x, stick.y) {
+            FlickUpdate::Idle => rotation(None),
+            FlickUpdate::Started(angle) => {
+                rotation(None);
+                self.remaining_degrees +=
+                    snap_flick_angle(angle, self.axial_threshold).to_degrees();
                 self.remaining_time = FLICK_DURATION;
+            }
+            FlickUpdate::Steered(turn) => {
+                let degrees_rotated = turn.to_degrees();
+                rotation(Some(degrees_rotated));
+                degrees += degrees_rotated * self.steering_sensitivity;
             }
         }
 
@@ -109,8 +137,36 @@ mod tests {
     }
 
     #[test]
+    fn threshold_only_changes_initial_flick_and_steering_uses_relative_motion() {
+        let mut flick = FlickStick::new(10.0)
+            .with_axial_threshold(10.0)
+            .with_steering_sensitivity(0.5);
+        let at = |degrees: f32| {
+            let (x, forward) = degrees.to_radians().sin_cos();
+            Stick { x, y: -forward }
+        };
+        let center = Stick::default();
+        assert_eq!(flick.advance(center, 0), 0);
+        assert_eq!(flick.advance(at(4.0), 30_000), 0);
+        assert_eq!(flick.advance(at(4.0), 60_000), 0); // unchanged input does not undo the snap
+        let partial = at(6.0);
+        let partial = Stick {
+            x: partial.x * 0.6,
+            y: partial.y * 0.6,
+        };
+        assert!((9..=10).contains(&flick.advance(partial, 90_000)));
+        assert!((-30..=-29).contains(&flick.advance(at(0.0), 120_000)));
+        assert_eq!(flick.advance(center, 150_000), 0);
+        assert_eq!(flick.advance(at(90.0), 180_000), 0);
+        let flick_counts = flick.advance(at(90.0), 330_000) + flick.advance(at(90.0), 480_000);
+        assert!((899..=900).contains(&flick_counts)); // full initial sensitivity
+    }
+
+    #[test]
     fn steering_uses_shortest_arc_across_rear_and_gap_clears_pending_motion() {
-        let mut flick = FlickStick::new(1.0);
+        let mut flick = FlickStick::new(1.0)
+            .with_axial_threshold(0.0)
+            .with_steering_sensitivity(1.0);
         let rear_right = Stick { x: 0.1, y: 1.0 };
         let rear_left = Stick { x: -0.1, y: 1.0 };
         assert_eq!(flick.advance(rear_right, 0), 0); // wait for center on startup

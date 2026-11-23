@@ -1,8 +1,8 @@
 use std::{
     env, fs,
     io::{self, Read},
-    os::unix::net::UnixStream,
-    path::{Path, PathBuf},
+    os::unix::{ffi::OsStringExt, net::UnixStream},
+    path::PathBuf,
     process::{Child, Command},
     sync::mpsc,
     time::{Duration, Instant},
@@ -66,11 +66,16 @@ impl Controller {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Status {
     controller: String,
+    connection_icon: &'static str,
     rate: String,
-    battery: String,
+    battery: Option<String>,
     active_node: Option<String>,
     profile: String,
+    active_profile: Option<PathBuf>,
     outputs_paused: bool,
+    emulation_master: Option<bool>,
+    gamepad_selected: Option<bool>,
+    gyro_mouse_selected: Option<bool>,
 }
 
 impl Status {
@@ -95,33 +100,40 @@ impl Status {
             Some("dualsense_edge") => "DualSense Edge",
             _ => "Controller",
         };
-        let transport = match field("transport") {
-            Some("usb") => "USB",
-            Some("bluetooth") => "Bluetooth",
-            _ => "Unknown connection",
+        let transport = field("transport").filter(|_| connected);
+        let connection_icon = match transport {
+            Some("usb") => "drive-harddisk-usb-symbolic",
+            Some("bluetooth") => "bluetooth-symbolic",
+            _ => "",
         };
         let controller = if connected {
-            format!("{model} · {transport}")
+            model
         } else {
-            "Waiting for a controller".into()
-        };
+            "No active controller"
+        }
+        .into();
         let rate = field("report_rate_hz")
             .filter(|_| connected)
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|value| value.is_finite() && *value >= 0.0)
             .map_or_else(|| "—".into(), |rate| format!("{rate:.1} Hz"));
-        let battery = match field("battery_state").filter(|_| connected) {
-            Some("discharging") => field("battery_percent")
-                .and_then(|value| value.parse::<u8>().ok())
-                .filter(|&value| value <= 100)
-                .map_or_else(
-                    || "Discharging".into(),
-                    |value| format!("Discharging · {value}%"),
-                ),
-            Some("charging") => "Charging".into(),
-            Some("full") => "Full".into(),
-            Some("not_charging") => "Not charging".into(),
-            _ => "—".into(),
+        let battery = match field("battery_state").filter(|_| transport == Some("bluetooth")) {
+            Some("discharging") => Some(
+                field("battery_percent")
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .filter(|&value| value <= 100)
+                    .map_or_else(
+                        || "🔋".into(),
+                        |value| {
+                            let icon = if value <= 10 { "🪫" } else { "🔋" };
+                            format!("{icon} {value}%")
+                        },
+                    ),
+            ),
+            Some("charging") => Some("🔋⚡".into()),
+            Some("full") => Some("🔋".into()),
+            Some("not_charging") => Some("🔋⏸".into()),
+            _ => None,
         };
         let fallback_profile = match field("profile_source") {
             Some("loaded") => "Loaded profile",
@@ -132,17 +144,38 @@ impl Status {
         let profile = raw_field("profile_name")
             .filter(|name| !name.is_empty())
             .unwrap_or(fallback_profile);
+        let enabled = |key| field(key).and_then(|value| value.parse::<bool>().ok());
         Some(Self {
             controller,
+            connection_icon,
             rate,
             battery,
             active_node: field("active_hidraw")
                 .filter(|_| connected)
                 .map(str::to_owned),
             profile: profile.into(),
+            active_profile: field("profile_path_hex").and_then(decode_profile_path),
             outputs_paused: field("outputs_paused") == Some("true"),
+            emulation_master: enabled("emulation_master_enabled"),
+            gamepad_selected: enabled("virtual_gamepad_selected")
+                .or_else(|| enabled("virtual_gamepad_enabled")),
+            gyro_mouse_selected: enabled("gyro_mouse_selected")
+                .or_else(|| enabled("gyro_mouse_enabled")),
         })
     }
+}
+
+fn decode_profile_path(hex: &str) -> Option<PathBuf> {
+    let (chunks, remainder) = hex.as_bytes().as_chunks::<2>();
+    if !remainder.is_empty() {
+        return None;
+    }
+    let bytes: Vec<u8> = chunks
+        .iter()
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect::<Option<_>>()?;
+    let path = PathBuf::from(std::ffi::OsString::from_vec(bytes));
+    path.is_absolute().then_some(path)
 }
 
 #[derive(Clone, Debug)]
@@ -150,10 +183,12 @@ enum Action {
     Select(Controller),
     AutoSelect,
     Load(PathBuf),
-    Edit(Option<PathBuf>),
-    Calibrate(PathBuf),
+    Edit,
+    CalibrateGame,
+    CalibrateGyro,
     Unload,
     ResumeOutputs,
+    SetEmulation(&'static str, bool),
     Start,
     Autostart(bool),
     Quit,
@@ -212,10 +247,16 @@ impl ksni::Tray for Tray {
         let state = &self.state;
         let mut menu = if let Some(status) = &state.status {
             vec![
-                label(&status.controller),
-                label(format!("Report rate: {}", status.rate)),
-                label(format!("Battery: {}", status.battery)),
-                label(format!("Profile: {}", status.profile)),
+                StandardItem {
+                    label: status.battery.as_ref().map_or_else(
+                        || status.rate.clone(),
+                        |battery| format!("{} · {battery}", status.rate),
+                    ),
+                    icon_name: status.connection_icon.into(),
+                    enabled: false,
+                    ..Default::default()
+                }
+                .into(),
             ]
         } else {
             vec![
@@ -227,7 +268,7 @@ impl ksni::Tray for Tray {
             menu.push(label(error));
         }
         if state.calibrating {
-            menu.push(label("Calibrating game sensitivity"));
+            menu.push(label("Calibration in progress"));
             return menu;
         }
         if state
@@ -260,11 +301,42 @@ impl ksni::Tray for Tray {
                 Action::Select(controller.clone()),
             ));
         }
+        menu.push(label("Active controller"));
         menu.push(
             SubMenu {
-                label: "Active controller".into(),
+                label: state
+                    .status
+                    .as_ref()
+                    .map_or("No active controller", |status| &status.controller)
+                    .into(),
                 enabled: state.status.is_some(),
                 submenu: controllers,
+                ..Default::default()
+            }
+            .into(),
+        );
+        let status = state.status.as_ref();
+        let active_profile = status.and_then(|status| status.active_profile.as_ref());
+        let mut profiles = vec![item("Default mappings", Action::Unload)];
+        for path in &state.profiles {
+            if let Some(name) = path.file_stem() {
+                let name = name.to_string_lossy();
+                let prefix = if Some(path) == active_profile {
+                    "✓ "
+                } else {
+                    ""
+                };
+                profiles.push(item(format!("{prefix}{name}"), Action::Load(path.clone())));
+            }
+        }
+        menu.push(label("Active profile"));
+        menu.push(
+            SubMenu {
+                label: status
+                    .map_or("No active profile", |status| &status.profile)
+                    .replace('_', "__"),
+                enabled: state.status.is_some(),
+                submenu: profiles,
                 ..Default::default()
             }
             .into(),
@@ -273,64 +345,66 @@ impl ksni::Tray for Tray {
             .status
             .as_ref()
             .is_some_and(|status| status.active_node.is_some())
-            && !state.profiles.is_empty()
         {
+            menu.push(item("Calibrate Controller Gyro", Action::CalibrateGyro));
+            menu.push(item(
+                "Calibrate game sensitivity (RWC)",
+                Action::CalibrateGame,
+            ));
+        }
+
+        let master = status.and_then(|status| status.emulation_master);
+        let gamepad = status.and_then(|status| status.gamepad_selected);
+        let gyro = status.and_then(|status| status.gyro_mouse_selected);
+        let can_adjust = status.is_some_and(|status| !status.outputs_paused);
+        menu.push(MenuItem::Separator);
+        for (text, flag, setting, enabled) in [
+            (
+                "Gamepad and gyro mouse",
+                "--set-emulation-master",
+                master,
+                can_adjust,
+            ),
+            (
+                " Gyro mouse",
+                "--set-gyro-mouse",
+                gyro,
+                can_adjust && master.unwrap_or(true),
+            ),
+            (
+                " Gamepad emulation",
+                "--set-gamepad",
+                gamepad,
+                can_adjust && master.unwrap_or(true),
+            ),
+        ] {
+            let checked = setting.unwrap_or(false);
             menu.push(
-                SubMenu {
-                    label: "Calibrate game sensitivity (RWC)".into(),
-                    submenu: state
-                        .profiles
-                        .iter()
-                        .filter_map(|path| {
-                            Some(item(
-                                path.file_stem()?.to_string_lossy(),
-                                Action::Calibrate(path.clone()),
-                            ))
-                        })
-                        .collect(),
+                CheckmarkItem {
+                    label: text.into(),
+                    checked,
+                    enabled: setting.is_some() && enabled,
+                    activate: Box::new(move |tray: &mut Tray| {
+                        if enabled && setting.is_some() {
+                            let _ = tray.actions.send(Action::SetEmulation(flag, !checked));
+                        }
+                    }),
                     ..Default::default()
                 }
                 .into(),
             );
         }
+        menu.push(MenuItem::Separator);
 
-        let mut profiles = vec![item("Default mappings", Action::Unload)];
-        for path in &state.profiles {
-            if let Some(name) = path.file_stem() {
-                profiles.push(item(name.to_string_lossy(), Action::Load(path.clone())));
-            }
+        if state.editor_open {
+            menu.push(label("Profile editor"));
+        } else {
+            menu.push(item("Profile editor", Action::Edit));
         }
-        menu.push(
-            SubMenu {
-                label: "Profiles".into(),
-                enabled: state.status.is_some(),
-                submenu: profiles,
-                ..Default::default()
-            }
-            .into(),
-        );
-        let mut editors = vec![item("New profile", Action::Edit(None))];
-        for path in &state.profiles {
-            if let Some(name) = path.file_stem() {
-                editors.push(item(
-                    name.to_string_lossy(),
-                    Action::Edit(Some(path.clone())),
-                ));
-            }
-        }
-        menu.push(
-            SubMenu {
-                label: "Profile editor".into(),
-                enabled: !state.editor_open,
-                submenu: editors,
-                ..Default::default()
-            }
-            .into(),
-        );
         menu.push(MenuItem::Separator);
         menu.push(
             CheckmarkItem {
-                label: "Start when I log in".into(),
+                label: "Start with system".into(),
                 checked: state.autostart,
                 activate: Box::new(|tray: &mut Tray| {
                     let _ = tray.actions.send(Action::Autostart(!tray.state.autostart));
@@ -393,7 +467,7 @@ impl Desktop {
             .map(|_| ())
     }
 
-    fn calibrate(&self, profile: &Path, status: &Status) -> io::Result<Child> {
+    fn calibrate(&self, game: bool, status: &Status) -> io::Result<Child> {
         let node = status
             .active_node
             .as_deref()
@@ -403,13 +477,16 @@ impl Desktop {
                 })
             })
             .ok_or_else(|| io::Error::other("connect a controller to calibrate"))?;
-        output(
-            Command::new(&self.bridge)
-                .arg("--check-profile")
-                .arg(profile),
-        )?;
         let mut dialog = Command::new(self.bridge.with_file_name("joyshockrust-editor"));
-        dialog.args(["--calibrate-game"]).arg(profile).arg(node);
+        if game {
+            dialog.args(["--calibrate-game-select", node]);
+            if let Some(profile) = &status.active_profile {
+                dialog.arg("--active-profile").arg(profile);
+            }
+            dialog.args(self.profile_paths());
+        } else {
+            dialog.args(["--calibrate-controller-gyro", node]);
+        }
         self.set_outputs_paused(true)?;
         match dialog.spawn() {
             Ok(child) => Ok(child),
@@ -452,12 +529,18 @@ impl Desktop {
             Action::Load(path) => {
                 output(Command::new(&self.bridge).arg("--load-profile").arg(path))?;
             }
-            Action::Edit(_) => unreachable!("the editor is handled by the tray loop"),
+            Action::Edit => unreachable!("the editor is handled by the tray loop"),
             Action::Unload => {
                 self.command(&["--unload-profile"])?;
             }
-            Action::Calibrate(_) => unreachable!("calibration is handled by the tray loop"),
+            Action::CalibrateGame | Action::CalibrateGyro => {
+                unreachable!("calibration is handled by the tray loop")
+            }
             Action::ResumeOutputs => self.set_outputs_paused(false)?,
+            Action::SetEmulation(flag, enabled) => {
+                self.command(&[flag, if *enabled { "on" } else { "off" }])?;
+            }
+
             Action::Start => {
                 bridge_service("start")?;
             }
@@ -599,7 +682,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         match receiver.recv_timeout(REFRESH) {
             Ok(_) if calibration.is_some() => {}
-            Ok(Action::Edit(path)) if editor.is_none() => {
+            Ok(Action::Edit) if editor.is_none() => {
+                let path = state
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.active_profile.as_ref())
+                    .filter(|path| path.is_file());
                 match Command::new(desktop.bridge.with_file_name("joyshockrust-editor"))
                     .args(path)
                     .spawn()
@@ -613,13 +701,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            Ok(Action::Edit(_) | Action::Quit) if editor.is_some() => {}
-            Ok(Action::Calibrate(path)) => {
+            Ok(Action::Edit | Action::Quit) if editor.is_some() => {}
+            Ok(action @ (Action::CalibrateGame | Action::CalibrateGyro)) => {
                 let result = state
                     .status
                     .as_ref()
                     .ok_or_else(|| io::Error::other("bridge unavailable"))
-                    .and_then(|status| desktop.calibrate(&path, status));
+                    .and_then(|status| {
+                        desktop.calibrate(matches!(action, Action::CalibrateGame), status)
+                    });
                 match result {
                     Ok(child) => {
                         calibration = Some(child);
@@ -657,9 +747,10 @@ mod tests {
     fn status_formats_discharge_level_and_clears_disconnected_telemetry() {
         let connected = "version=1\ncontroller=connected\nmodel=dualsense_edge\ntransport=bluetooth\nreport_rate_hz=249.4\nbattery_state=discharging\nbattery_percent=95\nprofile_source=loaded\nactive_hidraw=/dev/hidraw6";
         let status = Status::parse(connected).unwrap();
-        assert_eq!(status.controller, "DualSense Edge · Bluetooth");
+        assert_eq!(status.controller, "DualSense Edge");
+        assert_eq!(status.connection_icon, "bluetooth-symbolic");
         assert_eq!(status.rate, "249.4 Hz");
-        assert_eq!(status.battery, "Discharging · 95%");
+        assert_eq!(status.battery.as_deref(), Some("🔋 95%"));
         assert_eq!(status.active_node.as_deref(), Some("/dev/hidraw6"));
         assert_eq!(status.profile, "Loaded profile");
         assert_eq!(
@@ -671,15 +762,128 @@ mod tests {
         assert_eq!(
             Status::parse(&connected.replace("discharging", "charging"))
                 .unwrap()
-                .battery,
-            "Charging"
+                .battery
+                .as_deref(),
+            Some("🔋⚡")
+        );
+        assert_eq!(
+            Status::parse(&format!(
+                "{connected}\nprofile_path_hex=2f746d702f612e746f6d6c"
+            ))
+            .unwrap()
+            .active_profile,
+            Some(PathBuf::from("/tmp/a.toml"))
         );
         let waiting = Status::parse(&connected.replace("connected", "waiting")).unwrap();
-        assert_eq!(waiting.controller, "Waiting for a controller");
+        assert_eq!(waiting.controller, "No active controller");
+        assert_eq!(waiting.connection_icon, "");
         assert_eq!(waiting.active_node, None);
         assert_eq!(waiting.rate, "—");
-        assert_eq!(waiting.battery, "—");
+        assert_eq!(waiting.battery, None);
         assert!(Status::parse(&connected.replace("version=1", "version=2")).is_none());
+    }
+
+    #[test]
+    fn emulation_master_precedes_and_disables_its_children() {
+        let (actions, receiver) = mpsc::channel();
+        let mut tray = Tray {
+            actions,
+            state: TrayState {
+                status: Status::parse(
+                    "version=1\ncontroller=waiting\nemulation_master_enabled=true\nvirtual_gamepad_selected=true\ngyro_mouse_selected=false",
+                ),
+                ..TrayState::default()
+            },
+        };
+        let controls = |tray: &Tray| {
+            tray.menu()
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuItem::Checkmark(item) if item.label != "Start with system" => Some(item),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let enabled = controls(&tray);
+        assert_eq!(enabled.len(), 3);
+        for (item, (text, flag, checked)) in enabled.into_iter().zip([
+            ("Gamepad and gyro mouse", "--set-emulation-master", true),
+            ("Gyro mouse", "--set-gyro-mouse", false),
+            ("Gamepad emulation", "--set-gamepad", true),
+        ]) {
+            assert_eq!(item.label.trim(), text);
+            assert_eq!(item.checked, checked);
+            assert!(item.enabled);
+            (item.activate)(&mut tray);
+            assert!(
+                matches!(receiver.try_recv().unwrap(), Action::SetEmulation(command, enabled)
+                if command == flag && enabled != checked)
+            );
+        }
+
+        tray.state.status = Status::parse(
+            "version=1\ncontroller=waiting\nemulation_master_enabled=false\nvirtual_gamepad_enabled=false\ngyro_mouse_enabled=false\nvirtual_gamepad_selected=true\ngyro_mouse_selected=false",
+        );
+        let disabled = controls(&tray);
+        assert!(!disabled[0].checked && disabled[0].enabled);
+        assert!(!disabled[1].enabled && !disabled[2].enabled);
+        assert!(!disabled[1].checked && disabled[2].checked);
+        (disabled[1].activate)(&mut tray);
+        (disabled[2].activate)(&mut tray);
+        assert!(receiver.try_recv().is_err());
+        (disabled[0].activate)(&mut tray);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Action::SetEmulation("--set-emulation-master", true)
+        ));
+
+        tray.state.status.as_mut().unwrap().outputs_paused = true;
+        assert!(controls(&tray).iter().all(|item| !item.enabled));
+    }
+
+    #[test]
+    fn gyro_calibration_is_available_with_a_controller_and_without_profiles() {
+        let (actions, receiver) = mpsc::channel();
+        let mut tray = Tray {
+            actions,
+            state: TrayState {
+                status: Status::parse(
+                    "version=1\ncontroller=connected\nactive_hidraw=/dev/hidraw6",
+                ),
+                ..TrayState::default()
+            },
+        };
+        let button = tray
+            .menu()
+            .into_iter()
+            .find_map(|entry| match entry {
+                MenuItem::Standard(item) if item.label == "Calibrate Controller Gyro" => Some(item),
+                _ => None,
+            })
+            .unwrap();
+        (button.activate)(&mut tray);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Action::CalibrateGyro
+        ));
+        let button = tray
+            .menu()
+            .into_iter()
+            .find_map(|entry| match entry {
+                MenuItem::Standard(item) if item.label == "Calibrate game sensitivity (RWC)" => {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .unwrap();
+        (button.activate)(&mut tray);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Action::CalibrateGame
+        ));
+        tray.state.status = Status::parse("version=1\ncontroller=waiting");
+        assert!(!tray.menu().into_iter().any(|entry| matches!(entry,
+            MenuItem::Standard(item) if item.label == "Calibrate Controller Gyro")));
     }
 
     #[test]
@@ -700,7 +904,7 @@ mod tests {
             actions,
             state: TrayState {
                 status: Status::parse(
-                    "version=1\ncontroller=connected\nactive_hidraw=/dev/hidraw6",
+                    "version=1\ncontroller=connected\nmodel=dualsense_edge\ntransport=usb\nreport_rate_hz=1000\nbattery_state=full\nprofile_name=gyro profile.toml\nprofile_path_hex=2f746d702f6779726f2070726f66696c652e746f6d6c\nactive_hidraw=/dev/hidraw6",
                 ),
                 inventory: vec![controller.clone()],
                 profiles: vec![profile.clone()],
@@ -708,24 +912,41 @@ mod tests {
             },
         };
         let menu = tray.menu();
-        for entry in menu {
-            if let MenuItem::SubMenu(menu) = entry
-                && let Some(MenuItem::Standard(option)) = menu.submenu.last()
-            {
-                (option.activate)(&mut tray);
-            }
+        assert!(matches!(&menu[0], MenuItem::Standard(row)
+            if row.label == "1000.0 Hz" && row.icon_name == "drive-harddisk-usb-symbolic"));
+        for (heading, name) in [
+            ("Active controller", "DualSense Edge"),
+            ("Active profile", "gyro profile.toml"),
+        ] {
+            let option = menu.windows(2).find_map(|entries| match entries {
+                [MenuItem::Standard(label), MenuItem::SubMenu(menu)]
+                    if label.label == heading && !label.enabled && menu.label == name =>
+                {
+                    menu.submenu.last()
+                }
+                _ => None,
+            });
+            let Some(MenuItem::Standard(option)) = option else {
+                panic!("missing submenu option for {name}");
+            };
+            assert!(option.label.starts_with("✓ "));
+            (option.activate)(&mut tray);
         }
         assert!(
             matches!(receiver.try_recv().unwrap(), Action::Select(selected) if selected == controller)
         );
-        assert!(
-            matches!(receiver.try_recv().unwrap(), Action::Calibrate(selected) if selected == profile)
-        );
+
         assert!(
             matches!(receiver.try_recv().unwrap(), Action::Load(selected) if selected == profile)
         );
-        assert!(
-            matches!(receiver.try_recv().unwrap(), Action::Edit(Some(selected)) if selected == profile)
-        );
+        let button = menu
+            .iter()
+            .find_map(|entry| match entry {
+                MenuItem::Standard(item) if item.label == "Profile editor" => Some(item),
+                _ => None,
+            })
+            .unwrap();
+        (button.activate)(&mut tray);
+        assert!(matches!(receiver.try_recv().unwrap(), Action::Edit));
     }
 }

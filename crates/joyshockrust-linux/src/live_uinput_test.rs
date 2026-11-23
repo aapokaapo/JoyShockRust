@@ -93,7 +93,7 @@ fn uinput_live_gamepad_toggle() {
     let reload_path = directory.0.join("reload");
     let status = StatusSocket::bind(&status_path).unwrap();
     let mut bridge = BridgeOptions::default();
-    let reload = reload::Reload::new(None, Some(&reload_path), bridge, true).unwrap();
+    let reload = reload::Reload::new(None, Some(&reload_path), bridge, true, None).unwrap();
     let outputs_paused = Cell::new(false);
     let (mut sender, receiver) = UnixStream::pair().unwrap();
     receiver.set_nonblocking(true).unwrap();
@@ -120,7 +120,7 @@ fn uinput_live_gamepad_toggle() {
                     .then_some(())
             });
 
-            reload::set_gamepad(false, Some(reload_path)).unwrap();
+            reload::set_emulation(reload::OutputTarget::Gamepad, false, Some(reload_path)).unwrap();
             let disabled = query(status_path);
             assert!(
                 disabled
@@ -143,7 +143,7 @@ fn uinput_live_gamepad_toggle() {
             });
             assert!(state.lines().any(|line| line == "uinput_gamepad_batches=1"));
 
-            reload::set_gamepad(true, Some(reload_path)).unwrap();
+            reload::set_emulation(reload::OutputTarget::Gamepad, true, Some(reload_path)).unwrap();
             let enabled = query(status_path);
             let second = gamepad_path(&enabled);
             assert_ne!(first, second);
@@ -191,6 +191,7 @@ fn uinput_live_gamepad_toggle() {
                 path: Path::new("/dev/hidraw-test"),
                 grab_touchpad: false,
                 outputs_paused: Some(&outputs_paused),
+                emulation: &mut crate::Emulation::default(),
             },
             &mut bridge,
             None,

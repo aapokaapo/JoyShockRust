@@ -1,5 +1,6 @@
 [Unit]
 Description=JoyShockRust USB controller bridge
+PartOf=graphical-session.target
 
 [Service]
 Type=notify

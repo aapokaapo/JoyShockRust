@@ -1,5 +1,8 @@
 use std::{
     cell::{Cell, RefCell},
+    ffi::OsString,
+    os::unix::ffi::{OsStrExt, OsStringExt},
+    path::PathBuf,
     rc::Rc,
 };
 
@@ -100,17 +103,77 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     header.set_title_widget(Some(&switcher));
     toolbar.add_top_bar(&header);
 
+    let profile_controls = gtk::Box::builder()
+        .spacing(12)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(6)
+        .margin_bottom(6)
+        .build();
+    let profiles = gio::Menu::new();
+    let chooser = gtk::MenuButton::builder()
+        .tooltip_text("Choose a profile to edit")
+        .menu_model(&profiles)
+        .build();
     let profile_name = gtk::Entry::builder()
         .placeholder_text("Profile name")
         .width_chars(12)
-        .tooltip_text("Name of the profile")
+        .hexpand(true)
         .build();
     profile_name.update_property(&[gtk::accessible::Property::Label("Profile name")]);
-    set_profile_name(&profile_name, &ctx);
+    profile_controls.append(&chooser);
+    profile_controls.append(&profile_name);
+    toolbar.add_top_bar(&profile_controls);
+
+    sync_profiles(&ctx, &profiles, &chooser, &profile_name);
     let name_ctx = ctx.clone();
     profile_name
         .connect_changed(move |entry| name_ctx.editor.borrow_mut().name = entry.text().into());
-    header.pack_start(&profile_name);
+
+    let open = gio::SimpleAction::new("open-profile", Some(glib::VariantTy::BYTE_STRING));
+    let open_ctx = ctx.clone();
+    let open_profiles = profiles.clone();
+    let open_chooser = chooser.clone();
+    let open_name = profile_name.clone();
+    let open_stack = stack.downgrade();
+    open.connect_activate(move |_, value| {
+        let Some(bytes) = value.and_then(|value| value.get::<Vec<u8>>()) else {
+            return;
+        };
+        let path = (!bytes.is_empty()).then(|| PathBuf::from(OsString::from_vec(bytes)));
+        let editor = open_ctx.editor.borrow();
+        if path.is_some() && editor.path == path {
+            return;
+        }
+        let unsaved = editor.has_unsaved_changes();
+        drop(editor);
+        let switch = {
+            let ctx = open_ctx.clone();
+            let profiles = open_profiles.clone();
+            let chooser = open_chooser.clone();
+            let name = open_name.clone();
+            let stack = open_stack.clone();
+            move || {
+                let result = ctx.editor.borrow_mut().switch_profile(path.clone());
+                if let Err(error) = result {
+                    ctx.report(Err(format!("Could not open the profile: {error}")));
+                    return;
+                }
+                sync_profiles(&ctx, &profiles, &chooser, &name);
+                if let Some(stack) = stack.upgrade() {
+                    refresh_page(&stack, &ctx);
+                }
+            }
+        };
+        if unsaved {
+            if let Some(window) = open_ctx.window.upgrade() {
+                confirm_discard(&window).connect_response(Some("discard"), move |_, _| switch());
+            }
+        } else {
+            switch();
+        }
+    });
+    window.add_action(&open);
 
     for (action_name, apply, shortcut) in [
         ("save", false, "<Primary>s"),
@@ -118,12 +181,12 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     ] {
         let action = gio::SimpleAction::new(action_name, None);
         let save_ctx = ctx.clone();
-        let entry = profile_name.downgrade();
+        let profiles = profiles.clone();
+        let chooser = chooser.clone();
+        let entry = profile_name.clone();
         action.connect_activate(move |_, _| {
             let result = save_ctx.editor.borrow_mut().save_and_apply(apply);
-            if let Some(entry) = entry.upgrade() {
-                set_profile_name(&entry, &save_ctx);
-            }
+            sync_profiles(&save_ctx, &profiles, &chooser, &entry);
             save_ctx.report(result);
         });
         window.add_action(&action);
@@ -165,45 +228,68 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let close_ctx = ctx.clone();
     let confirmed = Rc::new(Cell::new(false));
     window.connect_close_request(move |window| {
-        let editor = close_ctx.editor.borrow();
-        if confirmed.get() || (editor.text == editor.original && editor.calibration.error.is_none())
-        {
+        if confirmed.get() || !close_ctx.editor.borrow().has_unsaved_changes() {
             return glib::Propagation::Proceed;
         }
-        let dialog = adw::AlertDialog::new(
-            Some("Discard unsaved changes?"),
-            Some("Your edits to this profile will be lost."),
-        );
-        dialog.add_responses(&[("cancel", "Keep Editing"), ("discard", "Discard")]);
-        dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
-        dialog.set_default_response(Some("cancel"));
-        dialog.set_close_response("cancel");
         let window_ref = window.downgrade();
         let confirmed = confirmed.clone();
-        dialog.connect_response(Some("discard"), move |_, _| {
+        confirm_discard(window).connect_response(Some("discard"), move |_, _| {
             confirmed.set(true);
             if let Some(window) = window_ref.upgrade() {
                 window.close();
             }
         });
-        dialog.present(Some(window));
         glib::Propagation::Stop
     });
     window.present();
 }
 
-fn set_profile_name(entry: &gtk::Entry, ctx: &Context) {
-    let name = ctx
-        .editor
-        .borrow()
-        .path
-        .as_ref()
-        .and_then(|path| path.file_stem())
-        .map(|name| name.to_string_lossy().into_owned());
-    if let Some(name) = name {
-        entry.set_text(&name);
-        entry.set_editable(false);
+fn confirm_discard(window: &adw::ApplicationWindow) -> adw::AlertDialog {
+    let dialog = adw::AlertDialog::new(
+        Some("Discard unsaved changes?"),
+        Some("Your edits to this profile will be lost."),
+    );
+    dialog.add_responses(&[("cancel", "Keep Editing"), ("discard", "Discard")]);
+    dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    dialog.present(Some(window));
+    dialog
+}
+
+fn sync_profiles(ctx: &Context, menu: &gio::Menu, chooser: &gtk::MenuButton, entry: &gtk::Entry) {
+    let editor = ctx.editor.borrow();
+    let profile_name = editor.path.as_ref().and_then(|path| path.file_name());
+    let text = profile_name.map_or("New profile".into(), |name| name.to_string_lossy());
+    chooser.set_label(&text);
+    let is_new = editor.path.is_none();
+    let draft_name = editor.name.clone();
+    let paths = editor.profile_paths();
+    drop(editor);
+
+    entry.set_visible(is_new);
+    entry.set_text(if is_new { &draft_name } else { "" });
+    menu.remove_all();
+    for path in paths {
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
+        let item = gio::MenuItem::new(Some(&name.replace('_', "__")), None);
+        item.set_action_and_target_value(
+            Some("win.open-profile"),
+            Some(&path.as_os_str().as_bytes().to_variant()),
+        );
+        menu.append_item(&item);
     }
+    let create = gio::MenuItem::new(Some("New profile"), None);
+    create.set_action_and_target_value(
+        Some("win.open-profile"),
+        Some(&Vec::<u8>::new().to_variant()),
+    );
+    let section = gio::Menu::new();
+    section.append_item(&create);
+    menu.append_section(None, &section);
 }
 
 fn refresh_page(stack: &adw::ViewStack, ctx: &Context) {
@@ -238,6 +324,7 @@ fn advanced_page(ctx: &Context) -> gtk::ScrolledWindow {
             .text(&buffer.start_iter(), &buffer.end_iter(), true)
             .into();
         editor.calibration.reset();
+        editor.invalid_gyro_sensitivity = [None, None];
     });
     let text = gtk::TextView::builder()
         .buffer(&buffer)
@@ -274,6 +361,81 @@ pub(crate) mod tests {
             }
         }
         matches
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn profile_picker_switches_files_protects_drafts_and_lists_new_profiles() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let directory = config.path().join("profiles");
+        std::fs::create_dir(&directory).unwrap();
+        let startup = config.path().join("profile.toml");
+        let game = directory.join("game_one.toml");
+        std::fs::write(&startup, crate::NEW_PROFILE).unwrap();
+        std::fs::write(&game, "version = 1\n# Game profile\n").unwrap();
+        let editor = Rc::new(RefCell::new(
+            Editor::open("/bin/true".into(), directory.clone(), Some(startup.clone())).unwrap(),
+        ));
+        let app = adw::Application::builder()
+            .flags(gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        open_window(&app, editor.clone());
+        let window = app
+            .active_window()
+            .unwrap()
+            .downcast::<adw::ApplicationWindow>()
+            .unwrap();
+        let chooser = descendants::<gtk::MenuButton>(window.upcast_ref())
+            .into_iter()
+            .find(|button| button.tooltip_text().as_deref() == Some("Choose a profile to edit"))
+            .unwrap();
+        let menu = chooser.menu_model().unwrap();
+        let target = |index| menu.item_attribute_value(index, "target", None).unwrap();
+        assert_eq!(
+            target(0).get::<Vec<u8>>().unwrap(),
+            startup.as_os_str().as_bytes()
+        );
+        let open = window.lookup_action("open-profile").unwrap();
+        let game_target = target(1);
+        open.activate(Some(&game_target));
+        assert_eq!(editor.borrow().path.as_deref(), Some(game.as_path()));
+        assert!(editor.borrow().text.contains("# Game profile"));
+
+        let new_profile = menu.item_link(2, "section").unwrap();
+        let new_target = new_profile.item_attribute_value(0, "target", None).unwrap();
+        editor.borrow_mut().text.push_str("# Unsaved change\n");
+        let choose_draft_action = |label| {
+            open.activate(Some(&new_target));
+            let dialog = window.visible_dialog().unwrap();
+            let button = descendants::<gtk::Button>(dialog.upcast_ref())
+                .into_iter()
+                .find(|button| button.label().as_deref() == Some(label))
+                .unwrap();
+            button.emit_clicked();
+        };
+        choose_draft_action("Keep Editing");
+        assert!(editor.borrow().text.contains("# Unsaved change"));
+        choose_draft_action("Discard");
+        assert_eq!(editor.borrow().path, None);
+        assert_eq!(editor.borrow().text, crate::NEW_PROFILE);
+
+        let name = descendants::<gtk::Entry>(window.upcast_ref())
+            .into_iter()
+            .find(|entry| entry.placeholder_text().as_deref() == Some("Profile name"))
+            .unwrap();
+        name.set_text("New Game");
+        window.lookup_action("save").unwrap().activate(None);
+        let saved = directory.join("New Game.toml");
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), crate::NEW_PROFILE);
+        assert_eq!(
+            target(1).get::<Vec<u8>>().unwrap(),
+            saved.as_os_str().as_bytes()
+        );
+        assert!(!gtk::prelude::WidgetExt::is_visible(&name));
+        window.close();
     }
 
     #[test]
@@ -415,5 +577,374 @@ pub(crate) mod tests {
         assert_eq!(stick["inner"]["key"].as_str(), Some("KEY_LEFTSHIFT"));
         assert_eq!(stick["outer"]["mode"].as_str(), Some("keep_sprint"));
         window.close();
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn gyro_calibration_shortcut_can_be_set_and_removed() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        editor
+            .text
+            .push_str("[gyro.calibration_hold]\nbutton = 'l3'\nhold_ms = 2500\n");
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: glib::WeakRef::new(),
+            overlay: glib::WeakRef::new(),
+        };
+        let page = sensitivity::gyro_page(&ctx);
+        let row = descendants::<adw::ComboRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Hold button")
+            .unwrap();
+        let model = row.model().unwrap().downcast::<gtk::StringList>().unwrap();
+        let ps = (0..model.n_items())
+            .find(|&index| model.string(index).as_deref() == Some("PS button"))
+            .unwrap();
+        row.set_selected(ps);
+        let doc = ctx.document().unwrap();
+        assert_eq!(
+            doc["gyro"]["calibration_hold"]["button"].as_str(),
+            Some("ps")
+        );
+        assert_eq!(
+            doc["gyro"]["calibration_hold"]["hold_ms"].as_integer(),
+            Some(2500)
+        );
+        row.set_selected(0);
+        assert!(
+            ctx.document()
+                .unwrap()
+                .get("gyro")
+                .and_then(|gyro| gyro.get("calibration_hold"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn gyro_activation_edits_buttons_touch_chords_and_triggers() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        editor.text.push_str("[gyro]\nsensitivity_x = 4.0 # retain\nbinding = { mode = 'disable-while-held', input = 'l2' }\n");
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: glib::WeakRef::new(),
+            overlay: glib::WeakRef::new(),
+        };
+        let page = sensitivity::gyro_page(&ctx);
+        let pick = |title, label| {
+            let row = descendants::<adw::ComboRow>(&page)
+                .into_iter()
+                .find(|row| row.title() == title)
+                .unwrap();
+            let model = row.model().unwrap().downcast::<gtk::StringList>().unwrap();
+            let selected = (0..model.n_items())
+                .find(|&index| model.string(index).as_deref() == Some(label))
+                .unwrap();
+            row.set_selected(selected);
+        };
+        let assert_binding = |expected| {
+            let doc = ctx.document().unwrap();
+            assert_eq!(crate::gyro_activation::binding(&doc).unwrap(), expected);
+            assert!(doc.to_string().contains("sensitivity_x = 4.0 # retain"));
+        };
+
+        pick("Activation mode", "Disable while held");
+        assert_binding(Some(("disable-while-held", "l2")));
+        pick("Activation mode", "Toggle on double tap");
+        pick("Input", "Touch region 1:2");
+        assert_binding(Some(("double-tap", "touch:1:2")));
+        assert_eq!(
+            ctx.document().unwrap()["touchpad"]["columns"].as_integer(),
+            Some(2)
+        );
+        pick("Activation mode", "Enable while both inputs are held");
+        pick("Second input", "L2 · Left trigger");
+        assert_binding(Some(("chord", "touch:1:2,l2")));
+        pick("Activation mode", "Enable while analog trigger is pulled");
+        pick("Trigger", "R2 · Right trigger");
+        let threshold = descendants::<adw::SpinRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Press threshold")
+            .unwrap();
+        threshold.set_value(0.5);
+        assert_binding(Some(("trigger", "r2:0.5:0.35")));
+        threshold.set_value(0.3);
+        assert_eq!(threshold.value(), 0.5);
+        assert_binding(Some(("trigger", "r2:0.5:0.35")));
+        pick("Activation mode", "Always active");
+        assert_binding(None);
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn gyro_sliders_and_typed_values_use_independent_ranges() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        editor
+            .text
+            .push_str("[gyro]\nsensitivity_x = 42.125 # existing profile\nsensitivity_y = 4.0\n");
+        let initial_text = editor.text.clone();
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: glib::WeakRef::new(),
+            overlay: glib::WeakRef::new(),
+        };
+        let controls = |page: &gtk::Widget, axis: &str| {
+            let row = descendants::<adw::ActionRow>(page)
+                .into_iter()
+                .find(|row| row.title() == axis)
+                .unwrap();
+            let entry = descendants::<gtk::Entry>(row.upcast_ref()).pop().unwrap();
+            let scale = descendants::<gtk::Scale>(row.upcast_ref()).pop().unwrap();
+            (entry, scale)
+        };
+        let page = sensitivity::gyro_page(&ctx);
+        let (entry, scale) = controls(&page, "Horizontal");
+        assert_eq!(entry.text(), "42.125");
+        assert_eq!(scale.adjustment().upper(), 20.0);
+        assert_eq!(scale.value(), 20.0);
+        assert_eq!(ctx.editor.borrow().text, initial_text);
+
+        entry.set_text(" 26,875 ");
+        let doc = ctx.document().unwrap();
+        assert_eq!(doc["gyro"]["sensitivity_x"].as_float(), Some(26.875));
+        assert_eq!(doc["gyro"]["sensitivity_y"].as_float(), Some(4.0));
+        assert!(doc.to_string().contains("# existing profile"));
+        assert_eq!(scale.value(), 20.0);
+        entry.set_text("100");
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["sensitivity_x"].as_float(),
+            Some(100.0)
+        );
+
+        entry.set_text("100.1");
+        assert_eq!(
+            ctx.editor.borrow().validate().unwrap_err(),
+            sensitivity::GYRO_SENSITIVITY_ERROR
+        );
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["sensitivity_x"].as_float(),
+            Some(100.0)
+        );
+        let page = sensitivity::gyro_page(&ctx);
+        let (entry, scale) = controls(&page, "Horizontal");
+        assert_eq!(entry.text(), "100.1");
+        assert!(entry.has_css_class("error"));
+        scale.set_value(19.27);
+        assert_eq!(entry.text(), "19.3");
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["sensitivity_x"].as_float(),
+            Some(19.3)
+        );
+        assert!(ctx.editor.borrow().draft_error().is_none());
+
+        let (vertical_entry, vertical_scale) = controls(&page, "Vertical");
+        vertical_entry.set_text("8.125");
+        assert_eq!(vertical_scale.value(), 8.125);
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["sensitivity_y"].as_float(),
+            Some(8.125)
+        );
+
+        let window = gtk::Window::builder()
+            .default_width(560)
+            .default_height(640)
+            .child(&page)
+            .build();
+        window.present();
+        let main = glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while scale.width() <= 0 || vertical_scale.width() <= 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "sliders were not allocated"
+            );
+            while main.pending() {
+                main.iteration(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(scale.width(), vertical_scale.width());
+        assert_eq!(
+            scale.compute_bounds(&page).unwrap().x(),
+            vertical_scale.compute_bounds(&page).unwrap().x(),
+        );
+
+        let link_switch = |page: &gtk::Widget| {
+            descendants::<adw::SwitchRow>(page)
+                .into_iter()
+                .find(|row| row.title() == "Link horizontal and vertical")
+                .unwrap()
+        };
+        let toggle = link_switch(&page);
+        assert!(!toggle.is_active());
+        toggle.set_active(true);
+        assert_eq!(descendants::<gtk::Scale>(&page).len(), 1);
+        let assert_axes = |horizontal, vertical| {
+            let doc = ctx.document().unwrap();
+            assert_eq!(doc["gyro"]["sensitivity_x"].as_float(), Some(horizontal));
+            assert_eq!(doc["gyro"]["sensitivity_y"].as_float(), Some(vertical));
+        };
+        assert_axes(19.3, 19.3);
+        let (entry, scale) = controls(&page, "Both axes");
+        scale.set_value(7.26);
+        assert_axes(7.3, 7.3);
+        entry.set_text("31,25");
+        assert_axes(31.25, 31.25);
+        assert_eq!(scale.value(), 20.0);
+        entry.set_text("invalid");
+        assert!(!toggle.is_sensitive());
+        assert!(ctx.editor.borrow().draft_error().is_some());
+
+        let reopened = sensitivity::gyro_page(&ctx);
+        let toggle = link_switch(&reopened);
+        assert!(toggle.is_active());
+        let (entry, _) = controls(&reopened, "Both axes");
+        assert_eq!(entry.text(), "invalid");
+        entry.set_text("31.25");
+        toggle.set_active(false);
+        assert_eq!(descendants::<gtk::Scale>(&reopened).len(), 2);
+        let (entry, _) = controls(&reopened, "Vertical");
+        entry.set_text("9.5");
+        assert_axes(31.25, 9.5);
+        let preview = descendants::<adw::PreferencesGroup>(&reopened)
+            .into_iter()
+            .find(|group| group.title() == "Flick Stick")
+            .unwrap();
+        assert_eq!(
+            descendants::<gtk::DrawingArea>(preview.upcast_ref()).len(),
+            2
+        );
+        for title in ["Physical input", "Flick Stick response"] {
+            assert!(
+                descendants::<gtk::Label>(preview.upcast_ref())
+                    .iter()
+                    .any(|label| label.text() == title)
+            );
+        }
+
+        let acceleration = descendants::<adw::SwitchRow>(&reopened)
+            .into_iter()
+            .find(|row| row.title() == "Gyro acceleration")
+            .unwrap();
+        let settings = descendants::<adw::SpinRow>(&reopened);
+        let setting = |title| settings.iter().find(|row| row.title() == title).unwrap();
+        assert!(!acceleration.is_active());
+        assert!(!setting("Acceleration start").is_sensitive());
+        assert!(setting("Minimum speed").is_sensitive());
+        acceleration.set_active(true);
+        assert!(setting("Acceleration start").is_sensitive());
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["accel_enabled"].as_bool(),
+            Some(true)
+        );
+        for (title, value) in [
+            ("Minimum speed", 2.0),
+            ("Acceleration start", 25.0),
+            ("Acceleration end", 120.0),
+            ("Acceleration multiplier", 2.5),
+            ("Axial threshold", 12.0),
+            ("Steering sensitivity", 0.35),
+        ] {
+            setting(title).set_value(value);
+        }
+        acceleration.set_active(false);
+        assert!(!setting("Acceleration end").is_sensitive());
+        assert!(!setting("Acceleration multiplier").is_sensitive());
+        assert!(setting("Minimum speed").is_sensitive());
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["accel_enabled"].as_bool(),
+            Some(false)
+        );
+        acceleration.set_active(true);
+        assert_eq!(setting("Acceleration multiplier").value(), 2.5);
+        acceleration.set_active(false);
+        let doc = ctx.document().unwrap();
+        for (key, value) in [
+            ("threshold_dps", 2.0),
+            ("accel_start_dps", 25.0),
+            ("accel_end_dps", 120.0),
+            ("accel_multiplier", 2.5),
+            ("flick_axial_threshold_deg", 12.0),
+            ("flick_steering_sensitivity", 0.35),
+        ] {
+            assert_eq!(doc["gyro"][key].as_float(), Some(value));
+        }
+        window.close();
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn virtual_gamepad_type_and_trigger_stages_write_separate_bindings() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        editor.text.push_str("[bridge]\nrumble = true\n");
+        editor.selected = "l2";
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: glib::WeakRef::new(),
+            overlay: glib::WeakRef::new(),
+        };
+        let page = controller::page(&ctx);
+        let select = |row: &adw::ComboRow, label: &str| {
+            let model = row.model().unwrap().downcast::<gtk::StringList>().unwrap();
+            let index = (0..model.n_items())
+                .find(|&index| model.string(index).as_deref() == Some(label))
+                .unwrap();
+            row.set_selected(index);
+        };
+        let row = descendants::<adw::ComboRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Virtual gamepad type")
+            .unwrap();
+        select(&row, "Xbox Series X|S");
+        let groups = descendants::<adw::PreferencesGroup>(&page);
+        for (stage, key) in [("Partial pull", "Q"), ("Full pull", "E")] {
+            let group = groups.iter().find(|group| group.title() == stage).unwrap();
+            let row = descendants::<adw::ComboRow>(group.upcast_ref())
+                .into_iter()
+                .find(|row| row.title() == "Hold")
+                .unwrap();
+            select(&row, key);
+        }
+        let keep_partial = |page: &gtk::Widget| {
+            descendants::<adw::SwitchRow>(page)
+                .into_iter()
+                .find(|row| row.title() == "Keep partial action at full pull")
+                .unwrap()
+        };
+        let l2 = keep_partial(&page);
+        assert!(!l2.is_active());
+        l2.set_active(true);
+        ctx.editor.borrow_mut().selected = "r2";
+        let r2_page = controller::page(&ctx);
+        let r2 = keep_partial(&r2_page);
+        assert!(!r2.is_active());
+        r2.set_active(true);
+        l2.set_active(false);
+
+        let doc = ctx.document().unwrap();
+        assert_eq!(doc["keyboard"]["keep_partial"]["l2"].as_bool(), Some(false));
+        assert_eq!(doc["keyboard"]["keep_partial"]["r2"].as_bool(), Some(true));
+        assert_eq!(doc["bridge"]["gamepad"].as_str(), Some("xbox-series"));
+        assert_eq!(doc["bridge"]["rumble"].as_bool(), Some(true));
+        let bindings = doc["keyboard"]["bindings"].as_array_of_tables().unwrap();
+        let partial = bindings.get(0).unwrap();
+        let full = bindings.get(1).unwrap();
+        assert_eq!(partial["trigger"].as_str(), Some("l2:0.45:0.35:0.95:0.85"));
+        assert_eq!(full["trigger"].as_str(), Some("l2:0.95:0.85"));
+        assert_eq!(partial["hold"].as_str(), Some("KEY_Q"));
+        assert_eq!(full["hold"].as_str(), Some("KEY_E"));
+
+        select(&row, "Use bridge default");
+        let doc = ctx.document().unwrap();
+        assert!(doc["bridge"].get("gamepad").is_none());
+        assert_eq!(doc["bridge"]["rumble"].as_bool(), Some(true));
     }
 }
