@@ -16,6 +16,8 @@ pub(super) struct ScrollSettings {
     invert_vertical: bool,
     #[serde(default)]
     invert_horizontal: bool,
+    #[serde(default)]
+    axis_lock: bool,
     #[serde(default = "default_fingers")]
     fingers: u8,
 }
@@ -48,6 +50,7 @@ impl ScrollSettings {
 pub(super) struct ScrollState {
     tracker: Tracker,
     remainder: [i32; 2],
+    locked_axis: Option<usize>,
     settings: ScrollSettings,
 }
 
@@ -64,6 +67,7 @@ impl ScrollState {
         Self {
             tracker: Tracker::default(),
             remainder: [0; 2],
+            locked_axis: None,
             settings,
         }
     }
@@ -71,6 +75,7 @@ impl ScrollState {
     pub(super) fn advance(&mut self, contacts: [Option<TouchContact>; 2]) -> [i32; 2] {
         let Some([dx, dy]) = self.tracker.advance(contacts, self.settings.fingers) else {
             self.remainder = [0; 2];
+            self.locked_axis = None;
             return [0; 2];
         };
         let delta = [-dy, dx];
@@ -79,7 +84,7 @@ impl ScrollState {
             self.settings.invert_vertical,
             self.settings.invert_horizontal,
         ];
-        std::array::from_fn(|axis| {
+        let mut ticks: [i32; 2] = std::array::from_fn(|axis| {
             let Some(step) = steps[axis] else {
                 return 0;
             };
@@ -88,7 +93,15 @@ impl ScrollState {
             self.remainder[axis] = total % step;
             let ticks = total / step;
             if inverted[axis] { -ticks } else { ticks }
-        })
+        });
+        if self.settings.axis_lock && ticks != [0; 2] {
+            // Lock when the swipe first emits a step. Equal magnitudes favor vertical.
+            let axis = *self
+                .locked_axis
+                .get_or_insert_with(|| usize::from(ticks[1].abs() > ticks[0].abs()));
+            ticks[1 - axis] = 0;
+        }
+        ticks
     }
 }
 

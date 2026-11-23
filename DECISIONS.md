@@ -432,6 +432,9 @@ The feature shares the virtual wheel with mapped gestures.
 Each axis can invert its emitted touch scroll steps independently.
 The setting applies to both finger counts and leaves mapped wheel
 actions in their configured directions.
+An opt-in axis lock selects an axis at the first emitted touch wheel
+step and keeps it for the current tracked contact or pair. Simultaneous
+steps select by absolute step count, with vertical taking ties.
 
 Touchpad pointer motion uses one tracked contact and preserves fractional
 counts independently per axis. Adding a second contact clears its baseline,

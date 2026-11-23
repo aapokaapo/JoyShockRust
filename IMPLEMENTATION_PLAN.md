@@ -205,7 +205,8 @@ Tap and double-tap can emit a one-step vertical or horizontal mouse scroll.
 Hold actions can repeat wheel steps at a configurable rate.
 One- or two-finger touchpad swipes can emit wheel steps at independent axis
 distances. Profiles can reverse either axis independently of wheel steps
-from mapped buttons.
+from mapped buttons or lock each swipe to the axis selected at the
+first wheel step. Synthetic tests cover axis selection and reset.
 One-finger swipes can also drive relative pointer motion with separate axis
 sensitivity, yielding to two-finger scrolling.
 The pointer profile can map short single-finger taps to left clicks and

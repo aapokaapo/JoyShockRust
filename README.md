@@ -299,6 +299,10 @@ either finger ends the swipe. The default is `fingers = 1`.
 Use `invert_vertical` and `invert_horizontal` to reverse the corresponding
 touch swipe direction. Both default to `false`. Button-bound wheel actions
 keep their configured directions.
+Set `axis_lock = true` to scroll along only one axis per swipe. The first
+wheel step selects the axis. If both axes reach a step in the same
+report, the one with more steps wins, with ties favoring vertical.
+Without the lock, a diagonal swipe can scroll on both axes.
 
 ```toml
 [keyboard.touch_scroll]
@@ -306,6 +310,7 @@ fingers = 2
 vertical_step = 120
 horizontal_step = 180
 invert_vertical = true
+axis_lock = true
 ```
 
 Use `[keyboard.touch_pointer]` to move the virtual pointer with one

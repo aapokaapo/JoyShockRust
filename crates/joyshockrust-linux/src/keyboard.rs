@@ -2053,6 +2053,64 @@ mod tests {
     }
 
     #[test]
+    fn touch_scroll_axis_lock_resets_when_the_contact_pair_changes() {
+        let config = config(
+            r#"
+            [keyboard.touch_scroll]
+            fingers = 2
+            vertical_step = 10
+            horizontal_step = 10
+            invert_vertical = true
+            axis_lock = true
+            "#,
+        );
+        let mut state = State::new(&config);
+        let now = Instant::now();
+        let pair = |id, x, y| {
+            [
+                Some(TouchContact { id: 1, x, y }),
+                Some(TouchContact { id, x: x + 100, y }),
+            ]
+        };
+        let v = RelativeAxisCode::REL_WHEEL.0;
+        let h = RelativeAxisCode::REL_HWHEEL.0;
+        let [first, second] = pair(2, 160, 200);
+        let allocations = allocation_counter::measure(|| {
+            for (contacts, expected) in [
+                (pair(2, 100, 200), None),
+                (pair(2, 105, 195), None),
+                (pair(2, 110, 190), Some((v, -1))), // Equal steps select vertical.
+                (pair(2, 160, 190), None),
+                ([second, first], Some((v, 1))),
+                ([first, None], None),
+                (pair(2, 160, 200), None),
+                (pair(2, 190, 190), Some((h, 3))), // More horizontal steps selects horizontal.
+                (pair(2, 190, 160), None),
+                (pair(3, 190, 160), None),
+                (pair(3, 190, 150), Some((v, -1))),
+            ] {
+                let input = Input {
+                    contacts,
+                    ..Input::default()
+                };
+                let mut observed = None;
+                let deadline = state
+                    .update(input, now, |events| {
+                        assert_eq!(events.len(), 1);
+                        let event = events[0];
+                        assert_eq!(event.event_type(), EventType::RELATIVE);
+                        assert_eq!(observed.replace((event.code(), event.value())), None);
+                        Ok(())
+                    })
+                    .unwrap();
+                assert_eq!(deadline, None);
+                assert_eq!(observed, expected, "{contacts:?}");
+            }
+        });
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
     fn touch_scroll_settings_require_a_valid_step_for_at_least_one_axis() {
         for settings in [
             "",

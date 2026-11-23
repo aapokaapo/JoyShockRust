@@ -772,6 +772,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     wheel events change sign and button-bound wheel actions keep their
     direction. Set `invert_vertical = false` and `invert_horizontal = true`
     to check the other axis.
+26. Set `axis_lock = true` in `[keyboard.touch_scroll]` with both axes
+    configured. Start a vertical swipe and turn it horizontally without
+    lifting. Check that only vertical steps appear. End the swipe and
+    start horizontally. Check that horizontal steps now appear.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a
