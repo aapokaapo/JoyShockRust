@@ -915,6 +915,79 @@ mod tests {
         }
     }
 
+    const WALK_KEYS: [KeyCode; 5] = [
+        KeyCode::KEY_W,
+        KeyCode::KEY_A,
+        KeyCode::KEY_S,
+        KeyCode::KEY_D,
+        KeyCode::KEY_LEFTSHIFT,
+    ];
+
+    fn keyboard_walk_preset() -> Config {
+        let profile =
+            crate::profile::parse(include_str!("../../../profiles/keyboard-walk.toml")).unwrap();
+        assert!(profile.bridge.is_none());
+        profile.keyboard.unwrap()
+    }
+
+    fn keyboard_walk_reports() -> impl Iterator<Item = (InputReport, [bool; 5])> {
+        [
+            (128, [false; 5]),
+            (100, [true, true, false, false, true]),
+            (60, [true, true, false, false, false]),
+            (78, [true, true, false, false, false]),
+            (100, [true, true, false, false, true]),
+            (128, [false; 5]),
+        ]
+        .into_iter()
+        .map(|(axis, expected)| {
+            let mut frame = [0; 64];
+            frame[0] = 1;
+            frame[1..=2].fill(axis);
+            frame[3..=4].fill(128);
+            frame[8] = 8;
+            frame[33] = 0x80;
+            frame[37] = 0x80;
+            (
+                parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap(),
+                expected,
+            )
+        })
+    }
+
+    #[test]
+    fn keyboard_walk_preset_replays_usb_stick_states() {
+        let mut state = State::new(&keyboard_walk_preset());
+        let now = Instant::now();
+        for (report, expected) in keyboard_walk_reports() {
+            assert_eq!(state.update(report.into(), now, |_| Ok(())).unwrap(), None);
+            assert_eq!(WALK_KEYS.map(|key| state.held.contains(key)), expected);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
+    fn uinput_keyboard_walk_preset() {
+        use crate::live_uinput_test::open_evdev;
+
+        let config = keyboard_walk_preset();
+        let mut output = Keyboard::open(Some(&config), None).unwrap().unwrap();
+        let sysfs = output
+            .outputs
+            .keyboard
+            .as_mut()
+            .unwrap()
+            .get_syspath()
+            .unwrap();
+        let observer = open_evdev(&sysfs);
+        let now = Instant::now();
+        for (report, expected) in keyboard_walk_reports() {
+            assert_eq!(output.publish(report, now).unwrap(), None);
+            let held = observer.get_key_state().unwrap();
+            assert_eq!(WALK_KEYS.map(|key| held.contains(key)), expected);
+        }
+    }
+
     #[test]
     #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
     fn uinput_keyboard_and_mouse_gestures() {

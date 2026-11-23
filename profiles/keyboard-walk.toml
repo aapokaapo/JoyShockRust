@@ -1,0 +1,12 @@
+version = 1
+
+# For games that run by default and walk while Left Shift is held.
+[[keyboard.sticks]]
+side = "left"
+deadzone = 0.2
+deadzone_release = 0.15
+up = "KEY_W"
+left = "KEY_A"
+down = "KEY_S"
+right = "KEY_D"
+inner = { key = "KEY_LEFTSHIFT", threshold = 0.5, release = 0.6 }

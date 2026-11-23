@@ -456,6 +456,13 @@ right = "KEY_D"
 inner = { key = "KEY_LEFTSHIFT", threshold = 0.5, release = 0.6 }
 ```
 
+Load the complete [keyboard walk profile](profiles/keyboard-walk.toml)
+into the running service.
+
+```sh
+"$HOME/.local/bin/joyshockrust-linux" --load-profile profiles/keyboard-walk.toml
+```
+
 When the stick leaves its deadzone, the inner zone engages at or below
 `threshold`. It stays engaged until the radius reaches `release` or
 movement returns to the deadzone. If omitted, `release` defaults to

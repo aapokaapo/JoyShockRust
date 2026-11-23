@@ -810,12 +810,19 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     Confirm the window moves while the pad is pressed and releases
     with the physical click. Unload the profile and verify that the
     profile's touchpad grab request clears.
-32. Use an inner zone with `threshold = 0.5` and `release = 0.6` and map
-    the left stick to WASD. Tilt up-left slightly. Verify Shift, W and A
+32. Load `profiles/keyboard-walk.toml` and tilt up-left slightly. Verify Shift, W and A
     are held. Tilt farther to release Shift while W and A stay held.
     Back off until Shift engages again, then center the stick and check
     that all keys release. For a toggle-walk game, repeat with
     `mode = "toggle"` and check for one Shift pulse per zone transition.
+
+The kernel test for this preset needs writable `/dev/uinput` and a
+readable virtual evdev node. It drives the stick with synthetic USB
+reports.
+
+```sh
+cargo test --locked -p joyshockrust-linux uinput_keyboard_walk_preset -- --ignored
+```
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

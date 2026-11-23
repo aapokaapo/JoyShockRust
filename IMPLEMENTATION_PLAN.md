@@ -232,6 +232,9 @@ a radial deadzone with an optional release radius and optional angular
 hysteresis at direction boundaries. Inner and outer stick zones have
 separate engagement and release thresholds and support hold, toggle,
 and one pulse per continuous movement.
+The keyboard walk preset combines WASD with a held Shift in the inner
+zone. Synthetic USB replay checks its key states. An opt-in uinput test
+checks the same sequence through the virtual keyboard.
 Flick Stick calibration is covered by output
 counts before and after a scaling change.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)
