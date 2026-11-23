@@ -47,6 +47,7 @@ struct Gyro {
     calibration_hold: Option<CalibrationHold>,
     flick_stick: Option<f64>,
     flick_axial_threshold_deg: Option<f64>,
+    flick_steering_sensitivity: Option<f64>,
     threshold_dps: Option<f64>,
     accel_start_dps: Option<f64>,
     accel_end_dps: Option<f64>,
@@ -355,6 +356,12 @@ impl Gyro {
             .flick_stick
             .map(gyro_mouse::validate_flick_scale)
             .transpose()?;
+        if self
+            .flick_steering_sensitivity
+            .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        {
+            return Err("Flick Stick steering sensitivity must be between 0 and 1".into());
+        }
         let resolve_input = |name: &str| -> Result<DigitalInput, String> {
             if let Some(spec) = name.strip_prefix("touch:") {
                 let region = touchpad
@@ -391,6 +398,7 @@ impl Gyro {
                 .flick_axial_threshold_deg
                 .map(validate_flick_axial_threshold)
                 .transpose()?,
+            flick_steering_sensitivity: self.flick_steering_sensitivity,
             response: GyroResponse::new(
                 self.threshold_dps.unwrap_or(threshold),
                 self.accel_start_dps.unwrap_or(start),
@@ -593,12 +601,16 @@ mod tests {
 
     #[test]
     fn aim_response_profile_validates_thresholds_and_acceleration() {
-        let valid = parse("version = 1\n[gyro]\nflick_axial_threshold_deg = 12\nthreshold_dps = 2\naccel_start_dps = 25\naccel_end_dps = 120\naccel_multiplier = 2.5").unwrap().gyro.unwrap();
+        let valid = parse("version = 1\n[gyro]\nflick_axial_threshold_deg = 12\nflick_steering_sensitivity = 0.35\nthreshold_dps = 2\naccel_start_dps = 25\naccel_end_dps = 120\naccel_multiplier = 2.5").unwrap().gyro.unwrap();
         assert_eq!(valid.flick_axial_threshold(), 12.0);
+        assert_eq!(valid.flick_steering_sensitivity, Some(0.35));
         assert_eq!(valid.response.values(), [2.0, 25.0, 120.0, 2.5]);
         for settings in [
             "flick_axial_threshold_deg = -1",
             "flick_axial_threshold_deg = 31",
+            "flick_steering_sensitivity = -0.1",
+            "flick_steering_sensitivity = 1.1",
+            "flick_steering_sensitivity = nan",
             "threshold_dps = -1",
             "accel_multiplier = 0.5",
             "accel_end_dps = 20",

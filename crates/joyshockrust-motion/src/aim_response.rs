@@ -1,15 +1,56 @@
 //! Optional response shaping applied after calibrated motion integration.
 
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
+
 pub const DEFAULT_FLICK_AXIAL_THRESHOLD_DEG: f64 = 4.0;
 pub const MAX_FLICK_AXIAL_THRESHOLD_DEG: f64 = 30.0;
+pub const DEFAULT_FLICK_STEERING_SENSITIVITY: f64 = 0.5;
 pub const MAX_GYRO_RATE_DPS: f64 = 2_000.0;
 pub const MAX_GYRO_ACCEL_MULTIPLIER: f64 = 10.0;
 
-/// Angle in radians, clockwise from forward in the stick's device coordinates.
-pub fn flick_stick_angle(x: f64, y: f64, axial_threshold_radians: f64) -> f64 {
-    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+const FLICK_ENGAGE_RADIUS: f32 = 0.90;
+const FLICK_RELEASE_RADIUS: f32 = 0.25;
 
-    let angle = x.atan2(-y);
+#[derive(Default)]
+pub struct FlickDirection {
+    armed: bool,
+    previous: Option<f64>,
+}
+
+pub enum FlickUpdate {
+    Idle,
+    Started(f64),
+    Steered(f64),
+}
+
+impl FlickDirection {
+    pub fn is_released(x: f32, y: f32) -> bool {
+        x * x + y * y <= FLICK_RELEASE_RADIUS * FLICK_RELEASE_RADIUS
+    }
+
+    /// Reports angles in radians, clockwise from forward.
+    pub fn update(&mut self, x: f32, y: f32) -> FlickUpdate {
+        if Self::is_released(x, y) {
+            self.armed = true;
+            self.previous = None;
+        } else if self.armed
+            && (self.previous.is_some()
+                || x * x + y * y >= FLICK_ENGAGE_RADIUS * FLICK_ENGAGE_RADIUS)
+        {
+            let current = f64::from(x).atan2(-f64::from(y));
+            return match self.previous.replace(current) {
+                Some(previous) => {
+                    FlickUpdate::Steered((current - previous + PI).rem_euclid(TAU) - PI)
+                }
+                None => FlickUpdate::Started(current),
+            };
+        }
+        FlickUpdate::Idle
+    }
+}
+
+/// Applies the axial threshold to the initial angle, in radians from forward.
+pub fn snap_flick_angle(angle: f64, axial_threshold_radians: f64) -> f64 {
     if axial_threshold_radians <= 0.0 {
         return angle;
     }
@@ -116,7 +157,7 @@ mod tests {
     fn flick_threshold_has_a_continuous_monotonic_transition() {
         let aim = |angle: f64, threshold: f64| {
             let (x, forward) = angle.to_radians().sin_cos();
-            flick_stick_angle(x, -forward, threshold.to_radians()).to_degrees()
+            snap_flick_angle(x.atan2(forward), threshold.to_radians()).to_degrees()
         };
         for threshold in [4.0, 12.0, 30.0] {
             assert_eq!(aim(threshold - 0.001, threshold), 0.0);

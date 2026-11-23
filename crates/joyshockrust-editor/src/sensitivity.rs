@@ -5,8 +5,8 @@ use std::{
 
 use adw::{gtk, prelude::*};
 use joyshockrust_motion::aim_response::{
-    DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, GyroResponse, MAX_FLICK_AXIAL_THRESHOLD_DEG,
-    MAX_GYRO_ACCEL_MULTIPLIER, MAX_GYRO_RATE_DPS,
+    DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse,
+    MAX_FLICK_AXIAL_THRESHOLD_DEG, MAX_GYRO_ACCEL_MULTIPLIER, MAX_GYRO_RATE_DPS,
 };
 
 use crate::{
@@ -27,6 +27,7 @@ const RESPONSE_FIELDS: [&str; 4] = [
     "accel_multiplier",
 ];
 const FLICK_THRESHOLD: &str = "flick_axial_threshold_deg";
+const FLICK_STEERING: &str = "flick_steering_sensitivity";
 const CALIBRATION_FIELDS: [&str; 2] = ["real_world_calibration", "in_game_sens"];
 const STICK_FIELDS: [&str; 2] = ["stick_curve_left", "stick_curve_right"];
 
@@ -269,24 +270,37 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
 fn flick_threshold_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
         .title("Flick Stick")
-        .description("Shaded sectors show where the stick snaps to a cardinal direction.")
+        .description("Shaded sectors show where the initial flick snaps to a cardinal direction.")
         .build();
     let value = gyro.map_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, |table| {
         number(table, FLICK_THRESHOLD, DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
     });
     let row = setting_row(
         "Axial threshold",
-        "Snap to a cardinal direction within this angle and blend smoothly outside it. 0 disables snapping.",
+        "Snap the initial flick toward a cardinal direction. 0 disables snapping.",
         value,
         0.0,
         MAX_FLICK_AXIAL_THRESHOLD_DEG,
     );
-    let ctx = ctx.clone();
-    row.connect_value_notify(move |row| {
-        ctx.edit(|doc| set_gyro_numbers(doc, [(FLICK_THRESHOLD, row.value())]));
+    let steering_value = gyro.map_or(DEFAULT_FLICK_STEERING_SENSITIVITY, |table| {
+        number(table, FLICK_STEERING, DEFAULT_FLICK_STEERING_SENSITIVITY)
     });
-    group.add(&row);
-    crate::flick_preview::add(&group, &row.adjustment());
+    let steering = setting_row(
+        "Steering sensitivity",
+        "Multiplier for turns while the stick is held. 0 disables steering. 1 uses full sensitivity.",
+        steering_value,
+        0.0,
+        1.0,
+    );
+    steering.adjustment().set_step_increment(0.05);
+    for (key, control) in [(FLICK_THRESHOLD, &row), (FLICK_STEERING, &steering)] {
+        let ctx = ctx.clone();
+        control.connect_value_notify(move |row| {
+            ctx.edit(|doc| set_gyro_numbers(doc, [(key, row.value())]));
+        });
+        group.add(control);
+    }
+    crate::flick_preview::add(&group, &row.adjustment(), &steering.adjustment());
     group
 }
 

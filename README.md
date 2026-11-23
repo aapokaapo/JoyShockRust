@@ -729,12 +729,15 @@ Under **Gyro response**, set a minimum aim speed and the start and end
 speeds for acceleration, in degrees per second. The acceleration
 multiplier ramps up between those speeds and caps at the selected value.
 A minimum speed of 0 and a multiplier of 1 preserve linear aim.
-Under **Flick Stick**, **Axial threshold** snaps the stick to the nearest
-cardinal direction inside the chosen angle and blends back to the
-physical stick angle outside it. The default is 4° for profiles without
-an explicit setting. The preview shows the shaded threshold sectors and compares the active
-controller's physical right-stick position with the position after
-snapping. The preview uses the draft threshold as you edit it.
+Under **Flick Stick**, **Axial threshold** snaps the initial flick to
+the nearest cardinal direction inside the chosen angle, with a smooth
+transition outside it. The default is 4°. While the stick is held,
+**Steering sensitivity** scales subsequent turns from their physical
+angle changes. Its default is 0.50, so a 30° movement after the flick
+turns the camera about 15° with a calibrated profile. At 0, only the
+initial flick moves the camera. At 1, held steering uses the full
+sensitivity. The preview compares physical input with the Flick Stick
+response using both draft settings.
 
 Open the profile actions menu to **Validate Profile** or **Save** to
 disk. **Save & Apply** writes the profile and loads it into the running
@@ -1073,12 +1076,15 @@ change. Load the resulting preset with `--load-profile`.
 Add `--flick-stick 4` with `--gyro-mouse` to use the right stick for
 horizontal mouse turns. The argument sets relative counts per degree and
 accepts values from 0.01 to 100. Flicking from center turns toward the stick
-angle over 100 ms. Rotating the held stick follows its angle changes.
+angle over 100 ms. After the initial flick, rotations use relative
+stick motion until the stick returns within 25% of center.
 The virtual gamepad's right-stick axes are centered while this mode is
 enabled. Gyro gating still controls gyro input independently.
 
 For a TOML profile, set `flick_axial_threshold_deg` in `[gyro]` to a
-value from 0 to 30. Use 0 to disable cardinal snapping. Gyro response
+value from 0 to 30. Use 0 to disable cardinal snapping. Set
+`flick_steering_sensitivity` in the same table to a value from 0 to 1.
+Gyro response
 uses `threshold_dps`, `accel_start_dps`, `accel_end_dps`, and
 `accel_multiplier` in the same table.
 See the [Flick Stick test](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance).

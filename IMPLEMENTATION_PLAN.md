@@ -257,8 +257,9 @@ after the window exits. Both calibration windows accept controller
 navigation while focused, including numeric adjustment and profile
 selection and a live result preview in the real-world calibration window.
 Flick Stick can snap to cardinal axes within a configurable angular
-threshold with a smooth transition and a live physical and adjusted
-preview in the editor. RWC measurement uses the physical stick angle.
+threshold for the initial turn, with independently scaled held steering
+and a live physical and adjusted preview in the editor. RWC measurement
+uses the physical stick angle and full steering sensitivity.
 Gyro aim has a minimum movement speed and optional bounded
 speed-dependent gain.
 

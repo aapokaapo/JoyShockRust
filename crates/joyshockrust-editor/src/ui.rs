@@ -763,7 +763,7 @@ pub(crate) mod tests {
             descendants::<gtk::DrawingArea>(preview.upcast_ref()).len(),
             2
         );
-        for title in ["Physical input", "After threshold"] {
+        for title in ["Physical input", "Flick Stick response"] {
             assert!(
                 descendants::<gtk::Label>(preview.upcast_ref())
                     .iter()
@@ -778,6 +778,7 @@ pub(crate) mod tests {
             ("Acceleration end", 120.0),
             ("Acceleration multiplier", 2.5),
             ("Axial threshold", 12.0),
+            ("Steering sensitivity", 0.35),
         ] {
             settings
                 .iter()
@@ -792,6 +793,7 @@ pub(crate) mod tests {
             ("accel_end_dps", 120.0),
             ("accel_multiplier", 2.5),
             ("flick_axial_threshold_deg", 12.0),
+            ("flick_steering_sensitivity", 0.35),
         ] {
             assert_eq!(doc["gyro"][key].as_float(), Some(value));
         }

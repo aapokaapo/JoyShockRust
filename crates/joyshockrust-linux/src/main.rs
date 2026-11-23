@@ -970,6 +970,7 @@ fn serve_session(
                             sensitivity: next.sensitivity,
                             response: next.response,
                             flick_axial_threshold_deg: next.flick_axial_threshold_deg,
+                            flick_steering_sensitivity: next.flick_steering_sensitivity,
                             game_calibration: next.game_calibration,
                             ..current
                         }) == next

@@ -317,7 +317,9 @@ enum Confirmation {
 impl StickSweep {
     fn new(scale: f64) -> Self {
         Self {
-            flick: FlickStick::new(scale).with_axial_threshold(0.0),
+            flick: FlickStick::new(scale)
+                .with_axial_threshold(0.0)
+                .with_steering_sensitivity(1.0),
             measuring: false,
             options_pressed: true,
             counts: 0,

@@ -206,15 +206,20 @@ axis. Confirm the camera follows smoothly without a full-turn jump. Set
 the counts-per-degree value for the game's sensitivity before measuring
 the angles. Confirm the left stick still drives the virtual gamepad.
 Set the axial threshold to 12° and flick just left and right of forward.
-Verify both snap to forward. From a diagonal, steer back to forward
-and check the transition into and out of the sector stays continuous.
-Measure RWC with the same profile. Verify small corrections near forward
-move the camera during the measurement.
+Verify both initial flicks snap to forward. Without centering, turn the
+stick through a shaded sector and check that each movement remains
+proportional, even within the sector. Pull the stick inward to about half
+travel and rotate it, then return it to the outside. Check that movement
+continues as steering until the stick returns near center. Compare
+steering at 0, 0.5 and 1 with the same initial flick. Measure RWC with the
+same profile. Verify small corrections near forward still use the full
+measurement sensitivity.
 Set the threshold to 0° and repeat to compare the response. Open
 **Gyro → Flick Stick** with the bridge running. Move the active right
 stick near a sector edge and change the threshold in the editor.
 Check that both previews follow the stick, that the adjusted marker
-snaps inside a shaded sector, and that the sector updates before saving.
+snaps on initial flick within a shaded sector, and that both the sector
+and held steering response update before saving.
 Switch controllers or reconnect and check that the preview follows the
 active controller.
 

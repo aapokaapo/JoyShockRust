@@ -9,22 +9,56 @@ use std::{
 
 use adw::{gio, glib, gtk, prelude::*};
 use joyshockrust_core::Stick;
-use joyshockrust_motion::aim_response::flick_stick_angle;
+use joyshockrust_motion::aim_response::{FlickDirection, FlickUpdate, snap_flick_angle};
 
 use crate::controller_input;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
 
-pub fn add(group: &adw::PreferencesGroup, adjustment: &gtk::Adjustment) {
-    let stick = Rc::new(Cell::new(None));
+#[derive(Clone, Copy, Default, PartialEq)]
+struct PreviewSample {
+    stick: Stick,
+    turn: Option<[f64; 2]>,
+}
+
+impl PreviewSample {
+    fn update(&mut self, stick: Stick, direction: &mut FlickDirection) {
+        self.stick = stick;
+        match direction.update(stick.x, stick.y) {
+            FlickUpdate::Idle => self.turn = None,
+            FlickUpdate::Started(angle) => self.turn = Some([angle, 0.0]),
+            FlickUpdate::Steered(delta) => {
+                if let Some([_, steered]) = &mut self.turn {
+                    *steered += delta;
+                }
+            }
+        }
+    }
+
+    fn adjusted_marker(self, threshold: f64, multiplier: f64) -> (f64, f64) {
+        let x = f64::from(self.stick.x);
+        let y = f64::from(self.stick.y);
+        let [initial, steered] = self.turn.unwrap_or_else(|| [x.atan2(-y), 0.0]);
+        let radius = x.hypot(y);
+        let (sin, cos) = (snap_flick_angle(initial, threshold) + steered * multiplier).sin_cos();
+        (radius * sin, -radius * cos)
+    }
+}
+
+pub fn add(
+    group: &adw::PreferencesGroup,
+    adjustment: &gtk::Adjustment,
+    steering: &gtk::Adjustment,
+) {
+    let sample = Rc::new(Cell::new(None::<PreviewSample>));
     let plots = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     plots.set_homogeneous(true);
     plots.set_margin_top(12);
     plots.set_margin_start(12);
     plots.set_margin_end(12);
 
-    let charts = ["Physical input", "After threshold"].map(|title| {
+    let charts = ["Physical input", "Flick Stick response"].map(|title| {
         let panel = gtk::Box::new(gtk::Orientation::Vertical, 4);
         let label = gtk::Label::new(Some(title));
         label.set_wrap(true);
@@ -37,18 +71,29 @@ pub fn add(group: &adw::PreferencesGroup, adjustment: &gtk::Adjustment) {
     });
     for (index, chart) in charts.iter().enumerate() {
         let adjustment = adjustment.clone();
-        let stick = stick.clone();
+        let steering = steering.clone();
+        let sample = sample.clone();
         chart.set_draw_func(move |area, cr, width, height| {
             let threshold = adjustment.value().to_radians();
-            draw(area, cr, width, height, threshold, stick.get(), index != 0);
+            let adjusted = index != 0;
+            let marker = sample.get().map(|sample| {
+                if adjusted {
+                    sample.adjusted_marker(threshold, steering.value())
+                } else {
+                    (f64::from(sample.stick.x), f64::from(sample.stick.y))
+                }
+            });
+            draw(area, cr, width, height, threshold, marker, adjusted);
         });
     }
-    let chart_refs = charts.each_ref().map(|chart| chart.downgrade());
-    adjustment.connect_value_changed(move |_| {
-        for chart in chart_refs.iter().filter_map(glib::WeakRef::upgrade) {
-            chart.queue_draw();
-        }
-    });
+    for setting in [adjustment, steering] {
+        let chart_refs = charts.each_ref().map(|chart| chart.downgrade());
+        setting.connect_value_changed(move |_| {
+            for chart in chart_refs.iter().filter_map(glib::WeakRef::upgrade) {
+                chart.queue_draw();
+            }
+        });
+    }
 
     let status = gtk::Label::builder()
         .label("Waiting for controller input…")
@@ -65,7 +110,7 @@ pub fn add(group: &adw::PreferencesGroup, adjustment: &gtk::Adjustment) {
     let on_map = polling.clone();
     preview.connect_map(move |_| {
         let task = glib::MainContext::default().spawn_local(poll_input(
-            stick.clone(),
+            sample.clone(),
             charts.clone(),
             status.clone(),
         ));
@@ -105,12 +150,12 @@ fn hidraw_path(value: &str) -> Option<PathBuf> {
 }
 
 async fn poll_input(
-    stick: Rc<Cell<Option<Stick>>>,
+    sample: Rc<Cell<Option<PreviewSample>>>,
     charts: [gtk::DrawingArea; 2],
     status: gtk::Label,
 ) {
     let update = |latest| {
-        if stick.replace(latest) != latest {
+        if sample.replace(latest) != latest {
             for chart in &charts {
                 chart.queue_draw();
             }
@@ -130,12 +175,14 @@ async fn poll_input(
     let mut next_check = Instant::now();
     let mut input: Option<(PathBuf, File)> = None;
     let mut buffer = [0; 16_384];
+    let mut direction = FlickDirection::default();
     loop {
         if Instant::now() >= next_check {
             match active_node(&client, &address).await {
                 Ok(Some(node)) if input.as_ref().is_some_and(|(path, _)| *path == node) => {}
                 Ok(Some(node)) => {
                     update(None);
+                    direction = FlickDirection::default();
                     input = match controller_input::open(&node) {
                         Ok(file) => {
                             status.set_text("Waiting for controller input…");
@@ -161,14 +208,16 @@ async fn poll_input(
             next_check = Instant::now() + RECONNECT_INTERVAL;
         }
         if let Some((_, file)) = &mut input {
-            let mut latest = None;
+            let mut latest = sample.get().unwrap_or_default();
+            let mut received = false;
             match controller_input::read_reports(file, &mut buffer, 64, |controls| {
-                latest = Some(controls.right_stick);
+                latest.update(controls.right_stick, &mut direction);
+                received = true;
                 true
             }) {
                 Ok(()) => {
-                    if let Some(latest) = latest {
-                        if stick.get().is_none() {
+                    if received {
+                        if sample.get().is_none() {
                             status.set_text("");
                         }
                         update(Some(latest));
@@ -190,21 +239,13 @@ async fn poll_input(
     }
 }
 
-fn marker(stick: Stick, threshold: f64) -> (f64, f64) {
-    let x = f64::from(stick.x);
-    let y = f64::from(stick.y);
-    let radius = x.hypot(y);
-    let (sin, cos) = flick_stick_angle(x, y, threshold).sin_cos();
-    (radius * sin, -radius * cos)
-}
-
 fn draw(
     area: &gtk::DrawingArea,
     cr: &gtk::cairo::Context,
     width: i32,
     height: i32,
     threshold: f64,
-    stick: Option<Stick>,
+    marker: Option<(f64, f64)>,
     adjusted: bool,
 ) {
     // Leave room for a diagonal's travel when it snaps onto a cardinal axis.
@@ -242,8 +283,7 @@ fn draw(
     cr.line_to(x, y + radius);
     let _ = cr.stroke();
 
-    if let Some(stick) = stick {
-        let (dx, dy) = marker(stick, if adjusted { threshold } else { 0.0 });
+    if let Some((dx, dy)) = marker {
         let color_value = if adjusted { accent } else { fg };
         color(color_value, 0.5);
         cr.set_line_width(2.0);
@@ -288,15 +328,19 @@ mod tests {
 
     #[test]
     fn preview_shares_the_runtime_snap_boundary_and_preserves_travel() {
-        let stick = Stick { x: 0.08, y: -0.8 };
-        let physical = marker(stick, 0.0);
-        assert!((physical.0 - f64::from(stick.x)).abs() < 1e-9);
-        let transition = marker(stick, 4.0_f64.to_radians());
-        assert!((0.0..physical.0).contains(&transition.0));
-        let snapped = marker(stick, 8.0_f64.to_radians());
-        assert_eq!(snapped.0, 0.0);
-        assert!((snapped.1 + physical.0.hypot(physical.1)).abs() < 1e-9);
-        assert_eq!(marker(Stick::default(), 0.2), (0.0, 0.0));
+        let mut sample = PreviewSample::default();
+        let mut direction = FlickDirection::default();
+        sample.update(Stick::default(), &mut direction);
+        sample.update(Stick { x: 0.08, y: -0.99 }, &mut direction);
+        let threshold = 8.0_f64.to_radians();
+        assert_eq!(sample.adjusted_marker(threshold, 0.5).0, 0.0);
+        sample.update(Stick { x: 0.1, y: -0.99 }, &mut direction);
+        let slow = sample.adjusted_marker(threshold, 0.5);
+        let full = sample.adjusted_marker(threshold, 1.0);
+        assert!(slow.0 > 0.0 && full.0 > slow.0);
+        assert!((slow.0.hypot(slow.1) - full.0.hypot(full.1)).abs() < 1e-9);
+        sample.update(Stick::default(), &mut direction);
+        assert_eq!(sample.adjusted_marker(threshold, 0.5), (0.0, 0.0));
         assert_eq!(
             hidraw_path("/dev/hidraw6"),
             Some(PathBuf::from("/dev/hidraw6"))

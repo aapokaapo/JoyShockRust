@@ -14,7 +14,9 @@ use joyshockrust_input::{
 };
 use joyshockrust_motion::{
     Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
-    aim_response::{DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, GyroResponse},
+    aim_response::{
+        DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse,
+    },
 };
 
 use super::{
@@ -43,6 +45,7 @@ pub struct Options {
     pub binding: Binding,
     pub flick_stick: Option<f64>,
     pub flick_axial_threshold_deg: Option<f64>,
+    pub flick_steering_sensitivity: Option<f64>,
     pub response: GyroResponse,
     pub sensitivity: Sensitivity,
     pub game_calibration: GameCalibration,
@@ -127,6 +130,11 @@ impl Options {
             .unwrap_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
     }
 
+    fn flick_steering_sensitivity(self) -> f64 {
+        self.flick_steering_sensitivity
+            .unwrap_or(DEFAULT_FLICK_STEERING_SENSITIVITY)
+    }
+
     fn flick_scale(self) -> Option<f64> {
         self.flick_stick
             .map(|scale| self.game_calibration.scale(scale))
@@ -193,7 +201,9 @@ impl GyroMouse {
             bias_writer,
             gate: GyroGate::new(options.binding),
             flick: options.flick_scale().map(|scale| {
-                FlickStick::new(scale).with_axial_threshold(options.flick_axial_threshold())
+                FlickStick::new(scale)
+                    .with_axial_threshold(options.flick_axial_threshold())
+                    .with_steering_sensitivity(options.flick_steering_sensitivity())
             }),
         })
     }
@@ -206,6 +216,7 @@ impl GyroMouse {
         if let (Some(flick), Some(scale)) = (&mut self.flick, options.flick_scale()) {
             flick.set_counts_per_degree(scale);
             flick.set_axial_threshold(options.flick_axial_threshold());
+            flick.set_steering_sensitivity(options.flick_steering_sensitivity());
         }
     }
 
