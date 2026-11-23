@@ -550,6 +550,38 @@ fn remembered_profile_and_emulation_controls_work_across_service_restarts() {
     );
     check(&["virtual_gamepad_enabled=false", "gyro_mouse_enabled=true"]);
     assert!(
+        run(&["--set-emulation-master".as_ref(), "off".as_ref()])
+            .status
+            .success()
+    );
+    check(&[
+        "emulation_master_enabled=false",
+        "virtual_gamepad_enabled=false",
+        "gyro_mouse_enabled=false",
+        "virtual_gamepad_selected=false",
+        "gyro_mouse_selected=true",
+    ]);
+    assert!(
+        !run(&["--set-gamepad".as_ref(), "on".as_ref()])
+            .status
+            .success()
+    );
+    assert!(
+        !run(&["--set-gyro-mouse".as_ref(), "off".as_ref()])
+            .status
+            .success()
+    );
+    assert!(
+        run(&["--set-emulation-master".as_ref(), "on".as_ref()])
+            .status
+            .success()
+    );
+    check(&[
+        "emulation_master_enabled=true",
+        "virtual_gamepad_enabled=false",
+        "gyro_mouse_enabled=true",
+    ]);
+    assert!(
         run(&["--set-emulation".as_ref(), "on".as_ref()])
             .status
             .success()

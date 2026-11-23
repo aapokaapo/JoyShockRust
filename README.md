@@ -668,12 +668,13 @@ profile or the explicit **Default mappings** choice on restart. If a
 remembered file cannot be loaded, it falls back to the startup profile.
 **Quit JoyShockRust** stops the bridge and closes the tray.
 
-Use **Gamepad emulation** and **Gyro mouse** to switch each output
-independently. **Gamepad and gyro mouse** switches both together. If only
-one is enabled, the combined switch enables both. Enabling gyro mouse on
-a profile without gyro settings uses the default gyro mapping. These
-switches apply for the life of the bridge process. The CLI equivalents
-are `--set-gamepad`, `--set-gyro-mouse` and `--set-emulation`, each
+**Gamepad and gyro mouse** is the master switch. With it off, both
+outputs are disabled and the **Gyro mouse** and **Gamepad emulation**
+choices are grayed out. Turning the master back on restores the two
+selections. Enabling gyro mouse on a profile without gyro settings uses
+the default gyro mapping. These settings apply for the life of the
+bridge process. The corresponding CLI flags are
+`--set-emulation-master`, `--set-gyro-mouse` and `--set-gamepad`, each
 followed by `on` or `off`.
 
 **Profile editor** opens the editor on the active file when available.

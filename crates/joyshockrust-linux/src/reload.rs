@@ -43,6 +43,7 @@ const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
 const SET_GAMEPAD_PREFIX: &[u8] = b"\0set-gamepad\n";
 const SET_GYRO_MOUSE_PREFIX: &[u8] = b"\0set-gyro-mouse\n";
 const SET_EMULATION_PREFIX: &[u8] = b"\0set-emulation\n";
+const SET_EMULATION_MASTER_PREFIX: &[u8] = b"\0set-emulation-master\n";
 const SET_OUTPUTS_PREFIX: &[u8] = b"\0set-outputs\n";
 
 pub struct Reload {
@@ -156,6 +157,7 @@ pub enum OutputTarget {
     Gamepad,
     GyroMouse,
     Both,
+    Master,
 }
 
 impl OutputTarget {
@@ -164,6 +166,7 @@ impl OutputTarget {
             "--set-gamepad" => Some(Self::Gamepad),
             "--set-gyro-mouse" => Some(Self::GyroMouse),
             "--set-emulation" => Some(Self::Both),
+            "--set-emulation-master" => Some(Self::Master),
             _ => None,
         }
     }
@@ -173,6 +176,7 @@ impl OutputTarget {
             Self::Gamepad => SET_GAMEPAD_PREFIX,
             Self::GyroMouse => SET_GYRO_MOUSE_PREFIX,
             Self::Both => SET_EMULATION_PREFIX,
+            Self::Master => SET_EMULATION_MASTER_PREFIX,
         }
     }
 
@@ -186,6 +190,7 @@ impl OutputTarget {
             Self::Gamepad => (enabled, gyro),
             Self::GyroMouse => (gamepad, Some(enabled)),
             Self::Both => (enabled, Some(enabled)),
+            Self::Master => (gamepad, gyro),
         }
     }
 }
@@ -217,6 +222,7 @@ impl Request<'_> {
             OutputTarget::Gamepad,
             OutputTarget::GyroMouse,
             OutputTarget::Both,
+            OutputTarget::Master,
         ]
         .into_iter()
         .find_map(|target| {

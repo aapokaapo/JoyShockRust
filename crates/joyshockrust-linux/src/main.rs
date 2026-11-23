@@ -70,6 +70,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --set-gamepad on|off [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --set-gyro-mouse on|off [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --set-emulation on|off [RELOAD_SOCKET]\n",
+        "       joyshockrust-linux --set-emulation-master on|off [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --set-outputs pause|resume [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --select-controller ID|any [--controller-model MODEL] [--usb|--bluetooth|--auto-transport] [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
@@ -434,6 +435,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     reload::OutputTarget::Gamepad => "Virtual gamepad",
                     reload::OutputTarget::GyroMouse => "Gyro mouse",
                     reload::OutputTarget::Both => "Gamepad and gyro mouse",
+                    reload::OutputTarget::Master => "Emulation master switch",
                 };
                 println!("{label} {}", if enabled { "on" } else { "off" });
             } else if controller_selection.is_some() {
@@ -636,7 +638,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         status.set_gamepad_enabled(bridge.virtual_gamepad);
         status.set_gamepad_kind(bridge.gamepad);
     }
-    let mut gyro_override = None;
+    let mut emulation = Emulation::default();
     if let Some(target) = benchmark_target {
         let (mut input, identity, path) = if let Some(path) = path {
             let (input, identity) = discovery::open_controller(&path, filter)
@@ -662,7 +664,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 path: &path,
                 grab_touchpad,
                 outputs_paused: None,
-                gyro_override: &mut gyro_override,
+                emulation: &mut emulation,
             },
             &mut bridge,
             Some(&mut measurement),
@@ -694,7 +696,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 path: &path,
                 grab_touchpad,
                 outputs_paused: None,
-                gyro_override: &mut gyro_override,
+                emulation: &mut emulation,
             },
             &mut bridge,
             None,
@@ -719,7 +721,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         path,
                         grab_touchpad,
                         outputs_paused: Some(&outputs_paused),
-                        gyro_override: &mut gyro_override,
+                        emulation: &mut emulation,
                     },
                     &mut bridge,
                     None,
@@ -741,12 +743,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         }
                         Some(reload::Update::Selection(selection)) => Some(selection),
                         Some(reload::Update::Emulation(target, enabled)) => {
-                            (bridge.virtual_gamepad, gyro_override) =
-                                target.settings(enabled, bridge.virtual_gamepad, gyro_override);
-                            if let Some(status) = status {
-                                status.set_gamepad_enabled(bridge.virtual_gamepad);
-                                status.set_gyro_override(gyro_override);
-                            }
+                            let Some((next, gamepad)) =
+                                emulation.changed(target, enabled, bridge.virtual_gamepad)
+                            else {
+                                reload.rejected("emulation is disabled by the master switch");
+                                return Ok(None);
+                            };
+                            emulation = next;
+                            bridge.virtual_gamepad = gamepad;
+                            emulation.publish(status, gamepad);
                             None
                         }
                         Some(reload::Update::OutputsPaused(paused)) => {
@@ -768,14 +773,70 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 }
 
 #[cfg(target_os = "linux")]
-fn effective_gyro(
-    configured: Option<gyro_mouse::Options>,
-    enabled: Option<bool>,
-) -> Option<gyro_mouse::Options> {
-    match enabled {
-        Some(true) => Some(configured.unwrap_or_default()),
-        Some(false) => None,
-        None => configured,
+#[derive(Clone, Copy)]
+struct Emulation {
+    master: bool,
+    gyro_override: Option<bool>,
+}
+
+#[cfg(target_os = "linux")]
+impl Default for Emulation {
+    fn default() -> Self {
+        Self {
+            master: true,
+            gyro_override: None,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Emulation {
+    fn gamepad(self, selected: bool) -> bool {
+        self.master && selected
+    }
+
+    fn gyro(self, configured: Option<gyro_mouse::Options>) -> Option<gyro_mouse::Options> {
+        if !self.master {
+            return None;
+        }
+        match self.gyro_override {
+            Some(true) => Some(configured.unwrap_or_default()),
+            Some(false) => None,
+            None => configured,
+        }
+    }
+
+    fn changed(
+        self,
+        target: reload::OutputTarget,
+        enabled: bool,
+        gamepad: bool,
+    ) -> Option<(Self, bool)> {
+        use reload::OutputTarget;
+        if !self.master && target != OutputTarget::Master {
+            return None;
+        }
+        let (gamepad, gyro_override) = target.settings(enabled, gamepad, self.gyro_override);
+        let master = if target == OutputTarget::Master {
+            enabled
+        } else {
+            self.master
+        };
+        Some((
+            Self {
+                master,
+                gyro_override,
+            },
+            gamepad,
+        ))
+    }
+
+    fn publish(self, status: Option<&status::StatusSocket>, gamepad: bool) {
+        if let Some(status) = status {
+            status.set_gamepad_enabled(gamepad);
+            status.set_gyro_override(self.gyro_override);
+            status.set_emulation_master(self.master);
+        }
     }
 }
 
@@ -842,7 +903,7 @@ struct SessionDevice<'a> {
     path: &'a std::path::Path,
     grab_touchpad: bool,
     outputs_paused: Option<&'a std::cell::Cell<bool>>,
-    gyro_override: &'a mut Option<bool>,
+    emulation: &'a mut Emulation,
 }
 
 #[cfg(target_os = "linux")]
@@ -857,7 +918,7 @@ fn serve_session(
         path,
         grab_touchpad,
         outputs_paused,
-        gyro_override,
+        emulation,
     }: SessionDevice<'_>,
     bridge: &mut profile::BridgeOptions,
     mut measurement: Option<&mut benchmark::Benchmark>,
@@ -867,12 +928,12 @@ fn serve_session(
         time::Instant,
     };
 
-    let mut active_gyro = effective_gyro(runtime.gyro, *gyro_override);
+    let mut active_gyro = emulation.gyro(runtime.gyro);
     let mut mouse = open_mouse(input, identity.transport, active_gyro)?;
     let mut keyboard = keyboard::Keyboard::open(runtime.keyboard.as_ref(), status)?;
     let keyboard_deadline = Cell::new(None);
     let reload_input = reload.map(|_| input.try_clone()).transpose()?;
-    let (mut output, mut rumble, feedback) = if bridge.virtual_gamepad {
+    let (mut output, mut rumble, feedback) = if emulation.gamepad(bridge.virtual_gamepad) {
         let OpenGamepad {
             device,
             rumble,
@@ -950,15 +1011,20 @@ fn serve_session(
                             return Ok(ControlFlow::Continue(()));
                         }
                         Some(reload::Update::Emulation(target, enabled)) => {
-                            let (gamepad, next_override) =
-                                target.settings(enabled, bridge.virtual_gamepad, *gyro_override);
-                            let next_gyro = effective_gyro(runtime.gyro, next_override);
+                            let Some((next_emulation, gamepad_selection)) =
+                                emulation.changed(target, enabled, bridge.virtual_gamepad)
+                            else {
+                                reload.rejected("emulation is disabled by the master switch");
+                                return Ok(ControlFlow::Continue(()));
+                            };
+                            let gamepad = next_emulation.gamepad(gamepad_selection);
+                            let next_gyro = next_emulation.gyro(runtime.gyro);
                             let input = reload_input.as_ref().expect("reload descriptor");
                             let replacements = (|| {
                                 let next_mouse = (next_gyro != active_gyro)
                                     .then(|| open_mouse(input, identity.transport, next_gyro))
                                     .transpose()?;
-                                let next_gamepad = (gamepad && !bridge.virtual_gamepad)
+                                let next_gamepad = (gamepad && output.is_none())
                                     .then(|| open_gamepad(input, *bridge))
                                     .transpose()?;
                                 Ok::<_, std::io::Error>((next_mouse, next_gamepad))
@@ -982,7 +1048,7 @@ fn serve_session(
                                 output = Some(device);
                                 rumble = forwarder;
                                 feedback.replace(descriptor);
-                            } else if !gamepad && bridge.virtual_gamepad {
+                            } else if !gamepad && output.is_some() {
                                 feedback.take();
                                 if let Some(mut device) = output.take()
                                     && let Err(err) = state
@@ -999,13 +1065,12 @@ fn serve_session(
                                 layer_state = gamepad::RemapState::default();
                                 touch_click = touchpad::ClickState::default();
                             }
-                            bridge.virtual_gamepad = gamepad;
-                            *gyro_override = next_override;
+                            bridge.virtual_gamepad = gamepad_selection;
+                            *emulation = next_emulation;
                             active_gyro = next_gyro;
+                            emulation.publish(status, gamepad_selection);
                             if let Some(status) = status {
-                                status.set_gamepad_enabled(gamepad);
                                 status.set_gamepad_device(output.as_mut());
-                                status.set_gyro_override(next_override);
                             }
                             reload.applied(status);
                             return Ok(ControlFlow::Continue(()));
@@ -1013,25 +1078,24 @@ fn serve_session(
                         None => return Ok(ControlFlow::Continue(())),
                     };
                     let next_kind = reload.profile_gamepad(&next);
-                    let replacement_gamepad =
-                        if bridge.virtual_gamepad && bridge.gamepad != next_kind {
-                            let input = reload_input.as_ref().expect("reload descriptor");
-                            match open_gamepad(
-                                input,
-                                profile::BridgeOptions {
-                                    gamepad: next_kind,
-                                    ..*bridge
-                                },
-                            ) {
-                                Ok(gamepad) => Some(gamepad),
-                                Err(error) => {
-                                    reload.rejected(&error);
-                                    return Ok(ControlFlow::Continue(()));
-                                }
+                    let replacement_gamepad = if output.is_some() && bridge.gamepad != next_kind {
+                        let input = reload_input.as_ref().expect("reload descriptor");
+                        match open_gamepad(
+                            input,
+                            profile::BridgeOptions {
+                                gamepad: next_kind,
+                                ..*bridge
+                            },
+                        ) {
+                            Ok(gamepad) => Some(gamepad),
+                            Err(error) => {
+                                reload.rejected(&error);
+                                return Ok(ControlFlow::Continue(()));
                             }
-                        } else {
-                            None
-                        };
+                        }
+                    } else {
+                        None
+                    };
                     let replacement_keyboard = if runtime.keyboard != next.keyboard {
                         match keyboard::Keyboard::open(next.keyboard.as_ref(), status) {
                             Ok(device) => Some(device),
@@ -1043,7 +1107,7 @@ fn serve_session(
                     } else {
                         None
                     };
-                    let next_gyro = effective_gyro(next.gyro, *gyro_override);
+                    let next_gyro = emulation.gyro(next.gyro);
                     if let (Some(mouse), Some(current), Some(next)) =
                         (&mut mouse, active_gyro, next_gyro)
                         && (gyro_mouse::Options {

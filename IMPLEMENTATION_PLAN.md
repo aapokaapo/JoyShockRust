@@ -272,7 +272,8 @@ response previews and editable game calibration values. The GTK 4 editor
 uses libadwaita navigation and follows the system appearance. The tray
 summarizes controller telemetry on one row, omits USB battery status,
 and labels the active controller and profile submenus. It can enable and
-disable gamepad and gyro mouse outputs individually or together. The
+disable gamepad and gyro mouse individually, with a master switch
+that retains both selections. The
 bridge restores the previous active profile on service startup. The Gyro page
 supports separate or linked sensitivity adjustment. The editor has a separate
 picker for opening and creating profile drafts.

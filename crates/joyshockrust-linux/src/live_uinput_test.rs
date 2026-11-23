@@ -191,7 +191,7 @@ fn uinput_live_gamepad_toggle() {
                 path: Path::new("/dev/hidraw-test"),
                 grab_touchpad: false,
                 outputs_paused: Some(&outputs_paused),
-                gyro_override: &mut None,
+                emulation: &mut crate::Emulation::default(),
             },
             &mut bridge,
             None,

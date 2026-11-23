@@ -486,8 +486,9 @@ live profile selections in a separate file next to the startup profile.
 An explicit unload is remembered as default mappings. The startup file
 is still the target of a startup profile reload and serves as fallback
 if a remembered profile cannot be opened or validated.
-Gamepad and gyro mouse output overrides are process-local and independent.
-The combined control applies both settings using one bridge request.
+Gamepad and gyro mouse selections are process-local and independent.
+The master switch suppresses both outputs while retaining the selections.
+Status exposes the master, individual choices, and effective output states.
 
 ## Desktop process lifecycle
 
