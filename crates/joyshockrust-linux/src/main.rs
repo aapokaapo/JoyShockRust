@@ -60,6 +60,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --unload-profile [RELOAD_SOCKET]\n",
+        "       joyshockrust-linux --set-gamepad on|off [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --select-controller ID|any [--controller-model MODEL] [--usb|--bluetooth|--auto-transport] [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
         "       joyshockrust-linux --calibrate-game --profile PATH [/dev/hidrawN]\n",
@@ -94,6 +95,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut reload_query = false;
     let mut load_profile_path = None;
     let mut unload_profile = false;
+    let mut set_gamepad = None;
     let mut controller_selection = None;
     let mut reload_path = None;
     let mut status_path = None;
@@ -205,6 +207,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             ));
         } else if arg == "--unload-profile" && !unload_profile {
             unload_profile = true;
+        } else if arg == "--set-gamepad" && set_gamepad.is_none() {
+            set_gamepad = Some(
+                match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+                    Some("on") => true,
+                    Some("off") => false,
+                    _ => return Err("expected on or off after --set-gamepad".into()),
+                },
+            );
         } else if arg == "--select-controller" && controller_selection.is_none() {
             let value = args.next().ok_or("expected a controller HID ID or any")?;
             controller_selection = Some(reload::parse_controller_selection(
@@ -325,6 +335,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         + u8::from(reload_query)
         + u8::from(load_profile_path.is_some())
         + u8::from(unload_profile)
+        + u8::from(set_gamepad.is_some())
         + u8::from(controller_selection.is_some());
     if show_controller_id && !diagnose && !list_controllers {
         return Err("--show-controller-id requires --diagnose or --list-controllers".into());
@@ -361,6 +372,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 reload::load_profile(source, path.as_deref())
             } else if unload_profile {
                 reload::unload_profile(path.as_deref())
+            } else if let Some(enabled) = set_gamepad {
+                reload::set_gamepad(enabled, path.as_deref())
             } else if let Some(selection) = controller_selection {
                 reload::select_controller(selection, controller_model, transport, path.as_deref())
             } else {
@@ -374,6 +387,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 println!("Loaded profile: {}", source.display());
             } else if unload_profile {
                 println!("Profile unloaded");
+            } else if let Some(enabled) = set_gamepad {
+                println!("Virtual gamepad {}", if enabled { "on" } else { "off" });
             } else if controller_selection.is_some() {
                 println!("Controller selection updated");
             }
@@ -508,7 +523,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         controller_id: controller_id.flatten(),
     };
     let configured_bridge = runtime.bridge.unwrap_or_default();
-    let bridge = profile::BridgeOptions {
+    let mut bridge = profile::BridgeOptions {
         gamepad: gamepad_kind.unwrap_or(configured_bridge.gamepad),
         rumble: rumble_enabled || configured_bridge.rumble,
         ..configured_bridge
@@ -526,6 +541,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let reload = reload.as_ref();
     if let Some(status) = status {
         status.set_filter(filter);
+        status.set_gamepad_enabled(bridge.virtual_gamepad);
     }
     if let Some(target) = benchmark_target {
         let (mut input, identity, path) = if let Some(path) = path {
@@ -547,7 +563,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             reload,
             status,
             identity,
-            (bridge, filter, &path),
+            (&mut bridge, filter, &path),
             Some(&mut measurement),
         );
         measurement.write(identity, result.is_err(), std::io::stdout().lock())?;
@@ -572,7 +588,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             reload,
             status,
             identity,
-            (bridge, filter, &path),
+            (&mut bridge, filter, &path),
             None,
         )?;
     } else {
@@ -588,7 +604,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     reload,
                     status,
                     identity,
-                    (bridge, filter, path),
+                    (&mut bridge, filter, path),
                     None,
                 ),
                 discovery::Event::Reload(reload, current_filter) => {
@@ -601,6 +617,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             None
                         }
                         Some(reload::Update::Selection(selection)) => Some(selection),
+                        Some(reload::Update::Gamepad(enabled)) => {
+                            bridge.virtual_gamepad = enabled;
+                            if let Some(status) = status {
+                                status.set_gamepad_enabled(enabled);
+                            }
+                            None
+                        }
                         None => return Ok(None),
                     };
                     reload.applied(status);
@@ -631,26 +654,20 @@ fn open_mouse(
 }
 
 #[cfg(target_os = "linux")]
-fn serve_session(
-    input: &mut std::fs::File,
-    runtime: &mut profile::RuntimeOptions,
-    reload: Option<&reload::Reload>,
-    status: Option<&status::StatusSocket>,
-    identity: Identity,
-    (bridge, filter, path): (
-        profile::BridgeOptions,
-        discovery::ControllerFilter,
-        &std::path::Path,
-    ),
-    mut measurement: Option<&mut benchmark::Benchmark>,
-) -> std::io::Result<Option<discovery::ControllerFilter>> {
-    use std::{cell::Cell, os::fd::AsFd, time::Instant};
+struct OpenGamepad {
+    device: evdev::uinput::VirtualDevice,
+    rumble: Option<rumble::Rumble>,
+    feedback: Option<std::os::fd::OwnedFd>,
+}
 
-    let mut mouse = open_mouse(input, identity.transport, runtime.gyro)?;
-    let mut keyboard = keyboard::Keyboard::open(runtime.keyboard.as_ref(), status)?;
-    let keyboard_deadline = Cell::new(None);
-    let reload_input = reload.map(|_| input.try_clone()).transpose()?;
-    let mut rumble = if bridge.virtual_gamepad && bridge.rumble {
+#[cfg(target_os = "linux")]
+fn open_gamepad(
+    input: &std::fs::File,
+    bridge: profile::BridgeOptions,
+) -> std::io::Result<OpenGamepad> {
+    use std::os::fd::AsFd;
+
+    let rumble = if bridge.rumble {
         match rumble::Rumble::open(input) {
             Ok(rumble) => Some(rumble),
             Err(err) => {
@@ -661,16 +678,53 @@ fn serve_session(
     } else {
         None
     };
-    let mut output = bridge
-        .virtual_gamepad
-        .then(|| gamepad::open(bridge.gamepad, rumble.is_some()))
-        .transpose()
+    let output = gamepad::open(bridge.gamepad, rumble.is_some())
         .map_err(|err| std::io::Error::other(format!("could not create uinput gamepad: {err}")))?;
-    let feedback = output
+    let feedback = rumble
         .as_ref()
-        .filter(|_| rumble.is_some())
-        .map(|output| output.as_fd().try_clone_to_owned())
+        .map(|_| output.as_fd().try_clone_to_owned())
         .transpose()?;
+    Ok(OpenGamepad {
+        device: output,
+        rumble,
+        feedback,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn serve_session(
+    input: &mut std::fs::File,
+    runtime: &mut profile::RuntimeOptions,
+    reload: Option<&reload::Reload>,
+    status: Option<&status::StatusSocket>,
+    identity: Identity,
+    (bridge, filter, path): (
+        &mut profile::BridgeOptions,
+        discovery::ControllerFilter,
+        &std::path::Path,
+    ),
+    mut measurement: Option<&mut benchmark::Benchmark>,
+) -> std::io::Result<Option<discovery::ControllerFilter>> {
+    use std::{
+        cell::{Cell, RefCell},
+        time::Instant,
+    };
+
+    let mut mouse = open_mouse(input, identity.transport, runtime.gyro)?;
+    let mut keyboard = keyboard::Keyboard::open(runtime.keyboard.as_ref(), status)?;
+    let keyboard_deadline = Cell::new(None);
+    let reload_input = reload.map(|_| input.try_clone()).transpose()?;
+    let (mut output, mut rumble, feedback) = if bridge.virtual_gamepad {
+        let OpenGamepad {
+            device,
+            rumble,
+            feedback,
+        } = open_gamepad(input, *bridge)?;
+        (Some(device), rumble, feedback)
+    } else {
+        (None, None, None)
+    };
+    let feedback = RefCell::new(feedback);
     let mut state = gamepad::GamepadState::new(bridge.gamepad);
     let mut layer_state = gamepad::RemapState::default();
     let mut touch_click = touchpad::ClickState::default();
@@ -687,7 +741,7 @@ fn serve_session(
         identity,
         reload,
         status,
-        feedback.as_ref().map(AsFd::as_fd),
+        Some(&feedback),
         ReportTimers {
             measurement: measurement.as_deref_mut(),
             keyboard: Some(&keyboard_deadline),
@@ -719,6 +773,50 @@ fn serve_session(
                             return Ok(ControlFlow::Break(()));
                         }
                         Some(reload::Update::Selection(_)) => {
+                            reload.applied(status);
+                            return Ok(ControlFlow::Continue(()));
+                        }
+                        Some(reload::Update::Gamepad(enabled)) => {
+                            if enabled != bridge.virtual_gamepad {
+                                if enabled {
+                                    let input = reload_input.as_ref().expect("reload descriptor");
+                                    match open_gamepad(input, *bridge) {
+                                        Ok(OpenGamepad {
+                                            device,
+                                            rumble: forwarder,
+                                            feedback: descriptor,
+                                        }) => {
+                                            output = Some(device);
+                                            rumble = forwarder;
+                                            feedback.replace(descriptor);
+                                        }
+                                        Err(err) => {
+                                            reload.rejected(&err);
+                                            return Ok(ControlFlow::Continue(()));
+                                        }
+                                    }
+                                } else {
+                                    feedback.take();
+                                    if let Some(mut device) = output.take()
+                                        && let Err(err) = state.publish(
+                                            joyshockrust_core::Controls::default(),
+                                            |events| device.emit(events),
+                                        )
+                                    {
+                                        eprintln!(
+                                            "Could not release virtual gamepad before removing it: {err}"
+                                        );
+                                    }
+                                    rumble = None;
+                                    state = gamepad::GamepadState::new(bridge.gamepad);
+                                    layer_state = gamepad::RemapState::default();
+                                    touch_click = touchpad::ClickState::default();
+                                }
+                                bridge.virtual_gamepad = enabled;
+                                if let Some(status) = status {
+                                    status.set_gamepad_enabled(enabled);
+                                }
+                            }
                             reload.applied(status);
                             return Ok(ControlFlow::Continue(()));
                         }
@@ -910,7 +1008,7 @@ fn forward_reports<'a>(
     identity: Identity,
     reload: Option<&'a reload::Reload>,
     status: Option<&status::StatusSocket>,
-    feedback: Option<std::os::fd::BorrowedFd<'_>>,
+    feedback: Option<&std::cell::RefCell<Option<std::os::fd::OwnedFd>>>,
     timers: ReportTimers<'_>,
     mut publish: impl FnMut(SessionEvent<'a>) -> std::io::Result<ControlFlow<()>>,
 ) -> std::io::Result<()> {
@@ -918,7 +1016,7 @@ fn forward_reports<'a>(
     use nix::poll::PollFlags;
     use std::{
         io::{self, Read},
-        os::fd::AsFd,
+        os::fd::{AsFd, AsRawFd},
         time::Instant,
     };
 
@@ -934,12 +1032,27 @@ fn forward_reports<'a>(
             .into_iter()
             .chain(timers.keyboard.and_then(std::cell::Cell::get))
             .min();
-        let (ready, request, feedback_ready) =
-            reload::wait(input.as_fd(), reload, status, feedback, deadline)?;
-        if let Some(request) = request
-            && publish(SessionEvent::Reload(request))?.is_break()
-        {
-            return Ok(());
+        let ((ready, request, mut feedback_ready), polled_feedback) = {
+            let feedback = feedback.map(std::cell::RefCell::borrow);
+            let descriptor = feedback
+                .as_deref()
+                .and_then(Option::as_ref)
+                .map(AsFd::as_fd);
+            (
+                reload::wait(input.as_fd(), reload, status, descriptor, deadline)?,
+                descriptor.map(|fd| fd.as_raw_fd()),
+            )
+        };
+        if let Some(request) = request {
+            if publish(SessionEvent::Reload(request))?.is_break() {
+                return Ok(());
+            }
+            let current_feedback =
+                feedback.and_then(|socket| socket.borrow().as_ref().map(AsRawFd::as_raw_fd));
+            // A control request can replace the polled descriptor. Read feedback on the next wake.
+            if current_feedback != polled_feedback {
+                feedback_ready = PollFlags::empty();
+            }
         }
         if ready.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Ok(());
@@ -1055,10 +1168,9 @@ mod tests {
 
     #[test]
     fn readiness_loop_services_feedback_when_input_is_idle() {
-        use std::os::fd::AsFd;
-
         let (_sender, receiver) = UnixDatagram::pair().unwrap();
         let (game, feedback) = UnixDatagram::pair().unwrap();
+        let feedback = std::cell::RefCell::new(Some(feedback.into()));
         game.send(b"feedback").unwrap();
         let mut input = File::from(OwnedFd::from(receiver));
         let result = super::forward_reports(
@@ -1066,7 +1178,7 @@ mod tests {
             USB_EDGE,
             None,
             None,
-            Some(feedback.as_fd()),
+            Some(&feedback),
             super::ReportTimers::default(),
             |event| {
                 assert!(matches!(event, super::SessionEvent::Feedback));

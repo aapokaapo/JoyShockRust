@@ -23,6 +23,7 @@ pub struct StatusSocket {
     filter: Cell<ControllerFilter>,
     profile_source: Cell<ProfileSource>,
     active_hidraw: RefCell<Option<String>>,
+    gamepad_enabled: Cell<bool>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -91,6 +92,7 @@ impl StatusSocket {
             filter: Cell::default(),
             profile_source: Cell::default(),
             active_hidraw: RefCell::default(),
+            gamepad_enabled: Cell::new(true),
         })
     }
 
@@ -110,6 +112,10 @@ impl StatusSocket {
         // Preserve a single key/value line even when a manual device path includes control characters.
         self.active_hidraw
             .replace(Some(path.to_string_lossy().escape_debug().to_string()));
+    }
+
+    pub fn set_gamepad_enabled(&self, enabled: bool) {
+        self.gamepad_enabled.set(enabled);
     }
 
     pub fn update(&self, identity: Option<Identity>, gyro_configured: bool) {
@@ -207,8 +213,9 @@ impl StatusSocket {
         let profile_source = self.profile_source.get().as_str();
         let active_hidraw = self.active_hidraw.borrow();
         let active_hidraw = active_hidraw.as_deref().unwrap_or("none");
+        let gamepad_enabled = self.gamepad_enabled.get();
         let response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\nactive_hidraw={active_hidraw}\n",
+            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\nactive_hidraw={active_hidraw}\nvirtual_gamepad_enabled={gamepad_enabled}\n",
             snapshot.gyro_configured,
             reports.decoded,
             reports.rejected,
@@ -303,6 +310,7 @@ mod tests {
             filter: Cell::default(),
             profile_source: Cell::default(),
             active_hidraw: RefCell::default(),
+            gamepad_enabled: Cell::new(true),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
@@ -320,13 +328,14 @@ mod tests {
         sender.send(&frame).unwrap();
         let mut input = File::from(OwnedFd::from(receiver));
         let (feedback_sender, feedback) = UnixDatagram::pair().unwrap();
+        let feedback = std::cell::RefCell::new(Some(feedback.into()));
         let mut client = None;
         crate::forward_reports(
             &mut input,
             identity,
             None,
             Some(&status),
-            Some(feedback.as_fd()),
+            Some(&feedback),
             crate::ReportTimers::default(),
             |event| match event {
                 crate::SessionEvent::Report(_) => {
@@ -356,7 +365,7 @@ mod tests {
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         assert!(response.ends_with(
-            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=1\nuinput_mouse_button_batches=2\nprofile_source=defaults\nactive_hidraw=/dev/hidraw6\n"
+            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=1\nuinput_mouse_button_batches=2\nprofile_source=defaults\nactive_hidraw=/dev/hidraw6\nvirtual_gamepad_enabled=true\n"
         ));
         let reports = status.reports.get();
         let (start, initial_count) = reports.baseline.unwrap();
@@ -403,6 +412,7 @@ mod tests {
             filter: Cell::default(),
             profile_source: Cell::default(),
             active_hidraw: RefCell::default(),
+            gamepad_enabled: Cell::new(true),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
@@ -489,6 +499,7 @@ mod tests {
             filter: Cell::default(),
             profile_source: Cell::default(),
             active_hidraw: RefCell::default(),
+            gamepad_enabled: Cell::new(true),
         };
         let (_sender, input) = UnixStream::pair().unwrap();
 
@@ -567,7 +578,7 @@ mod tests {
             assert_eq!(
                 response,
                 format!(
-                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=0\nuinput_mouse_button_batches=0\nprofile_source=defaults\nactive_hidraw=none\n"
+                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=0\nuinput_mouse_button_batches=0\nprofile_source=defaults\nactive_hidraw=none\nvirtual_gamepad_enabled=true\n"
                 )
             );
         }

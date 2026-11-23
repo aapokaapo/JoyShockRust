@@ -150,8 +150,12 @@ gamepad = "xbox-series"
 rumble = true
 ```
 
-The gamepad options are `generic`, `xbox360` and `xbox-series`. Restart
-JoyShockRust to change `gamepad`, `virtual_gamepad` or `rumble`.
+The gamepad options are `generic`, `xbox360` and `xbox-series`. The profile
+sets the startup identity, rumble and `virtual_gamepad` default. To switch
+virtual gamepad emulation for the current process, use
+`joyshockrust-linux --set-gamepad off` or `--set-gamepad on`. The command
+keeps the physical controller session, gyro and keyboard mappings active.
+The selected state persists through reconnects and profile loads.
 
 ### Controller selection
 
@@ -490,6 +494,8 @@ are `defaults`, `command_line`, `startup` and `loaded`. A rejected load
 leaves the previously active source in effect.
 The `active_hidraw` field reports the device path for the active session
 and reads `none` while waiting for a controller.
+`virtual_gamepad_enabled` shows the effective emulation setting, including
+while the controller is disconnected.
 The status and reload sockets are under `$XDG_RUNTIME_DIR/joyshockrust/`
 and are removed when the service stops.
 

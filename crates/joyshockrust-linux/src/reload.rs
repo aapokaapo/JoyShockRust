@@ -35,6 +35,7 @@ use crate::{
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
 const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
 const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
+const SET_GAMEPAD_PREFIX: &[u8] = b"\0set-gamepad\n";
 
 pub struct Reload {
     path: Option<PathBuf>,
@@ -135,6 +136,7 @@ enum Client {
 pub enum Update {
     Profile(Box<RuntimeOptions>),
     Selection(ControllerFilter),
+    Gamepad(bool),
 }
 
 impl Request<'_> {
@@ -143,13 +145,27 @@ impl Request<'_> {
     }
 
     fn selection_payload(&self) -> Option<&[u8]> {
+        self.command_payload(SELECT_CONTROLLER_PREFIX)
+    }
+
+    fn command_payload(&self, prefix: &[u8]) -> Option<&[u8]> {
         match &self.client {
-            Some(Client::Load(_, data)) => data.strip_prefix(SELECT_CONTROLLER_PREFIX),
+            Some(Client::Load(_, data)) => data.strip_prefix(prefix),
             _ => None,
         }
     }
 
     pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
+        if let Some(payload) = self.command_payload(SET_GAMEPAD_PREFIX) {
+            return match payload {
+                b"on" => Some(Update::Gamepad(true)),
+                b"off" => Some(Update::Gamepad(false)),
+                _ => {
+                    self.rejected("expected on or off");
+                    None
+                }
+            };
+        }
         if self.is_unload() {
             return Some(Update::Profile(Box::default()));
         }
@@ -215,6 +231,11 @@ impl Request<'_> {
     }
 
     pub fn applied(self, status: Option<&StatusSocket>) {
+        if self.command_payload(SET_GAMEPAD_PREFIX).is_some() {
+            eprintln!("Virtual gamepad setting updated from CLI");
+            self.reply(b"applied\n");
+            return;
+        }
         if self.selection_payload().is_some() {
             eprintln!("Controller selection updated from CLI");
             self.reply(b"applied\n");
@@ -239,6 +260,11 @@ impl Request<'_> {
         self.reply(b"applied\n");
     }
     pub fn rejected(&self, err: impl Display) {
+        if self.command_payload(SET_GAMEPAD_PREFIX).is_some() {
+            eprintln!("Virtual gamepad setting rejected: {err}");
+            self.reply(b"rejected\n");
+            return;
+        }
         if self.selection_payload().is_some() {
             eprintln!("Controller selection rejected: {err}");
             self.reply(b"rejected\n");
@@ -326,6 +352,12 @@ pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<(
 
 pub fn unload_profile(reload_socket: Option<&Path>) -> io::Result<()> {
     send_update(UNLOAD_PROFILE_REQUEST, reload_socket, "profile unload")
+}
+
+pub fn set_gamepad(enabled: bool, reload_socket: Option<&Path>) -> io::Result<()> {
+    let mut payload = SET_GAMEPAD_PREFIX.to_vec();
+    payload.extend_from_slice(if enabled { b"on" } else { b"off" });
+    send_update(&payload, reload_socket, "virtual gamepad update")
 }
 
 pub fn parse_controller_selection(value: &str) -> Result<Option<ControllerId>, &'static str> {
@@ -754,5 +786,81 @@ mod tests {
         response.clear();
         second.read_to_string(&mut response).unwrap();
         assert_eq!(response, "applied\n");
+    }
+
+    #[test]
+    fn gamepad_command_replaces_feedback_after_a_ready_descriptor_is_closed() {
+        use joyshockrust_input::{DeviceModel, Transport};
+        use std::{cell::RefCell, fs::File, os::fd::OwnedFd};
+
+        let address =
+            SocketAddr::from_abstract_name(format!("joyshockrust-feedback-{}", process::id()))
+                .unwrap();
+        let load_socket = UnixDatagram::bind_addr(&address).unwrap();
+        load_socket.set_nonblocking(true).unwrap();
+        let reload = Reload {
+            path: None,
+            bridge_at_startup: BridgeOptions::default(),
+            allow_controller_switch: false,
+            signal: SignalFd::new(&SigSet::empty()).unwrap(),
+            listener: None,
+            load_socket: Some(load_socket),
+            outcome: Cell::new(Outcome::NotAttempted),
+        };
+        let client = UnixDatagram::bind_addr(
+            &SocketAddr::from_abstract_name(format!(
+                "joyshockrust-feedback-client-{}",
+                process::id()
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        client.connect_addr(&address).unwrap();
+        client.send(&[SET_GAMEPAD_PREFIX, b"on"].concat()).unwrap();
+
+        let (old_peer, old_feedback) = UnixStream::pair().unwrap();
+        let feedback = RefCell::new(Some(OwnedFd::from(old_feedback)));
+        drop(old_peer); // The original fd now reports HUP in the same poll as the command.
+        let (new_peer, new_feedback) = UnixDatagram::pair().unwrap();
+        let mut new_feedback = Some(OwnedFd::from(new_feedback));
+        new_peer.send(b"ready").unwrap();
+        let (_sender, receiver) = UnixDatagram::pair().unwrap();
+        let mut input = File::from(OwnedFd::from(receiver));
+        let mut measurement = crate::benchmark::Benchmark::new(2, Duration::from_secs(1));
+        let mut observed_feedback = false;
+        crate::forward_reports(
+            &mut input,
+            crate::hidraw::Identity {
+                model: DeviceModel::DualSense,
+                transport: Transport::Usb,
+            },
+            Some(&reload),
+            None,
+            Some(&feedback),
+            crate::ReportTimers {
+                measurement: Some(&mut measurement),
+                keyboard: None,
+            },
+            |event| match event {
+                crate::SessionEvent::Reload(request) => {
+                    assert!(matches!(
+                        request.resolve(ControllerFilter::default()),
+                        Some(Update::Gamepad(true))
+                    ));
+                    feedback.replace(new_feedback.take());
+                    request.applied(None);
+                    Ok(std::ops::ControlFlow::Continue(()))
+                }
+                crate::SessionEvent::Feedback => {
+                    assert!(new_feedback.is_none());
+                    observed_feedback = true;
+                    Ok(std::ops::ControlFlow::Break(()))
+                }
+                _ => unreachable!(),
+            },
+        )
+        .unwrap();
+        assert!(observed_feedback);
+        assert_eq!(reload.outcome(), "unavailable");
     }
 }

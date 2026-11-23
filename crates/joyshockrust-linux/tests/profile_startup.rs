@@ -329,7 +329,7 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    let check = |gyro, outcome, source| {
+    let check = |gyro, outcome, source, gamepad| {
         let output = Command::new(binary)
             .arg("--status")
             .arg(&status)
@@ -343,11 +343,22 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
             format!("gyro_configured={gyro}"),
             format!("last_reload={outcome}"),
             format!("profile_source={source}"),
+            format!("virtual_gamepad_enabled={gamepad}"),
         ] {
             assert!(stdout.lines().any(|line| line == expected), "{stdout}");
         }
     };
-    check(false, "unavailable", "command_line");
+    check(false, "unavailable", "command_line", true);
+    let toggle = |mode| {
+        let result = Command::new(binary)
+            .args(["--set-gamepad", mode])
+            .arg(&reload)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+    };
+    toggle("off");
+    check(false, "unavailable", "command_line", false);
     fs::write(&preset, "version = 1\n[gyro]\n").unwrap();
     let result = Command::new(binary)
         .arg("--load-profile")
@@ -356,7 +367,7 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check(true, "applied", "loaded");
+    check(true, "applied", "loaded", false);
     let result = Command::new(binary)
         .arg("--reload-profile")
         .arg(&reload)
@@ -364,7 +375,7 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
         .unwrap();
     assert!(!result.status.success(), "{result:?}");
     assert!(String::from_utf8_lossy(&result.stderr).contains("no startup profile configured"));
-    check(true, "applied", "loaded");
+    check(true, "applied", "loaded", false);
     let invalid = directory.0.join("invalid");
     fs::write(&invalid, "version = 2\n").unwrap();
     let result = Command::new(binary)
@@ -374,13 +385,15 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
         .output()
         .unwrap();
     assert!(!result.status.success(), "{result:?}");
-    check(true, "rejected", "loaded");
+    check(true, "rejected", "loaded", false);
     let result = Command::new(binary)
         .arg("--unload-profile")
         .arg(&reload)
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check(false, "applied", "defaults");
+    check(false, "applied", "defaults", false);
+    toggle("on");
+    check(false, "applied", "defaults", true);
     assert_eq!(fs::read_to_string(preset).unwrap(), "version = 1\n[gyro]\n");
 }

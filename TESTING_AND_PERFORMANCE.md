@@ -588,6 +588,15 @@ model, transport and node paths. Add `--show-controller-id` to check the
 IDs, and compare `active_hidraw` from `--status` with the list. Verify the
 field changes on selection and reads `none` while waiting.
 
+While connected, start with a profile that enables both gyro mouse and
+virtual gamepad. Hold a mapped gamepad button and run `--set-gamepad off`.
+Check that the gamepad disappears, gyro still moves the pointer, and
+`active_hidraw` and the session counts stay unchanged. Release the
+physical button, run `--set-gamepad on`, and verify it appears again with
+released controls. If rumble is configured, run the pulse test again.
+Repeat across a disconnect and check that `virtual_gamepad_enabled`
+retains its selected value.
+
 Use the discovery-mode user service and record its PID. Use
 `--select-controller ID` to select the second controller. Include
 `--controller-model MODEL` and a transport flag if needed. Verify the

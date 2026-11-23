@@ -351,6 +351,12 @@ virtual gamepad configuration and current controller filter in effect.
 Status reports the active source separately from the last reload outcome.
 Only an applied profile update changes the source. It survives controller
 disconnects and switches.
+
+Virtual gamepad emulation can be toggled at runtime independently of the
+profile. Disabling releases the virtual controls and closes the gamepad
+and force-feedback descriptors. Enabling recreates the configured gamepad
+identity and starts publishing from the next HID report. The readiness
+loop refreshes its feedback descriptor before polling again.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
 Updated 2026-11-22. Keyboard bindings consume physical button states
