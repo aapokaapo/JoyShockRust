@@ -434,10 +434,13 @@ Touchpad pointer motion uses one tracked contact and preserves fractional
 counts independently per axis. Adding a second contact clears its baseline,
 so two-finger scrolling and single-finger pointing can share the pad.
 
-Optional tap-to-click accepts a single contact that lifts within the tap
-window and stays within the travel limit. A swipe, changed contact ID,
-second finger or mechanical press cancels the candidate until lift. The
-click uses the same output pulse and deadline as other mapped buttons.
+One-finger left clicks and two-finger right clicks can be enabled
+independently. The tap window runs from first contact to final lift.
+The mapper tracks each finger by contact ID and retains its original
+position across report slot swaps and staggered lifts. Excess travel,
+contact replacement, a wheel step from touch scrolling or a mechanical
+press cancels the candidate until all contacts lift. Clicks share the
+pulse deadline used by other mapped buttons.
 
 Updated 2026-11-23. The opt-in native touchpad grab is scoped to an evdev
 node under the active hidraw device's HID parent. The opened node must

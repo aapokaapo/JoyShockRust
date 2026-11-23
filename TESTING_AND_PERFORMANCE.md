@@ -761,6 +761,12 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     brief touch produces one left click when the finger lifts. Swipe,
     hold the finger still, add a second finger, and press the physical
     pad in separate attempts. None should produce the virtual tap click.
+24. Also set `two_finger_tap_to_click = true` under
+    `[keyboard.touch_pointer]`. With two-finger scrolling enabled, tap
+    with two fingers and lift them in quick succession. Confirm one
+    right click after the final lift. Swipe with two fingers and confirm
+    scrolling produces no click. Turn off `tap_to_click` and confirm
+    the right click still works.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

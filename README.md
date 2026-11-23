@@ -315,11 +315,15 @@ the pointer with one finger and scroll with two.
 sensitivity_x = 0.5
 sensitivity_y = 0.5
 tap_to_click = true
+two_finger_tap_to_click = true
 ```
 
-`tap_to_click` is off by default. When enabled, a single touch shorter
-than 200 ms clicks on release if it stayed within 40 touchpad units of
-its starting point. A second contact or mechanical click cancels it.
+`tap_to_click` enables one-finger left clicks.
+`two_finger_tap_to_click` enables two-finger right clicks. Both settings
+are off by default and can be enabled independently. A tap must last
+less than 200 ms from first contact to final lift, with each finger
+staying within 40 touchpad units of its starting point. A scroll step or
+mechanical press on the pad cancels the tap.
 
 If the desktop also uses the physical controller touchpad, set
 `grab_touchpad = true` under `[keyboard]` in the profile. Loading or

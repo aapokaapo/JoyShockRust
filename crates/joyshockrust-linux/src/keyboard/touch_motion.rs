@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use super::HOLD_TIME;
 
-const TAP_TRAVEL_SQUARED: i32 = 40 * 40;
+const TAP_TRAVEL_SQUARED: i64 = 40 * 40;
 
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -90,6 +90,8 @@ pub(super) struct PointerSettings {
     sensitivity_y: Option<f64>,
     #[serde(default)]
     pub(super) tap_to_click: bool,
+    #[serde(default)]
+    pub(super) two_finger_tap_to_click: bool,
 }
 
 impl PointerSettings {
@@ -119,54 +121,108 @@ pub(super) struct PointerState {
 }
 
 #[derive(Default)]
-pub(super) enum TapState {
+pub(super) struct TapState(TapPhase);
+
+#[derive(Default)]
+enum TapPhase {
     #[default]
     Idle,
     Candidate {
         start: Instant,
-        origin: TouchContact,
+        contacts: TapContacts,
     },
     Blocked,
+}
+
+#[derive(Clone, Copy)]
+enum TapContacts {
+    One(TouchContact),
+    Two(TouchContact, TouchContact),
+    Remaining(TouchContact),
+}
+
+pub(super) enum TapCount {
+    One,
+    Two,
 }
 
 impl TapState {
     pub(super) fn advance(
         &mut self,
         contacts: [Option<TouchContact>; 2],
-        clicked: bool,
+        cancelled: bool,
         now: Instant,
-    ) -> bool {
-        let contact = match contacts {
+    ) -> Option<TapCount> {
+        let (first, second) = match contacts {
             [None, None] => {
-                let tap = !clicked
-                    && matches!(*self, Self::Candidate { start, .. } if now.duration_since(start) < HOLD_TIME);
-                *self = Self::Idle;
-                return tap;
+                return match std::mem::take(&mut self.0) {
+                    TapPhase::Candidate { start, contacts }
+                        if !cancelled && now.duration_since(start) < HOLD_TIME =>
+                    {
+                        Some(match contacts {
+                            TapContacts::One(_) => TapCount::One,
+                            TapContacts::Two(..) | TapContacts::Remaining(_) => TapCount::Two,
+                        })
+                    }
+                    _ => None,
+                };
             }
-            [Some(contact), None] | [None, Some(contact)] if !clicked => contact,
+            [Some(contact), None] | [None, Some(contact)] if !cancelled => (contact, None),
+            [Some(first), Some(second)] if !cancelled && first.id != second.id => {
+                (first, Some(second))
+            }
             _ => {
-                *self = Self::Blocked;
-                return false;
+                self.0 = TapPhase::Blocked;
+                return None;
             }
         };
-        match *self {
-            Self::Idle => {
-                *self = Self::Candidate {
-                    start: now,
-                    origin: contact,
-                }
-            }
-            Self::Candidate { origin, .. } => {
-                let dx = i32::from(contact.x) - i32::from(origin.x);
-                let dy = i32::from(contact.y) - i32::from(origin.y);
-                if contact.id != origin.id || dx * dx + dy * dy > TAP_TRAVEL_SQUARED {
-                    *self = Self::Blocked;
-                }
-            }
-            Self::Blocked => {}
-        }
-        false
+        self.0 = match self.0 {
+            TapPhase::Idle => TapPhase::Candidate {
+                start: now,
+                contacts: second.map_or(TapContacts::One(first), |second| {
+                    TapContacts::Two(first, second)
+                }),
+            },
+            TapPhase::Candidate { start, contacts } => match contacts.observe(first, second) {
+                Some(contacts) => TapPhase::Candidate { start, contacts },
+                None => TapPhase::Blocked,
+            },
+            TapPhase::Blocked => TapPhase::Blocked,
+        };
+        None
     }
+}
+
+impl TapContacts {
+    fn observe(self, first: TouchContact, second: Option<TouchContact>) -> Option<Self> {
+        match (self, second) {
+            (Self::One(origin) | Self::Remaining(origin), None) if near(origin, first) => {
+                Some(self)
+            }
+            (Self::One(origin), Some(second)) if near(origin, first) => {
+                Some(Self::Two(origin, second))
+            }
+            (Self::One(origin), Some(second)) if near(origin, second) => {
+                Some(Self::Two(origin, first))
+            }
+            (Self::Two(a, b), Some(second))
+                if (near(a, first) && near(b, second)) || (near(b, first) && near(a, second)) =>
+            {
+                Some(self)
+            }
+            (Self::Two(a, b), None) => [a, b]
+                .into_iter()
+                .find(|&origin| near(origin, first))
+                .map(Self::Remaining),
+            _ => None,
+        }
+    }
+}
+
+fn near(origin: TouchContact, contact: TouchContact) -> bool {
+    let dx = i64::from(contact.x) - i64::from(origin.x);
+    let dy = i64::from(contact.y) - i64::from(origin.y);
+    contact.id == origin.id && dx * dx + dy * dy <= TAP_TRAVEL_SQUARED
 }
 
 impl PointerState {

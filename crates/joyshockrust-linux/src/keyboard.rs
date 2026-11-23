@@ -116,12 +116,18 @@ impl Config {
             .flat_map(Binding::actions)
             .flat_map(|action| action.keys().iter().copied())
             .chain(self.sticks.iter().flat_map(|binding| binding.keys()))
-            .chain(self.has_touch_tap().then_some(KeyCode::BTN_LEFT))
+            .chain(self.touch_tap_buttons().into_iter().flatten())
     }
 
-    fn has_touch_tap(&self) -> bool {
-        self.touch_pointer
-            .is_some_and(|settings| settings.tap_to_click)
+    fn touch_tap_buttons(&self) -> [Option<KeyCode>; 2] {
+        self.touch_pointer.map_or([None; 2], |settings| {
+            [
+                settings.tap_to_click.then_some(KeyCode::BTN_LEFT),
+                settings
+                    .two_finger_tap_to_click
+                    .then_some(KeyCode::BTN_RIGHT),
+            ]
+        })
     }
 
     fn has_scroll(&self) -> bool {
@@ -528,7 +534,7 @@ struct State {
     sticks: Vec<stick::State>,
     touch_scroll: Option<touch_motion::ScrollState>,
     touch_pointer: Option<touch_motion::PointerState>,
-    touch_tap: Option<touch_motion::TapState>,
+    touch_tap: Option<(touch_motion::TapState, [Option<KeyCode>; 2])>,
     pulses: Vec<(KeyCode, Instant)>,
     mapped_keys: AttributeSet<KeyCode>,
     outer_keys: AttributeSet<KeyCode>,
@@ -556,6 +562,7 @@ impl State {
             .collect();
         let mapped_keys: AttributeSet<KeyCode> = config.keys().collect();
         let key_count = mapped_keys.iter().count();
+        let tap_buttons = config.touch_tap_buttons();
         Self {
             gestures,
             sticks: config
@@ -566,7 +573,10 @@ impl State {
                 .collect(),
             touch_scroll: config.touch_scroll.map(touch_motion::ScrollState::new),
             touch_pointer: config.touch_pointer.map(touch_motion::PointerState::new),
-            touch_tap: config.has_touch_tap().then(touch_motion::TapState::default),
+            touch_tap: tap_buttons
+                .iter()
+                .any(Option::is_some)
+                .then(|| (touch_motion::TapState::default(), tap_buttons)),
             // At most one pulse deadline per mapped key.
             pulses: Vec::with_capacity(key_count),
             mapped_keys,
@@ -614,14 +624,17 @@ impl State {
                 scroll.advance(input.contacts)
             });
         self.pulses.retain(|&(_, until)| until > now);
-        if self.touch_tap.as_mut().is_some_and(|tap| {
-            tap.advance(
-                input.contacts,
-                input.controls.buttons.contains(Button::TouchpadClick),
-                now,
-            )
-        }) {
-            schedule_pulse(&mut self.pulses, KeyCode::BTN_LEFT, now + TAP_KEY_TIME);
+        if let Some((tap, [left, right])) = &mut self.touch_tap {
+            let cancelled = scroll != [0; WHEEL_AXES.len()]
+                || input.controls.buttons.contains(Button::TouchpadClick);
+            let button = match tap.advance(input.contacts, cancelled, now) {
+                Some(touch_motion::TapCount::One) => *left,
+                Some(touch_motion::TapCount::Two) => *right,
+                None => None,
+            };
+            if let Some(button) = button {
+                schedule_pulse(&mut self.pulses, button, now + TAP_KEY_TIME);
+            }
         }
         for gesture in &mut self.gestures {
             match gesture.update(&input, self.click, now) {
@@ -2176,6 +2189,91 @@ mod tests {
             }
         });
         assert_eq!(values, [(60, 1), (90, 0)]);
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn two_finger_tap_waits_for_both_lifts_and_cancels_when_scrolling() {
+        let config = config(
+            r#"
+            [keyboard.touch_pointer]
+            sensitivity_x = 0.0
+            sensitivity_y = 0.0
+            two_finger_tap_to_click = true
+            [keyboard.touch_scroll]
+            fingers = 2
+            vertical_step = 5
+        "#,
+        );
+        assert_eq!(config.keys().collect::<Vec<_>>(), [KeyCode::BTN_RIGHT]);
+        let mut state = State::new(&config);
+        let start = Instant::now();
+        let contact = |id, y| Some(TouchContact { id, x: 100, y });
+        let a = contact(1, 100);
+        let b = contact(2, 200);
+        let right_press = (EventType::KEY, KeyCode::BTN_RIGHT.0, 1);
+        let right_release = (EventType::KEY, KeyCode::BTN_RIGHT.0, 0);
+        let wheel = (EventType::RELATIVE, RelativeAxisCode::REL_WHEEL.0, -1);
+        let frames = [
+            (0, [a, None], false, None),
+            (30, [b, a], false, None),
+            (40, [a, b], false, None),
+            (50, [b, None], false, None),
+            (60, [None; 2], false, Some(right_press)),
+            (90, [None; 2], false, Some(right_release)),
+            (100, [a, None], false, None),
+            (130, [None; 2], false, None),
+            (150, [a, b], false, None),
+            (160, [contact(1, 105), contact(2, 205)], false, Some(wheel)),
+            (170, [None; 2], false, None),
+            (180, [a, b], false, None),
+            (190, [a, b], true, None),
+            (200, [None; 2], false, None),
+            (210, [a, b], false, None),
+            (220, [None, b], false, None),
+            (230, [contact(3, 100), b], false, None),
+            (240, [None; 2], false, None),
+            (250, [a, b], false, None),
+            (450, [None; 2], false, None),
+            (460, [a, b], false, None),
+            (470, [None; 2], false, Some(right_press)),
+            (500, [None; 2], false, Some(right_release)),
+            (520, [a, b], false, None),
+            (530, [contact(1, 141), contact(2, 159)], false, None),
+            (540, [None; 2], false, None),
+        ];
+        let allocations = allocation_counter::measure(|| {
+            for (ms, contacts, clicked, expected) in frames {
+                let mut input = Input {
+                    contacts,
+                    ..Input::default()
+                };
+                if clicked {
+                    input.controls.buttons.insert(Button::TouchpadClick);
+                }
+                let mut observed = None;
+                let deadline = state
+                    .update(input, start + Duration::from_millis(ms), |events| {
+                        assert_eq!(events.len(), 1, "{ms}");
+                        let event = events[0];
+                        assert!(
+                            observed
+                                .replace((event.event_type(), event.code(), event.value()))
+                                .is_none(),
+                            "{ms}"
+                        );
+                        Ok(())
+                    })
+                    .unwrap();
+                assert_eq!(observed, expected, "{ms}");
+                assert_eq!(
+                    deadline,
+                    (expected == Some(right_press))
+                        .then(|| start + Duration::from_millis(ms) + TAP_KEY_TIME),
+                    "{ms}"
+                );
+            }
+        });
         assert_eq!(allocations.count_total, 0, "{allocations:?}");
     }
 
