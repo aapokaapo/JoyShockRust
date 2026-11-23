@@ -319,12 +319,12 @@ struct StickSweep {
 }
 
 #[derive(Default)]
-struct Dial {
+pub(crate) struct Dial {
     travel: f64,
 }
 
 impl Dial {
-    fn rotate(&mut self, degrees: Option<f64>) -> bool {
+    pub(crate) fn rotate(&mut self, degrees: Option<f64>) -> bool {
         const STEP: f64 = 15.0;
         let Some(degrees) = degrees else {
             self.travel = 0.0;

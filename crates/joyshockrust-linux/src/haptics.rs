@@ -1,6 +1,9 @@
 use std::{
+    ffi::OsString,
     fs::File,
     io::{self, Write},
+    ops::ControlFlow,
+    path::PathBuf,
     process::{Command, Stdio},
     sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     thread::{self, JoinHandle},
@@ -9,7 +12,15 @@ use std::{
 
 use joyshockrust_input::Transport;
 
-use crate::hidraw;
+use crate::{
+    ReportTimers, SessionEvent,
+    controller_config::ControllerConfig,
+    discovery,
+    flick_stick::FlickStick,
+    forward_reports,
+    game_calibration::Dial,
+    hidraw::{self, Identity},
+};
 
 #[derive(Clone, Copy)]
 pub enum Cue {
@@ -20,7 +31,7 @@ pub enum Cue {
 
 pub struct Haptics {
     sender: SyncSender<Cue>,
-    worker: JoinHandle<()>,
+    worker: JoinHandle<io::Result<()>>,
 }
 
 impl Haptics {
@@ -38,22 +49,22 @@ impl Haptics {
     }
 
     fn open_usb(input: &File) -> io::Result<Self> {
-        let device = playback_device(input)?;
+        Self::open_pcm(playback_device(input)?)
+    }
+
+    fn open_pcm(device: String) -> io::Result<Self> {
         let (sender, receiver) = sync_channel(1);
         let worker = thread::Builder::new()
             .name("calibration-haptics".into())
             .spawn(move || {
-                let waveforms = Waveforms {
-                    start: waveform(Cue::CalibrationStart),
-                    done: waveform(Cue::CalibrationDone),
-                    detent: waveform(Cue::Detent),
-                };
+                let waveforms = Waveforms::new();
                 while let Ok(cue) = receiver.recv() {
                     if let Err(error) = play(&device, &receiver, &waveforms, cue) {
                         eprintln!("DualSense USB calibration haptics unavailable: {error}");
-                        break;
+                        return Err(error);
                     }
                 }
+                Ok(())
             })?;
         Ok(Self { sender, worker })
     }
@@ -64,11 +75,177 @@ impl Haptics {
     }
     // Standalone calibration can wait after releasing its report reader.
     pub fn finish(self, cue: Cue) {
-        let Self { sender, worker } = self;
-        let _ = sender.send(cue);
-        drop(sender);
-        let _ = worker.join();
+        let _ = self.sender.send(cue);
+        let _ = self.drain();
     }
+
+    fn drain(self) -> io::Result<()> {
+        let Self { sender, worker } = self;
+        drop(sender);
+        worker
+            .join()
+            .map_err(|_| io::Error::other("haptics worker stopped unexpectedly"))?
+    }
+}
+
+const TEST_USAGE: &str = "usage: joyshockrust-linux --test-haptics [--pattern all|start|done|detent|sweep] [--pcm ALSA_DEVICE] [/dev/hidrawN]";
+
+pub fn test_cli(mut args: impl Iterator<Item = OsString>) -> io::Result<()> {
+    let mut pattern = String::from("all");
+    let mut pcm = None;
+    let mut node = None;
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--help") => {
+                println!("{TEST_USAGE}");
+                return Ok(());
+            }
+            Some("--pattern") => {
+                pattern = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, TEST_USAGE))?
+            }
+            Some("--pcm") if pcm.is_none() => {
+                pcm = Some(
+                    args.next()
+                        .and_then(|value| value.into_string().ok())
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, TEST_USAGE))?,
+                );
+            }
+            _ if node.is_none() && !arg.as_encoded_bytes().starts_with(b"-") => {
+                node = Some(PathBuf::from(arg))
+            }
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, TEST_USAGE)),
+        }
+    }
+    let cues: &[(&str, Cue)] = match pattern.as_str() {
+        "start" => &[("Start pulse", Cue::CalibrationStart)],
+        "done" => &[("Completion double pulse", Cue::CalibrationDone)],
+        "detent" => &[("Detent clicks", Cue::Detent)],
+        "all" => &[
+            ("Start pulse", Cue::CalibrationStart),
+            ("Completion double pulse", Cue::CalibrationDone),
+            ("Detent clicks", Cue::Detent),
+        ],
+        "sweep" => &[],
+        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, TEST_USAGE)),
+    };
+    let mut controller = None;
+    if pcm.is_none() || node.is_some() || pattern == "sweep" {
+        let filter = discovery::ControllerFilter {
+            transport: discovery::Selection::Usb,
+            ..Default::default()
+        };
+        let (file, identity, path) = if let Some(path) = node {
+            let (file, identity) = discovery::open_controller(&path, filter).map_err(|error| {
+                io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+            })?;
+            (file, identity, path)
+        } else {
+            let (file, candidate) =
+                discovery::open_first_controller(filter, ControllerConfig::load().preferred())?;
+            (file, candidate.identity, candidate.path)
+        };
+        println!(
+            "Controller: {} ({} USB)",
+            path.display(),
+            identity.model_name()
+        );
+        if pcm.is_none() {
+            pcm = Some(playback_device(&file)?);
+        }
+        controller = Some((file, identity));
+    }
+    let device = pcm.expect("resolved ALSA playback device");
+    println!("ALSA playback: {device}, 48000 Hz, 16-bit, 4 channels (actuators on 3–4)");
+    if pattern == "sweep" {
+        let (file, identity) = controller.expect("sweep controller");
+        return test_sweep(file, identity, device);
+    }
+
+    let waveforms = Waveforms::new();
+    for (index, &(description, cue)) in cues.iter().enumerate() {
+        if index != 0 {
+            thread::sleep(Duration::from_millis(450));
+        }
+        println!("Playing: {description}");
+        let (sender, receiver) = sync_channel(1);
+        if matches!(cue, Cue::Detent) {
+            let repeating = thread::spawn(move || {
+                for _ in 0..5 {
+                    thread::sleep(Duration::from_millis(95));
+                    if sender.send(Cue::Detent).is_err() {
+                        break;
+                    }
+                }
+            });
+            let result = play(&device, &receiver, &waveforms, cue);
+            drop(receiver);
+            let _ = repeating.join();
+            result?;
+        } else {
+            drop(sender);
+            play(&device, &receiver, &waveforms, cue)?;
+        }
+    }
+    println!("PCM playback completed. Check whether you felt the cues on the controller.");
+    Ok(())
+}
+
+fn test_sweep(mut input: File, identity: Identity, device: String) -> io::Result<()> {
+    let haptics = Haptics::open_pcm(device)?;
+    let mut flick = FlickStick::new(1.0);
+    let mut dial = Dial::default();
+    let mut steps = 0;
+    println!("Center the right stick, then sweep it slowly around the edge for 12 seconds.");
+    let result = forward_reports(
+        &mut input,
+        identity,
+        None,
+        None,
+        None,
+        ReportTimers {
+            stop_at: Some(Instant::now() + Duration::from_secs(12)),
+            ..Default::default()
+        },
+        |event| {
+            if let SessionEvent::Report(report) = event {
+                flick.advance_with_rotation(
+                    report.controls.right_stick,
+                    report.imu.device_ticks,
+                    |angle| {
+                        if dial.rotate(angle) {
+                            steps += 1;
+                            haptics.send(Cue::Detent);
+                        }
+                    },
+                );
+            }
+            Ok(ControlFlow::Continue(()))
+        },
+    );
+    let playback = haptics.drain();
+    println!("Stick detents detected: {steps}");
+    match result {
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => {}
+        Err(error) => return Err(error),
+        Ok(()) => {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Controller disconnected during the sweep.",
+            ));
+        }
+    }
+    playback?;
+    if steps == 0 {
+        return Err(io::Error::other(
+            "No stick detents detected. Start centered and rotate the stick along its edge.",
+        ));
+    }
+    println!("PCM playback completed. Check whether you felt the detents on the controller.");
+    Ok(())
 }
 
 fn playback_device(input: &File) -> io::Result<String> {
@@ -103,6 +280,14 @@ struct Waveforms {
 }
 
 impl Waveforms {
+    fn new() -> Self {
+        Self {
+            start: waveform(Cue::CalibrationStart),
+            done: waveform(Cue::CalibrationDone),
+            detent: waveform(Cue::Detent),
+        }
+    }
+
     fn samples(&self, cue: Cue) -> &[u8] {
         match cue {
             Cue::CalibrationStart => &self.start,
@@ -132,13 +317,21 @@ fn play(device: &str, receiver: &Receiver<Cue>, waveforms: &Waveforms, cue: Cue)
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .spawn()?;
+        .spawn()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("could not launch aplay for {device}: {error}"),
+            )
+        })?;
     let mut pipe = player.stdin.take().expect("piped aplay stdin");
     let result = stream_cues(&mut pipe, receiver, waveforms, cue);
     drop(pipe);
     let status = player.wait()?;
     if !status.success() {
-        return Err(io::Error::other(format!("aplay exited with {status}")));
+        return Err(io::Error::other(format!(
+            "aplay on {device} exited with {status}"
+        )));
     }
     result
 }

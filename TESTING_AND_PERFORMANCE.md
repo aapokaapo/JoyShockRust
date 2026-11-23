@@ -935,6 +935,13 @@ and verify the previous correction remains active. Run RWC over USB and
 rotate slowly around the right stick edge. Check that tactile steps
 follow rotation in either direction and cease when the stick centers.
 
+For diagnosis without the game, run `joyshockrust-linux --test-haptics`
+on the USB device. Verify that the selected PCM matches the controller
+and report which effects are perceptible. Run with `--pattern sweep`
+to compare the count of detected stick detents with the felt clicks.
+The automated CLI test checks the actuator-channel PCM and propagation
+of an ALSA playback failure using a simulated player.
+
 Enable **Start when I log in**, log out and back in, and confirm the tray
 and bridge start. Clear the setting and repeat to confirm manual
 launch is needed. Use **Quit JoyShockRust** and verify both user units

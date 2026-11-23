@@ -59,6 +59,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     const USAGE: &str = concat!(
         "usage: joyshockrust-linux [--profile PATH|--profile-if-present PATH] [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
+        "       joyshockrust-linux --test-haptics [--pattern all|start|done|detent|sweep] [--pcm ALSA_DEVICE] [/dev/hidrawN]\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
         "       joyshockrust-linux --diagnose [--profile PATH] [--show-controller-id] [CONTROLLER_OPTIONS] [/dev/hidrawN]\n",
         "       joyshockrust-linux --list-controllers [--show-controller-id] [CONTROLLER_OPTIONS]\n",
@@ -119,6 +120,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     if args.next_if(|arg| arg == "--launch-sdl").is_some() {
         eprintln!("{}", launch::run(args));
         return Ok(ExitCode::FAILURE);
+    }
+    if args.next_if(|arg| arg == "--test-haptics").is_some() {
+        haptics::test_cli(args)?;
+        return Ok(ExitCode::SUCCESS);
     }
     if args.next_if(|arg| arg == "--gyro-calibration").is_some() {
         gyro_calibration::run(args)?;

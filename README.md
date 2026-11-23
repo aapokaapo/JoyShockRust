@@ -956,6 +956,28 @@ produces short tactile detents every 15 degrees of relative stick
 rotation. Camera movement remains continuous. Bluetooth calibration
 is available with visual status or bridge logs.
 
+### Test USB actuator haptics from the command line
+
+Connect the controller via USB and run:
+
+```sh
+joyshockrust-linux --test-haptics
+joyshockrust-linux --test-haptics --pattern sweep
+```
+
+The first command plays the start pulse, completion double pulse and a
+series of detents. Use `--pattern start`, `done` or `detent` to isolate an
+effect. The sweep command runs for 12 seconds and counts detents as you
+rotate the right stick. Add the controller's `/dev/hidrawN` path to select
+it explicitly. The commands report the ALSA device and playback errors.
+Playback success reports what ALSA accepted. Check the tactile feedback
+on the controller.
+
+Use `aplay -l` to find the controller's playback device. To try a known
+endpoint directly, pass `--pcm hw:CARD,DEVICE` with the card and device
+numbers from that list. `--pcm null` checks the software playback path
+without a controller or a physical effect.
+
 ## Game sensitivity calibration
 
 Use the right stick to turn the camera through whole rotations. Enable raw
