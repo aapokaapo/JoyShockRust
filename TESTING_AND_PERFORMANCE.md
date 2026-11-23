@@ -649,7 +649,13 @@ mouse click reaches the correct device, and that cleanup clears a held key.
 
 ```sh
 cargo test --locked -p joyshockrust-linux uinput_keyboard_and_mouse_gestures -- --ignored
+cargo test --locked -p joyshockrust-linux uinput_usb_touchpad_pointer_and_gestures -- --ignored
 ```
+
+The second test replays touch contacts through the USB parser and
+checks the virtual mouse event stream for the pointer start threshold,
+single- and two-finger clicks, and axis-locked scrolling. It uses
+synthetic reports and needs no physical controller.
 
 Stop the user service while testing a standalone bridge.
 

@@ -1000,6 +1000,110 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
+    fn uinput_usb_touchpad_pointer_and_gestures() {
+        use crate::live_uinput_test::open_evdev;
+        use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+        let config = config(
+            r#"
+            [keyboard.touch_pointer]
+            sensitivity_x = 1.0
+            motion_threshold = 10
+            tap_to_click = true
+            two_finger_tap_to_click = true
+            tap_max_travel = 10
+            [keyboard.touch_scroll]
+            fingers = 2
+            vertical_step = 10
+            horizontal_step = 10
+            axis_lock = true
+            "#,
+        );
+        let mut output = Keyboard::open(Some(&config), None).unwrap().unwrap();
+        let sysfs = output
+            .outputs
+            .mouse
+            .as_mut()
+            .unwrap()
+            .get_syspath()
+            .unwrap();
+        let mut mouse = open_evdev(&sysfs);
+        mouse.set_nonblocking(true).unwrap();
+
+        let contact =
+            |id, x: u16, y: u16| [id, x as u8, ((x >> 8) | (y << 4)) as u8, (y >> 4) as u8];
+        let inactive = [0x80, 0, 0, 0];
+        let a = contact(1, 100, 100);
+        let b = contact(2, 200, 200);
+        let clear = Some([inactive; 2]);
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[1..=4].fill(128);
+        frame[8] = 8;
+        let start = Instant::now();
+        for (ms, slots, expected_deadline_ms) in [
+            (0, Some([a, inactive]), None),
+            (10, Some([contact(1, 106, 108), inactive]), None),
+            (20, Some([contact(1, 108, 108), inactive]), None),
+            (30, clear, None),
+            (40, Some([a, inactive]), None),
+            (50, clear, Some(80)),
+            (80, None, None),
+            (100, Some([a, b]), None),
+            (110, Some([inactive, b]), None),
+            (120, clear, Some(150)),
+            (150, None, None),
+            (160, Some([a, b]), None),
+            (
+                170,
+                Some([contact(1, 110, 120), contact(2, 210, 220)]),
+                None,
+            ),
+            (
+                180,
+                Some([contact(1, 140, 120), contact(2, 240, 220)]),
+                None,
+            ),
+            (190, clear, None),
+        ] {
+            let now = start + Duration::from_millis(ms);
+            let deadline = if let Some([first, second]) = slots {
+                frame[33..37].copy_from_slice(&first);
+                frame[37..41].copy_from_slice(&second);
+                let report =
+                    parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap();
+                output.publish(report, now).unwrap()
+            } else {
+                output.tick(now).unwrap()
+            };
+            assert_eq!(
+                deadline,
+                expected_deadline_ms.map(|ms| start + Duration::from_millis(ms)),
+                "{ms} ms"
+            );
+        }
+
+        let events: Vec<_> = mouse
+            .fetch_events()
+            .unwrap()
+            .filter(|event| event.event_type() != EventType::SYNCHRONIZATION)
+            .map(|event| (event.event_type(), event.code(), event.value()))
+            .collect();
+        assert_eq!(
+            events,
+            [
+                (EventType::RELATIVE, RelativeAxisCode::REL_X.0, 2),
+                (EventType::KEY, KeyCode::BTN_LEFT.0, 1),
+                (EventType::KEY, KeyCode::BTN_LEFT.0, 0),
+                (EventType::KEY, KeyCode::BTN_RIGHT.0, 1),
+                (EventType::KEY, KeyCode::BTN_RIGHT.0, 0),
+                (EventType::RELATIVE, RelativeAxisCode::REL_WHEEL.0, -2),
+            ]
+        );
+    }
+
+    #[test]
     fn tap_hold_and_double_tap_emit_distinct_keys() {
         let config = config(
             r#"
