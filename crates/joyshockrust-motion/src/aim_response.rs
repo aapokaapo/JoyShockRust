@@ -85,6 +85,7 @@ pub struct GyroResponse {
     accel_start: f64,
     accel_end: f64,
     multiplier: f64,
+    acceleration_enabled: bool,
 }
 
 impl Default for GyroResponse {
@@ -94,6 +95,7 @@ impl Default for GyroResponse {
             accel_start: 30.0,
             accel_end: 180.0,
             multiplier: 1.0,
+            acceleration_enabled: false,
         }
     }
 }
@@ -122,7 +124,13 @@ impl GyroResponse {
             accel_start,
             accel_end,
             multiplier,
+            acceleration_enabled: multiplier > 1.0,
         })
+    }
+
+    pub fn with_acceleration_enabled(mut self, enabled: bool) -> Self {
+        self.acceleration_enabled = enabled;
+        self
     }
 
     pub fn values(self) -> [f64; 4] {
@@ -135,13 +143,17 @@ impl GyroResponse {
     }
 
     pub fn gain(self, angular_velocity: [f32; 3]) -> f64 {
-        if self.min_speed == 0.0 && self.multiplier == 1.0 {
+        let accelerate = self.acceleration_enabled && self.multiplier > 1.0;
+        if self.min_speed == 0.0 && !accelerate {
             return 1.0;
         }
         let [pitch, yaw, _] = angular_velocity.map(f64::from);
         let speed = pitch.hypot(yaw);
         if speed < self.min_speed {
             return 0.0;
+        }
+        if !accelerate {
+            return 1.0;
         }
         let amount =
             ((speed - self.accel_start) / (self.accel_end - self.accel_start)).clamp(0.0, 1.0);
@@ -187,6 +199,11 @@ mod tests {
         ] {
             assert_eq!(curve.gain([pitch, yaw, 100.0]), gain);
         }
+        let disabled = curve.with_acceleration_enabled(false);
+        assert_eq!(disabled.gain([0.5, 1.0, 0.0]), 0.0);
+        assert_eq!(disabled.gain([0.0, 120.0, 0.0]), 1.0);
+        assert_eq!(disabled.values(), curve.values());
+        assert_eq!(disabled.with_acceleration_enabled(true), curve);
         assert_eq!(GyroResponse::default().gain([0.0; 3]), 1.0);
         assert!(GyroResponse::new(0.0, 10.0, 10.0, 1.0).is_err());
         assert!(GyroResponse::new(0.0, 10.0, 100.0, f64::NAN).is_err());

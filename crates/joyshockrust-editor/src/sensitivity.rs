@@ -20,6 +20,7 @@ const GYRO_FIELDS: [&str; 2] = ["sensitivity_x", "sensitivity_y"];
 const GYRO_SLIDER_MAX: f64 = 20.0;
 const GYRO_TEXT_MAX: f64 = 100.0;
 pub const GYRO_SENSITIVITY_ERROR: &str = "Enter a gyro sensitivity between 0 and 100.";
+const ACCEL_ENABLED: &str = "accel_enabled";
 const RESPONSE_FIELDS: [&str; 4] = [
     "threshold_dps",
     "accel_start_dps",
@@ -212,6 +213,27 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
         .title("Gyro response")
         .build();
     let values = gyro_response_values(gyro);
+    let acceleration = adw::SwitchRow::builder()
+        .title("Gyro acceleration")
+        .active(
+            gyro.and_then(|table| table.get(ACCEL_ENABLED))
+                .and_then(Item::as_bool)
+                .unwrap_or(values[3] > 1.0),
+        )
+        .build();
+    let toggle_ctx = ctx.clone();
+    acceleration.connect_active_notify(move |row| {
+        toggle_ctx.edit(|doc| {
+            let table = gyro_table_mut(doc)?;
+            let value = Value::from(row.is_active());
+            if let Some(previous) = table.get_mut(ACCEL_ENABLED).and_then(Item::as_value_mut) {
+                replace_value(previous, value);
+            } else {
+                table.insert(ACCEL_ENABLED, Item::Value(value));
+            }
+            Ok(())
+        });
+    });
     for (axis, (title, subtitle, lower, upper)) in [
         (
             "Minimum speed",
@@ -233,7 +255,7 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
         ),
         (
             "Acceleration multiplier",
-            "Maximum boost to both axes. 1 disables acceleration.",
+            "Maximum boost to both axes.",
             1.0,
             MAX_GYRO_ACCEL_MULTIPLIER,
         ),
@@ -242,6 +264,15 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
     .enumerate()
     {
         let row = setting_row(title, subtitle, values[axis], lower, upper);
+        if axis == 1 {
+            group.add(&acceleration);
+        }
+        if axis != 0 {
+            acceleration
+                .bind_property("active", &row, "sensitive")
+                .sync_create()
+                .build();
+        }
         group.add(&row);
         let ctx = ctx.clone();
         let reverting = Cell::new(false);
@@ -561,15 +592,18 @@ fn display_error(error: Option<&str>, warning: &gtk::Label, reset: &gtk::Button)
     reset.set_visible(error.is_some());
 }
 
+fn gyro_table_mut(doc: &mut DocumentMut) -> Result<&mut dyn TableLike, &'static str> {
+    doc.entry("gyro")
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_like_mut()
+        .ok_or("Edit this gyro configuration in Advanced TOML.")
+}
+
 fn set_gyro_numbers(
     doc: &mut DocumentMut,
     changes: impl IntoIterator<Item = (&'static str, f64)>,
 ) -> Result<(), &'static str> {
-    let gyro = doc
-        .entry("gyro")
-        .or_insert_with(|| Item::Table(Table::new()))
-        .as_table_like_mut()
-        .ok_or("Edit this gyro configuration in Advanced TOML.")?;
+    let gyro = gyro_table_mut(doc)?;
     for (key, value) in changes {
         set_number(gyro, key, value);
     }

@@ -741,7 +741,8 @@ enables the profile's gyro mouse.
 Under **Gyro response**, set a minimum aim speed and the start and end
 speeds for acceleration, in degrees per second. The acceleration
 multiplier ramps up between those speeds and caps at the selected value.
-A minimum speed of 0 and a multiplier of 1 preserve linear aim.
+Turn off **Gyro acceleration** to suspend the boost while retaining its
+settings. **Minimum speed** still applies independently.
 Under **Flick Stick**, **Axial threshold** snaps the initial flick to
 the nearest cardinal direction inside the chosen angle, with a smooth
 transition outside it. The default is 4°. While the stick is held,
@@ -1099,5 +1100,7 @@ value from 0 to 30. Use 0 to disable cardinal snapping. Set
 `flick_steering_sensitivity` in the same table to a value from 0 to 1.
 Gyro response
 uses `threshold_dps`, `accel_start_dps`, `accel_end_dps`, and
-`accel_multiplier` in the same table.
+`accel_multiplier` in the same table. Set `accel_enabled` to `true` or
+`false` to control the boost independently. Profiles without this setting
+use acceleration if their multiplier exceeds 1.
 See the [Flick Stick test](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance).

@@ -261,7 +261,7 @@ threshold for the initial turn, with independently scaled held steering
 and a live physical and adjusted preview in the editor. RWC measurement
 uses the physical stick angle and full steering sensitivity.
 Gyro aim has a minimum movement speed and optional bounded
-speed-dependent gain.
+speed-dependent gain that can be toggled per profile.
 
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects

@@ -55,6 +55,7 @@ struct Gyro {
     accel_start_dps: Option<f64>,
     accel_end_dps: Option<f64>,
     accel_multiplier: Option<f64>,
+    accel_enabled: Option<bool>,
     sensitivity_x: Option<f32>,
     sensitivity_y: Option<f32>,
     real_world_calibration: Option<f64>,
@@ -448,6 +449,15 @@ impl Gyro {
             Some(GyroBinding::Trigger(spec)) => Binding::AnalogTrigger(TriggerGate::parse(&spec)?),
         };
         let [threshold, start, end, multiplier] = GyroResponse::default().values();
+        let mut response = GyroResponse::new(
+            self.threshold_dps.unwrap_or(threshold),
+            self.accel_start_dps.unwrap_or(start),
+            self.accel_end_dps.unwrap_or(end),
+            self.accel_multiplier.unwrap_or(multiplier),
+        )?;
+        if let Some(enabled) = self.accel_enabled {
+            response = response.with_acceleration_enabled(enabled);
+        }
         Ok(gyro_mouse::Options {
             calibrate: self.calibrate,
             calibration_hold: self
@@ -461,12 +471,7 @@ impl Gyro {
                 .map(validate_flick_axial_threshold)
                 .transpose()?,
             flick_steering_sensitivity: self.flick_steering_sensitivity,
-            response: GyroResponse::new(
-                self.threshold_dps.unwrap_or(threshold),
-                self.accel_start_dps.unwrap_or(start),
-                self.accel_end_dps.unwrap_or(end),
-                self.accel_multiplier.unwrap_or(multiplier),
-            )?,
+            response,
             game_calibration: GameCalibration::new(
                 self.real_world_calibration.unwrap_or(1.0),
                 self.in_game_sens.unwrap_or(1.0),
@@ -667,6 +672,15 @@ mod tests {
         assert_eq!(valid.flick_axial_threshold(), 12.0);
         assert_eq!(valid.flick_steering_sensitivity, Some(0.35));
         assert_eq!(valid.response.values(), [2.0, 25.0, 120.0, 2.5]);
+        assert_eq!(valid.response.gain([0.0, 200.0, 0.0]), 2.5);
+        for (enabled, gain) in [(false, 1.0), (true, 2.5)] {
+            let profile = parse(&format!(
+                "version = 1\n[gyro]\nthreshold_dps = 2\naccel_multiplier = 2.5\naccel_enabled = {enabled}"
+            )).unwrap();
+            let response = profile.gyro.unwrap().response;
+            assert_eq!(response.gain([0.0, 200.0, 0.0]), gain);
+            assert_eq!(response.gain([0.0, 1.0, 0.0]), 0.0);
+        }
         for settings in [
             "flick_axial_threshold_deg = -1",
             "flick_axial_threshold_deg = 31",

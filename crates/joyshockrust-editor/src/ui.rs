@@ -771,7 +771,21 @@ pub(crate) mod tests {
             );
         }
 
+        let acceleration = descendants::<adw::SwitchRow>(&reopened)
+            .into_iter()
+            .find(|row| row.title() == "Gyro acceleration")
+            .unwrap();
         let settings = descendants::<adw::SpinRow>(&reopened);
+        let setting = |title| settings.iter().find(|row| row.title() == title).unwrap();
+        assert!(!acceleration.is_active());
+        assert!(!setting("Acceleration start").is_sensitive());
+        assert!(setting("Minimum speed").is_sensitive());
+        acceleration.set_active(true);
+        assert!(setting("Acceleration start").is_sensitive());
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["accel_enabled"].as_bool(),
+            Some(true)
+        );
         for (title, value) in [
             ("Minimum speed", 2.0),
             ("Acceleration start", 25.0),
@@ -780,12 +794,19 @@ pub(crate) mod tests {
             ("Axial threshold", 12.0),
             ("Steering sensitivity", 0.35),
         ] {
-            settings
-                .iter()
-                .find(|row| row.title() == title)
-                .unwrap()
-                .set_value(value);
+            setting(title).set_value(value);
         }
+        acceleration.set_active(false);
+        assert!(!setting("Acceleration end").is_sensitive());
+        assert!(!setting("Acceleration multiplier").is_sensitive());
+        assert!(setting("Minimum speed").is_sensitive());
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["accel_enabled"].as_bool(),
+            Some(false)
+        );
+        acceleration.set_active(true);
+        assert_eq!(setting("Acceleration multiplier").value(), 2.5);
+        acceleration.set_active(false);
         let doc = ctx.document().unwrap();
         for (key, value) in [
             ("threshold_dps", 2.0),

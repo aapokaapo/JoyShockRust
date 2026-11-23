@@ -422,7 +422,9 @@ aim retains its sensitivity and that calibration continues. Check that a
 negative sensitivity is rejected and that the last valid profile remains
 active. Set a minimum speed and 2× acceleration in the editor. Compare
 slow turns below the cutoff, turns between the two acceleration
-thresholds, and fast turns above the upper threshold. Run
+thresholds, and fast turns above the upper threshold. Turn the
+acceleration switch off and verify the boost stops while the cutoff
+still applies. Turn it back on and check the curve settings are retained. Run
 `joyshockrust-linux --reload-profile` to restore the startup profile.
 
 A manual bridge needs `--profile PATH --reload-socket SOCKET`. Pass the same
