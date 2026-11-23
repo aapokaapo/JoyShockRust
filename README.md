@@ -919,6 +919,18 @@ Supported button names are `cross`, `circle`, `square`, `triangle`,
 
 [USB gyro test](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
 
+## Controller gyroscope calibration
+
+With a controller connected, choose **Calibrate Controller Gyro** from the
+tray. Put the controller on a flat, stable surface and select **Start Gyro
+Calibration**. Keep it still until the measurement finishes, then select
+**Save Gyro Calibration** and **Done**. The bridge resumes and uses the
+correction whenever it opens gyro output for that controller. Calibration
+is stored by controller ID in `$XDG_CONFIG_HOME/joyshockrust/gyro-calibration/`
+or under `~/.config` if XDG_CONFIG_HOME is unset. Cancel before saving to
+discard the measurement. A saved correction takes precedence over the
+optional session-start stationary calibration.
+
 ## Game sensitivity calibration
 
 Use the right stick to turn the camera through whole rotations. Enable raw

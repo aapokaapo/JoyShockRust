@@ -930,7 +930,7 @@ mod tests {
             Some(&feedback),
             crate::ReportTimers {
                 measurement: Some(&mut measurement),
-                keyboard: None,
+                ..Default::default()
             },
             |event| match event {
                 crate::SessionEvent::Reload(request) => {

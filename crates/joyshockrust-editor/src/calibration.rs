@@ -8,7 +8,7 @@ use std::{
 
 use adw::{gio, glib, gtk, prelude::*};
 
-pub fn run(bridge: PathBuf, profile: PathBuf, node: PathBuf) -> Result<(), Box<dyn Error>> {
+pub fn run(bridge: PathBuf, profile: Option<PathBuf>, node: PathBuf) -> Result<(), Box<dyn Error>> {
     gtk::gdk::set_allowed_backends("wayland");
     let application = adw::Application::builder()
         .application_id("io.github.aapokaapo.JoyShockRust.Calibration")
@@ -25,7 +25,7 @@ pub fn run(bridge: PathBuf, profile: PathBuf, node: PathBuf) -> Result<(), Box<d
 
 struct Calibration {
     bridge: PathBuf,
-    profile: PathBuf,
+    profile: Option<PathBuf>,
     node: PathBuf,
     window: glib::WeakRef<adw::ApplicationWindow>,
     page: glib::WeakRef<adw::PreferencesPage>,
@@ -38,12 +38,16 @@ struct Calibration {
 fn open_window(
     application: &adw::Application,
     bridge: PathBuf,
-    profile: PathBuf,
+    profile: Option<PathBuf>,
     node: PathBuf,
 ) -> adw::ApplicationWindow {
     let window = adw::ApplicationWindow::builder()
         .application(application)
-        .title("Game Sensitivity Calibration")
+        .title(if profile.is_some() {
+            "Game Sensitivity Calibration"
+        } else {
+            "Controller Gyro Calibration"
+        })
         .default_width(560)
         .default_height(390)
         .build();
@@ -75,17 +79,21 @@ fn open_window(
         }
         glib::Propagation::Proceed
     });
-    let sensitivity = std::fs::read_to_string(&session.profile)
-        .ok()
-        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
-        .and_then(|doc| {
-            let value = doc.get("gyro")?.get("in_game_sens")?;
-            value
-                .as_float()
-                .or_else(|| value.as_integer().map(|number| number as f64))
-        })
-        .unwrap_or(1.0);
-    session.setup(sensitivity, None);
+    if let Some(profile) = &session.profile {
+        let sensitivity = std::fs::read_to_string(profile)
+            .ok()
+            .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
+            .and_then(|doc| {
+                let value = doc.get("gyro")?.get("in_game_sens")?;
+                value
+                    .as_float()
+                    .or_else(|| value.as_integer().map(|number| number as f64))
+            })
+            .unwrap_or(1.0);
+        session.setup(sensitivity, None);
+    } else {
+        session.setup_gyro(None);
+    }
     window.present();
     window
 }
@@ -106,11 +114,102 @@ impl Calibration {
         Some(group)
     }
 
+    fn setup_gyro(self: &Rc<Self>, error: Option<&str>) {
+        let Some(group) = self.group("Prepare the controller", "Set the controller down on a flat, stable surface. Leave it untouched while the gyroscope is measured.") else { return };
+        if let Some(error) = error {
+            detail(&group, error, true);
+        }
+        let start = button(&group, "Start Gyro Calibration", "suggested-action");
+        let session = self.clone();
+        start.connect_clicked(move |_| session.measure_gyro());
+    }
+
+    fn measure_gyro(self: &Rc<Self>) {
+        let Some(group) = self.group(
+            "Measuring the gyroscope",
+            "Keep the controller still until the measurement completes.",
+        ) else {
+            return;
+        };
+        let status = detail(&group, "Opening the controller…", false);
+        self.close_button(&group, "Cancel", "");
+        let args = [
+            OsString::from("--gyro-calibration"),
+            "--measure".into(),
+            self.node.as_os_str().to_owned(),
+            std::process::id().to_string().into(),
+        ];
+        let session = self.clone();
+        self.launch(
+            &args,
+            move |line| {
+                if line != "ready" {
+                    return false;
+                }
+                status.set_text("Waiting for one second of steady readings.");
+                true
+            },
+            move |reply| match reply.and_then(parse_bias) {
+                Ok(bias) => session.confirm_gyro(bias, None),
+                Err(error) => session.setup_gyro(Some(&error)),
+            },
+        );
+    }
+
+    fn confirm_gyro(self: &Rc<Self>, bias: [OsString; 4], error: Option<&str>) {
+        let Some(group) = self.group("Measurement complete", "Save the correction for this controller. It will be used when the bridge resumes gyro output.") else { return };
+        if let Some(error) = error {
+            detail(&group, error, true);
+        }
+        self.close_button(&group, "Cancel", "");
+        let save = button(&group, "Save Gyro Calibration", "suggested-action");
+        let session = self.clone();
+        save.connect_clicked(move |_| {
+            session.group(
+                "Saving gyro calibration",
+                "Writing the correction for this controller.",
+            );
+            session.saving.set(true);
+            let mut args = vec!["--gyro-calibration".into(), "--save".into()];
+            args.extend(bias.clone());
+            let session = session.clone();
+            let bias = bias.clone();
+            session.clone().launch(
+                &args,
+                |_| false,
+                move |result| {
+                    session.saving.set(false);
+                    match result {
+                        Ok(_) => {
+                            if let Some(group) = session.group(
+                                "Gyro calibration saved",
+                                "Select Done to resume virtual outputs.",
+                            ) {
+                                session.close_button(&group, "Done", "suggested-action");
+                            }
+                        }
+                        Err(error) => session.confirm_gyro(bias, Some(&error)),
+                    }
+                },
+            );
+        });
+    }
+
+    fn close_button(&self, group: &adw::PreferencesGroup, title: &str, style: &str) {
+        let close = button(group, title, style);
+        let window = self.window.clone();
+        close.connect_clicked(move |_| {
+            if let Some(window) = window.upgrade() {
+                window.close();
+            }
+        });
+    }
+
     fn setup(self: &Rc<Self>, sensitivity: f64, message: Option<&str>) {
-        let filename = self
-            .profile
+        let profile = self.profile.as_ref().expect("game calibration profile");
+        let filename = profile
             .file_name()
-            .unwrap_or(self.profile.as_os_str())
+            .unwrap_or(profile.as_os_str())
             .to_string_lossy();
         let Some(group) = self.group("Prepare calibration", &format!("Profile “{filename}”"))
         else {
@@ -232,7 +331,11 @@ impl Calibration {
         self.saving.set(true);
         let args = [
             OsString::from("--save-measurement"),
-            self.profile.as_os_str().to_owned(),
+            self.profile
+                .as_ref()
+                .expect("game calibration profile")
+                .as_os_str()
+                .to_owned(),
             counts.to_string().into(),
             sensitivity.to_string().into(),
             turns.to_string().into(),
@@ -340,6 +443,23 @@ impl Calibration {
     }
 }
 
+fn parse_bias(reply: String) -> Result<[OsString; 4], String> {
+    let mut fields = reply.split_ascii_whitespace();
+    match [
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+    ] {
+        [Some("bias"), Some(id), Some(x), Some(y), Some(z), None] => {
+            Ok([id, x, y, z].map(OsString::from))
+        }
+        _ => Err("The controller did not return a gyro correction.".into()),
+    }
+}
+
 fn positive_decimal(text: &str) -> Option<f64> {
     text.parse::<f64>()
         .ok()
@@ -431,6 +551,18 @@ wait_for_gate() {
     [ -f "$1" ] || exit 1
 }
 case "$1" in
+    --gyro-calibration)
+        case "$2" in
+            --measure)
+                printf 'ready\nbias 00:11:22:33:44:55 0.25 0 -0.1\n'
+                ;;
+            --save)
+                [ "$3 $4 $5 $6" = "00:11:22:33:44:55 0.25 0 -0.1" ] || exit 1
+                touch "${0%/*}/gyro-saved"
+                ;;
+            *) exit 1 ;;
+        esac
+        ;;
     --measure-stick)
         [ "$2" = 2 ] || exit 1
         if [ "$3" = cancel ]; then exec sleep 60; fi
@@ -457,8 +589,14 @@ esac
         let profile = directory.path().join("profile.toml");
         fs::write(&profile, "version = 1\n[gyro]\nin_game_sens = 2.0\n").unwrap();
 
-        let open =
-            |node: &str| open_window(&application, helper.clone(), profile.clone(), node.into());
+        let open = |node: &str| {
+            open_window(
+                &application,
+                helper.clone(),
+                Some(profile.clone()),
+                node.into(),
+            )
+        };
         let find_button = |window: &adw::ApplicationWindow, name| {
             descendants::<gtk::Button>(window.upcast_ref())
                 .into_iter()
@@ -508,5 +646,30 @@ esac
         find_button(&window, "Cancel").unwrap().emit_clicked();
         wait_for(|| !window.is_visible());
         assert!(find_button(&window, "Save Calibration").is_none());
+
+        let record = directory.path().join("gyro-saved");
+        let open_gyro = || open_window(&application, helper.clone(), None, "gyro".into());
+        let window = open_gyro();
+        find_button(&window, "Start Gyro Calibration")
+            .unwrap()
+            .emit_clicked();
+        wait_for(|| find_button(&window, "Save Gyro Calibration").is_some());
+        assert!(!record.exists());
+        find_button(&window, "Cancel").unwrap().emit_clicked();
+        assert!(!window.is_visible());
+        assert!(!record.exists());
+
+        let window = open_gyro();
+        find_button(&window, "Start Gyro Calibration")
+            .unwrap()
+            .emit_clicked();
+        wait_for(|| find_button(&window, "Save Gyro Calibration").is_some());
+        find_button(&window, "Save Gyro Calibration")
+            .unwrap()
+            .emit_clicked();
+        wait_for(|| find_button(&window, "Done").is_some());
+        assert!(record.exists());
+        find_button(&window, "Done").unwrap().emit_clicked();
+        assert!(!window.is_visible());
     }
 }

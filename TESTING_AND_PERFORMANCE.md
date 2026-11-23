@@ -917,6 +917,14 @@ also checks Save and Cancel.
 cargo test --locked -p joyshockrust-editor calibration_window_completes_and_cancels -- --ignored
 ```
 
+Choose **Calibrate Controller Gyro** with a controller connected. Place
+the controller on a stable surface, run the measurement and cancel at the
+confirmation step. Check that the earlier correction is preserved and
+that virtual outputs resume. Repeat and save, then open a gyro-enabled
+profile and compare stationary drift and deliberate slow aim. Verify that
+the same correction is used after reconnect and that a second controller
+keeps its own correction.
+
 Enable **Start when I log in**, log out and back in, and confirm the tray
 and bridge start. Clear the setting and repeat to confirm manual
 launch is needed. Use **Quit JoyShockRust** and verify both user units

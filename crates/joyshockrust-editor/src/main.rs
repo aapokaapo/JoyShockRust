@@ -149,7 +149,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let [Some(profile), Some(node), None] = [args.next(), args.next(), args.next()] else {
             return Err("usage: joyshockrust-editor --calibrate-game PROFILE HIDRAW".into());
         };
-        return calibration::run(bridge, profile.into(), node.into());
+        return calibration::run(bridge, Some(profile.into()), node.into());
+    }
+    if args
+        .next_if(|arg| arg == "--calibrate-controller-gyro")
+        .is_some()
+    {
+        let [Some(node), None] = [args.next(), args.next()] else {
+            return Err("usage: joyshockrust-editor --calibrate-controller-gyro HIDRAW".into());
+        };
+        return calibration::run(bridge, None, node.into());
     }
     let path = args.next().map(PathBuf::from);
     if args.next().is_some() {

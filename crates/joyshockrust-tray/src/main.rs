@@ -152,6 +152,7 @@ enum Action {
     Load(PathBuf),
     Edit(Option<PathBuf>),
     Calibrate(PathBuf),
+    CalibrateGyro,
     Unload,
     ResumeOutputs,
     Start,
@@ -227,7 +228,7 @@ impl ksni::Tray for Tray {
             menu.push(label(error));
         }
         if state.calibrating {
-            menu.push(label("Calibrating game sensitivity"));
+            menu.push(label("Calibration in progress"));
             return menu;
         }
         if state
@@ -269,6 +270,13 @@ impl ksni::Tray for Tray {
             }
             .into(),
         );
+        if state
+            .status
+            .as_ref()
+            .is_some_and(|status| status.active_node.is_some())
+        {
+            menu.push(item("Calibrate Controller Gyro", Action::CalibrateGyro));
+        }
         if state
             .status
             .as_ref()
@@ -393,7 +401,7 @@ impl Desktop {
             .map(|_| ())
     }
 
-    fn calibrate(&self, profile: &Path, status: &Status) -> io::Result<Child> {
+    fn calibrate(&self, profile: Option<&Path>, status: &Status) -> io::Result<Child> {
         let node = status
             .active_node
             .as_deref()
@@ -403,13 +411,18 @@ impl Desktop {
                 })
             })
             .ok_or_else(|| io::Error::other("connect a controller to calibrate"))?;
-        output(
-            Command::new(&self.bridge)
-                .arg("--check-profile")
-                .arg(profile),
-        )?;
         let mut dialog = Command::new(self.bridge.with_file_name("joyshockrust-editor"));
-        dialog.args(["--calibrate-game"]).arg(profile).arg(node);
+        if let Some(profile) = profile {
+            output(
+                Command::new(&self.bridge)
+                    .arg("--check-profile")
+                    .arg(profile),
+            )?;
+            dialog.arg("--calibrate-game").arg(profile);
+        } else {
+            dialog.arg("--calibrate-controller-gyro");
+        }
+        dialog.arg(node);
         self.set_outputs_paused(true)?;
         match dialog.spawn() {
             Ok(child) => Ok(child),
@@ -456,7 +469,9 @@ impl Desktop {
             Action::Unload => {
                 self.command(&["--unload-profile"])?;
             }
-            Action::Calibrate(_) => unreachable!("calibration is handled by the tray loop"),
+            Action::Calibrate(_) | Action::CalibrateGyro => {
+                unreachable!("calibration is handled by the tray loop")
+            }
             Action::ResumeOutputs => self.set_outputs_paused(false)?,
             Action::Start => {
                 bridge_service("start")?;
@@ -614,12 +629,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Ok(Action::Edit(_) | Action::Quit) if editor.is_some() => {}
-            Ok(Action::Calibrate(path)) => {
+            Ok(action @ (Action::Calibrate(_) | Action::CalibrateGyro)) => {
+                let profile = match &action {
+                    Action::Calibrate(path) => Some(path.as_path()),
+                    _ => None,
+                };
                 let result = state
                     .status
                     .as_ref()
                     .ok_or_else(|| io::Error::other("bridge unavailable"))
-                    .and_then(|status| desktop.calibrate(&path, status));
+                    .and_then(|status| desktop.calibrate(profile, status));
                 match result {
                     Ok(child) => {
                         calibration = Some(child);
@@ -680,6 +699,36 @@ mod tests {
         assert_eq!(waiting.rate, "—");
         assert_eq!(waiting.battery, "—");
         assert!(Status::parse(&connected.replace("version=1", "version=2")).is_none());
+    }
+
+    #[test]
+    fn gyro_calibration_is_available_with_a_controller_and_without_profiles() {
+        let (actions, receiver) = mpsc::channel();
+        let mut tray = Tray {
+            actions,
+            state: TrayState {
+                status: Status::parse(
+                    "version=1\ncontroller=connected\nactive_hidraw=/dev/hidraw6",
+                ),
+                ..TrayState::default()
+            },
+        };
+        let button = tray
+            .menu()
+            .into_iter()
+            .find_map(|entry| match entry {
+                MenuItem::Standard(item) if item.label == "Calibrate Controller Gyro" => Some(item),
+                _ => None,
+            })
+            .unwrap();
+        (button.activate)(&mut tray);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Action::CalibrateGyro
+        ));
+        tray.state.status = Status::parse("version=1\ncontroller=waiting");
+        assert!(!tray.menu().into_iter().any(|entry| matches!(entry,
+            MenuItem::Standard(item) if item.label == "Calibrate Controller Gyro")));
     }
 
     #[test]

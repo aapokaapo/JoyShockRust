@@ -501,6 +501,13 @@ and atomically updates the profile. Closing the window during measurement
 stops and waits for the measurement process before the tray resumes
 normal outputs.
 
+The tray also offers controller gyro calibration. A dedicated measurement
+reads the selected controller without creating a virtual pointer, using
+factory calibration and the same stationary estimator as gyro startup.
+Saving is explicit and stores the residual bias by stable controller ID.
+The bridge reads that correction when opening gyro output. A saved
+correction takes precedence over optional session-start estimation.
+
 The editor is a separate native window. Its controller diagram
 selects a physical input, and the inspector edits keyboard and mouse
 gestures and base gamepad remaps. Advanced TOML preserves access to

@@ -468,3 +468,25 @@ fn whole_turn_calibration_saves_only_a_valid_measurement() {
     assert!(text.contains("real_world_calibration = 40.0"));
     assert!(text.contains("in_game_sens = 2.0"));
 }
+
+#[test]
+fn gyro_calibration_is_saved_separately_for_each_controller() {
+    let directory = TestDirectory::new("gyro-calibration");
+    let first = "00:11:22:33:44:55";
+    let second = "00:11:22:33:44:66";
+    let save = |id, x| {
+        Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
+            .env("XDG_CONFIG_HOME", &directory.0)
+            .args(["--gyro-calibration", "--save", id, x, "0", "-0.1"])
+            .output()
+            .unwrap()
+    };
+    assert!(save(first, "0.25").status.success());
+    assert!(save(second, "0.5").status.success());
+    assert!(!save(first, "nan").status.success());
+    let bias_dir = directory.0.join("joyshockrust/gyro-calibration");
+    let first_bias = fs::read_to_string(bias_dir.join(format!("{first}.toml"))).unwrap();
+    let second_bias = fs::read_to_string(bias_dir.join(format!("{second}.toml"))).unwrap();
+    assert!(first_bias.contains("gyro_bias_dps = [0.25, 0.0, -0.1]"));
+    assert!(second_bias.contains("gyro_bias_dps = [0.5, 0.0, -0.1]"));
+}

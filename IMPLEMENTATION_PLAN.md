@@ -271,7 +271,11 @@ The Sticks page edits keyboard direction keys and inner and outer zones
 independently for each stick. The mapping dialog validates the draft with
 the bridge before returning to the profile.
 
-Next, verify the desktop calibration workflow and cancellation on hardware.
+The tray can also guide stationary gyro calibration and retain the
+correction per controller across restarts. Synthetic tests cover saving,
+cancellation and application of the correction.
+
+Next, verify both desktop calibration workflows on hardware.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

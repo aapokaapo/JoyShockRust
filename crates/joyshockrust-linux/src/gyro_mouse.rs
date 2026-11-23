@@ -111,8 +111,9 @@ impl GyroMouse {
         let factory = super::hidraw::read_factory_calibration(input, transport).map_err(|err| {
             io::Error::other(format!("could not read factory calibration: {err}"))
         })?;
+        let stored = super::gyro_calibration::load(input);
         Ok(Self {
-            aim: GyroAim::new(factory, options.calibrate, options.gyro_scale()),
+            aim: GyroAim::new(factory, options.calibrate, options.gyro_scale(), stored),
             output: open_output("JoyShockRust Gyro Mouse")?,
             gate: GyroGate::new(options.binding),
             flick: options.flick_scale().map(FlickStick::new),
@@ -171,16 +172,21 @@ struct GyroAim {
 }
 
 impl GyroAim {
-    fn new(factory: FactoryCalibration, calibrate: bool, sensitivity: [f64; 2]) -> Self {
+    fn new(
+        factory: FactoryCalibration,
+        calibrate: bool,
+        sensitivity: [f64; 2],
+        stored: Option<Calibration>,
+    ) -> Self {
         let config = Self::config();
         // The sensor clock advances at three ticks per microsecond.
         let max_gap_ticks = (config.max_gap_ns * 3 / 1_000) as u32;
         Self {
             factory,
             timebase: Timebase::new(max_gap_ticks).expect("valid default sensor gap limit"),
-            motion: MotionEngine::new(config, Calibration::default())
+            motion: MotionEngine::new(config, stored.unwrap_or_default())
                 .expect("valid gyro mouse defaults"),
-            calibration: calibrate.then(StationaryCalibration::default),
+            calibration: (calibrate && stored.is_none()).then(StationaryCalibration::default),
             remainder: [0.0; 2],
             sensitivity,
             was_enabled: false,
@@ -289,6 +295,10 @@ mod tests {
     }
 
     fn aim(calibrate: bool) -> GyroAim {
+        aim_with_bias(calibrate, None)
+    }
+
+    fn aim_with_bias(calibrate: bool, bias: Option<Calibration>) -> GyroAim {
         let mut report = [0; 41];
         report[0] = 5;
         for (offset, value) in [
@@ -313,6 +323,7 @@ mod tests {
             FactoryCalibration::from_report(&report).unwrap(),
             calibrate,
             Options::default().gyro_scale(),
+            bias,
         )
     }
 
@@ -431,6 +442,28 @@ mod tests {
             assert_eq!(aim.advance(sample(ticks), enabled), [0, 0], "{ticks}");
         }
         assert_eq!(aim.advance(sample(42_000), true), [-1, 0]);
+    }
+
+    #[test]
+    fn saved_controller_bias_is_applied_on_open() {
+        let raw = RawImuSample {
+            gyro_counts: [0, 8, 0],
+            ..sample(0)
+        };
+        let gyro_bias_dps = aim(false).factory.convert(raw).gyro_dps;
+        let mut corrected = aim_with_bias(true, Some(Calibration { gyro_bias_dps }));
+        assert!(corrected.calibration.is_none());
+        let mut uncorrected = aim(false);
+        let mut horizontal = 0;
+        for ms in (0..=2000).step_by(10) {
+            let sample = RawImuSample {
+                device_ticks: ms * 3_000,
+                ..raw
+            };
+            assert_eq!(corrected.advance(sample, true), [0; 2]);
+            horizontal += uncorrected.advance(sample, true)[0];
+        }
+        assert!(horizontal < 0);
     }
 
     #[test]

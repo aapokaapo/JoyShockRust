@@ -13,6 +13,8 @@ mod game_calibration;
 #[cfg(target_os = "linux")]
 mod gamepad;
 #[cfg(target_os = "linux")]
+mod gyro_calibration;
+#[cfg(target_os = "linux")]
 mod gyro_gate;
 #[cfg(target_os = "linux")]
 mod gyro_mouse;
@@ -115,6 +117,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     if args.next_if(|arg| arg == "--launch-sdl").is_some() {
         eprintln!("{}", launch::run(args));
         return Ok(ExitCode::FAILURE);
+    }
+    if args.next_if(|arg| arg == "--gyro-calibration").is_some() {
+        gyro_calibration::run(args)?;
+        return Ok(ExitCode::SUCCESS);
     }
     if args.next_if(|arg| arg == "--calibrate-game").is_some() {
         game_calibration::run(args)?;
@@ -825,6 +831,7 @@ fn serve_session(
         ReportTimers {
             measurement: measurement.as_deref_mut(),
             keyboard: Some(&keyboard_deadline),
+            ..Default::default()
         },
         |event| {
             let report = match event {
@@ -1105,6 +1112,7 @@ const REPORT_BATCH_LIMIT: u64 = 32;
 #[derive(Default)]
 struct ReportTimers<'a> {
     measurement: Option<&'a mut benchmark::Benchmark>,
+    stop_at: Option<std::time::Instant>,
     keyboard: Option<&'a std::cell::Cell<Option<std::time::Instant>>>,
 }
 
@@ -1137,6 +1145,7 @@ fn forward_reports<'a>(
         let deadline = benchmark_deadline
             .into_iter()
             .chain(timers.keyboard.and_then(std::cell::Cell::get))
+            .chain(timers.stop_at)
             .min();
         let ((ready, request, mut feedback_ready), polled_feedback) = {
             let feedback = feedback.map(std::cell::RefCell::borrow);
@@ -1162,6 +1171,15 @@ fn forward_reports<'a>(
         }
         if ready.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Ok(());
+        }
+        if timers
+            .stop_at
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Keep the controller still on a stable surface, then retry.",
+            ));
         }
         if let (Some(deadline), Some(measurement)) =
             (benchmark_deadline, measurement.as_deref_mut())
@@ -1470,6 +1488,7 @@ mod tests {
             super::ReportTimers {
                 measurement: Some(&mut benchmark),
                 keyboard: Some(&keyboard),
+                ..Default::default()
             },
             |event| {
                 let super::SessionEvent::KeyboardDeadline(now) = event else {
