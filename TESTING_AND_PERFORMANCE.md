@@ -831,6 +831,15 @@ an in-game landmark.
 
 ## Desktop tray acceptance
 
+Open both calibration windows using the tray. Use the physical
+controller to start, save and close the gyro workflow. In game
+calibration, verify D-pad left/right changes sensitivity by 0.1,
+L1/R1 changes it by 0.01, and D-pad up/down moves focus. While the game
+has focus, verify Cross and Circle leave the calibration window alone
+and Options still controls measurement. Refocus calibration, change the
+whole-turn count with the D-pad, choose a profile and save with Cross.
+Check Circle cancels and the tray resumes the bridge.
+
 Install the tray and bridge using the [desktop tray instructions](README.md#desktop-tray).
 Run JoyShockRust from the applications menu in a Wayland session with a
 StatusNotifierItem host. Verify the menu with no controller connected,

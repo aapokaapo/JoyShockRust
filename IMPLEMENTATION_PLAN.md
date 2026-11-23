@@ -253,7 +253,9 @@ Stick measurement and validates and saves the selected profile through
 the bridge CLI. The window follows readiness and sweep progress as they
 happen and asks for the destination profile after measurement. It
 preselects the active file when available. The tray resumes the bridge
-after the window exits.
+after the window exits. Both calibration windows accept controller
+navigation while focused, including numeric adjustment and profile
+selection in the real-world calibration window.
 
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects

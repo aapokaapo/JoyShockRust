@@ -9,6 +9,7 @@ use adw::{gtk, prelude::*};
 
 mod bindings;
 mod calibration;
+mod calibration_navigation;
 mod controller;
 mod sensitivity;
 mod stick_keys;

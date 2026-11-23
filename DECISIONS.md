@@ -498,6 +498,10 @@ For tray RWC calibration, the bridge ends its active output session
 before acknowledging the pause and keeps serving control requests.
 Discovery resumes with the existing profile and controller filter.
 The tray waits for the GTK calibration window, then resumes the bridge.
+A read-only helper opens the selected hidraw node and publishes
+navigation presses to the calibration window while outputs are paused.
+The window handles those presses only while focused. Options remains
+available to the measurement worker.
 The window runs the same Flick Stick sweep as the interactive CLI.
 Measurement emits line-delimited status on readiness and Options
 transitions. The GTK window drains these messages asynchronously before

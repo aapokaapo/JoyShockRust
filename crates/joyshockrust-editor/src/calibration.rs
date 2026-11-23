@@ -8,6 +8,8 @@ use std::{
 
 use adw::{gio, glib, gtk, prelude::*};
 
+use crate::calibration_navigation::{self, Control};
+
 pub fn run(
     bridge: PathBuf,
     game: Option<GameProfiles>,
@@ -19,7 +21,9 @@ pub fn run(
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
     application.connect_activate(move |application| {
-        open_window(application, bridge.clone(), game.clone(), node.clone());
+        let (window, session) =
+            open_window(application, bridge.clone(), game.clone(), node.clone());
+        session.watch_controller(&window);
     });
     if application.run_with_args(&["joyshockrust-editor"]) != glib::ExitCode::SUCCESS {
         return Err("Could not start calibration in a Wayland session".into());
@@ -59,6 +63,8 @@ struct Calibration {
     worker: RefCell<Option<gio::Subprocess>>,
     closing: Cell<bool>,
     saving: Cell<bool>,
+    controls: RefCell<Vec<Control>>,
+    navigation_hint: glib::WeakRef<gtk::Label>,
 }
 
 fn open_window(
@@ -66,7 +72,7 @@ fn open_window(
     bridge: PathBuf,
     game: Option<GameProfiles>,
     node: PathBuf,
-) -> adw::ApplicationWindow {
+) -> (adw::ApplicationWindow, Rc<Calibration>) {
     let window = adw::ApplicationWindow::builder()
         .application(application)
         .title(if game.is_some() {
@@ -81,6 +87,20 @@ fn open_window(
     toolbar.add_top_bar(&adw::HeaderBar::new());
     let page = adw::PreferencesPage::new();
     toolbar.set_content(Some(&page));
+    let hint = gtk::Label::builder()
+        .label(if game.is_some() {
+            "D-pad: move or change value · L1/R1: fine sensitivity · Cross: select · Circle: close"
+        } else {
+            "D-pad: move · Cross: select · Circle: close"
+        })
+        .wrap(true)
+        .margin_start(16)
+        .margin_end(16)
+        .margin_top(8)
+        .margin_bottom(8)
+        .css_classes(["dim-label"])
+        .build();
+    toolbar.add_bottom_bar(&hint);
     window.set_content(Some(&toolbar));
     let session = Rc::new(Calibration {
         bridge,
@@ -92,6 +112,8 @@ fn open_window(
         worker: RefCell::new(None),
         closing: Cell::new(false),
         saving: Cell::new(false),
+        controls: RefCell::new(Vec::new()),
+        navigation_hint: hint.downgrade(),
     });
     let on_close = session.clone();
     window.connect_close_request(move |_| {
@@ -123,12 +145,81 @@ fn open_window(
         session.setup_gyro(None);
     }
     window.present();
-    window
+    (window, session)
 }
 
 impl Calibration {
+    fn watch_controller(self: &Rc<Self>, window: &adw::ApplicationWindow) {
+        let parent = std::process::id().to_string();
+        let flags = gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_SILENCE;
+        let reader = gio::Subprocess::newv(
+            &[
+                self.bridge.as_os_str(),
+                OsStr::new("--calibration-navigation"),
+                self.node.as_os_str(),
+                OsStr::new(&parent),
+            ],
+            flags,
+        );
+        let reader = match reader {
+            Ok(reader) => reader,
+            Err(_) => {
+                self.controller_unavailable();
+                return;
+            }
+        };
+        let stream = gio::DataInputStream::new(&reader.stdout_pipe().expect("piped stdout"));
+        let on_hide = reader.clone();
+        window.connect_hide(move |_| on_hide.force_exit());
+        let session = Rc::downgrade(self);
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok(Some(command)) =
+                stream.read_line_utf8_future(glib::Priority::DEFAULT).await
+            {
+                let Some(session) = session.upgrade() else {
+                    break;
+                };
+                session.navigate(command.as_str());
+            }
+            reader.force_exit();
+            let _ = reader.wait_future().await;
+            if let Some(session) = session.upgrade() {
+                session.controller_unavailable();
+            }
+        });
+    }
+
+    fn controller_unavailable(&self) {
+        if let Some(hint) = self.navigation_hint.upgrade() {
+            hint.set_text("Controller navigation unavailable. Use the keyboard or mouse.");
+        }
+    }
+
+    fn navigate(&self, command: &str) {
+        if let Some(window) = self.window.upgrade()
+            && window.is_active()
+        {
+            self.navigate_window(&window, command);
+        }
+    }
+
+    fn navigate_window(&self, window: &adw::ApplicationWindow, command: &str) {
+        // Release the borrow before an action can replace the current group.
+        let controls = self.controls.borrow().clone();
+        calibration_navigation::navigate(window, &controls, command);
+    }
+
+    fn button(&self, group: &adw::PreferencesGroup, title: &str, style: &str) -> gtk::Button {
+        let button = button(group, title, style);
+        self.controls
+            .borrow_mut()
+            .push(Control::Button(button.downgrade()));
+        button
+    }
+
     fn group(&self, title: &str, description: &str) -> Option<adw::PreferencesGroup> {
         let page = self.page.upgrade()?;
+        self.controls.borrow_mut().clear();
         // Each step adds a single group. Keep the scroll container and header in place.
         if let Some(previous) = self.group.borrow().upgrade() {
             page.remove(&previous);
@@ -147,7 +238,7 @@ impl Calibration {
         if let Some(error) = error {
             detail(&group, error, true);
         }
-        let start = button(&group, "Start Gyro Calibration", "suggested-action");
+        let start = self.button(&group, "Start Gyro Calibration", "suggested-action");
         let session = self.clone();
         start.connect_clicked(move |_| session.measure_gyro());
     }
@@ -190,7 +281,7 @@ impl Calibration {
             detail(&group, error, true);
         }
         self.close_button(&group, "Cancel", "");
-        let save = button(&group, "Save Gyro Calibration", "suggested-action");
+        let save = self.button(&group, "Save Gyro Calibration", "suggested-action");
         let session = self.clone();
         save.connect_clicked(move |_| {
             session.group(
@@ -224,7 +315,7 @@ impl Calibration {
     }
 
     fn close_button(&self, group: &adw::PreferencesGroup, title: &str, style: &str) {
-        let close = button(group, title, style);
+        let close = self.button(group, title, style);
         let window = self.window.clone();
         close.connect_clicked(move |_| {
             if let Some(window) = window.upgrade() {
@@ -245,9 +336,12 @@ impl Calibration {
             "In-game mouse sensitivity",
             &sensitivity.to_string(),
         );
+        self.controls
+            .borrow_mut()
+            .push(Control::Sensitivity(entry.downgrade()));
         let warning = detail(&group, message.unwrap_or_default(), true);
         warning.set_visible(message.is_some());
-        let start = button(&group, "Start Measurement", "suggested-action");
+        let start = self.button(&group, "Start Measurement", "suggested-action");
         let session = self.clone();
         start.connect_clicked(move |_| {
             let text = entry.text().trim().replace(',', ".");
@@ -278,7 +372,7 @@ impl Calibration {
             .subtitle("Opening the controller and calibration mouse…")
             .build();
         group.add(&status);
-        let cancel = button(&group, "Cancel", "");
+        let cancel = self.button(&group, "Cancel", "");
         let window = self.window.clone();
         cancel.connect_clicked(move |_| {
             if let Some(window) = window.upgrade() {
@@ -333,6 +427,9 @@ impl Calibration {
             return;
         };
         let entry = input(&group, "Complete turns", &turns.to_string());
+        self.controls
+            .borrow_mut()
+            .push(Control::Turns(entry.downgrade()));
         let game = self.game.as_ref().expect("game calibration");
         let profiles = game.choices(previous);
         let mut labels = vec!["Choose a profile".to_owned()];
@@ -369,9 +466,12 @@ impl Calibration {
             .build();
         destination.set_visible(!profiles.is_empty());
         group.add(&destination);
+        self.controls
+            .borrow_mut()
+            .push(Control::Profile(destination.downgrade()));
         let warning = detail(&group, message.unwrap_or_default(), true);
         warning.set_visible(message.is_some());
-        let save = button(&group, "Save Calibration", "suggested-action");
+        let save = self.button(&group, "Save Calibration", "suggested-action");
         save.set_visible(!profiles.is_empty());
         save.set_sensitive(selected != 0);
         let save_ref = save.downgrade();
@@ -388,9 +488,16 @@ impl Calibration {
                 None
             }
         };
-        let restart = button(&group, "Measure Again", "");
+        let restart = self.button(&group, "Measure Again", "");
         let session = self.clone();
         restart.connect_clicked(move |_| session.setup(sensitivity, None));
+        if profiles.is_empty() {
+            detail(
+                &group,
+                "Use Browse Profiles with the keyboard or mouse to choose an existing profile.",
+                false,
+            );
+        }
         let browse = button(&group, "Browse Profiles…", "");
         let session = self.clone();
         let browse_turns = confirm_turns.clone();
@@ -501,7 +608,7 @@ impl Calibration {
                     .build(),
             );
         }
-        let done = button(&group, "Done", "suggested-action");
+        let done = self.button(&group, "Done", "suggested-action");
         let window = self.window.clone();
         done.connect_clicked(move |_| {
             if let Some(window) = window.upgrade() {
@@ -591,7 +698,7 @@ fn parse_bias(reply: String) -> Result<[OsString; 4], String> {
     }
 }
 
-fn positive_decimal(text: &str) -> Option<f64> {
+pub(crate) fn positive_decimal(text: &str) -> Option<f64> {
     text.parse::<f64>()
         .ok()
         .filter(|value| value.is_finite() && *value > 0.0)
@@ -746,10 +853,24 @@ esac
                 .find(|button| button.label().as_deref() == Some(name))
         };
         let node = directory.path().join("measure");
-        let window = open(node.to_str().unwrap());
-        find_button(&window, "Start Measurement")
-            .unwrap()
-            .emit_clicked();
+        let (window, session) = open(node.to_str().unwrap());
+        if !window.is_active() {
+            session.navigate("back");
+            assert!(window.is_visible());
+        }
+        let sensitivity = descendants::<adw::EntryRow>(window.upcast_ref())
+            .into_iter()
+            .find(|row| row.title() == "In-game mouse sensitivity")
+            .unwrap();
+        session.navigate_window(&window, "right");
+        assert_eq!(sensitivity.text(), "2.1");
+        session.navigate_window(&window, "fine-left");
+        assert_eq!(sensitivity.text(), "2.09");
+        session.navigate_window(&window, "fine-right");
+        session.navigate_window(&window, "left");
+        assert_eq!(sensitivity.text(), "2");
+        session.navigate_window(&window, "down");
+        session.navigate_window(&window, "accept");
         for (message, gate) in [
             ("Ready.", "ready"),
             ("Center the right stick", "centered"),
@@ -776,70 +897,81 @@ esac
                 .find(|row| row.title() == "Profile")
                 .unwrap()
         };
-        let finish_measurement = |window: &adw::ApplicationWindow| {
-            let turns = descendants::<adw::EntryRow>(window.upcast_ref())
-                .into_iter()
-                .find(|row| row.title() == "Complete turns")
-                .unwrap();
-            turns.set_text("4");
-            find_button(window, "Save Calibration")
-                .unwrap()
-                .emit_clicked();
-            wait_for(|| find_button(window, "Done").is_some());
-            find_button(window, "Done").unwrap().emit_clicked();
-            assert!(!window.is_visible());
-        };
+        let finish_measurement =
+            |window: &adw::ApplicationWindow, session: &Calibration, select_alternate| {
+                let turns = descendants::<adw::EntryRow>(window.upcast_ref())
+                    .into_iter()
+                    .find(|row| row.title() == "Complete turns")
+                    .unwrap();
+                for _ in 0..3 {
+                    session.navigate_window(window, "right");
+                }
+                assert_eq!(turns.text(), "4");
+                session.navigate_window(window, "down");
+                if select_alternate {
+                    session.navigate_window(window, "right");
+                    assert_eq!(pick_profile(window).selected(), 2);
+                }
+                session.navigate_window(window, "down");
+                session.navigate_window(window, "accept");
+                wait_for(|| find_button(window, "Done").is_some());
+                session.navigate_window(window, "accept");
+                assert!(!window.is_visible());
+            };
         let picker = pick_profile(&window);
         assert_eq!(picker.selected(), 1);
-        finish_measurement(&window);
+        finish_measurement(&window, &session, false);
         assert_eq!(
             fs::read_to_string(&rwc_saved).unwrap(),
             profile.to_str().unwrap()
         );
 
-        let window = open(node.to_str().unwrap());
-        find_button(&window, "Start Measurement")
-            .unwrap()
-            .emit_clicked();
+        let (window, session) = open(node.to_str().unwrap());
+        session.navigate_window(&window, "down");
+        session.navigate_window(&window, "accept");
         wait_for(|| find_button(&window, "Save Calibration").is_some());
-        pick_profile(&window).set_selected(2);
-        finish_measurement(&window);
+        finish_measurement(&window, &session, true);
         assert_eq!(
             fs::read_to_string(&rwc_saved).unwrap(),
             alternate.to_str().unwrap()
         );
 
-        let window = open("cancel");
-        find_button(&window, "Start Measurement")
-            .unwrap()
-            .emit_clicked();
-        find_button(&window, "Cancel").unwrap().emit_clicked();
+        let (window, session) = open("cancel");
+        session.navigate_window(&window, "down");
+        session.navigate_window(&window, "accept");
+        assert!(find_button(&window, "Cancel").is_some());
+        session.navigate_window(&window, "back");
         wait_for(|| !window.is_visible());
         assert!(find_button(&window, "Save Calibration").is_none());
 
         let record = directory.path().join("gyro-saved");
         let open_gyro = || open_window(&application, helper.clone(), None, "gyro".into());
-        let window = open_gyro();
-        find_button(&window, "Start Gyro Calibration")
-            .unwrap()
-            .emit_clicked();
+        let (window, session) = open_gyro();
+        session.navigate_window(&window, "accept");
         wait_for(|| find_button(&window, "Save Gyro Calibration").is_some());
         assert!(!record.exists());
-        find_button(&window, "Cancel").unwrap().emit_clicked();
+        session.navigate_window(&window, "back");
         assert!(!window.is_visible());
         assert!(!record.exists());
 
-        let window = open_gyro();
-        find_button(&window, "Start Gyro Calibration")
-            .unwrap()
-            .emit_clicked();
+        let (window, session) = open_gyro();
+        session.navigate_window(&window, "accept");
         wait_for(|| find_button(&window, "Save Gyro Calibration").is_some());
-        find_button(&window, "Save Gyro Calibration")
-            .unwrap()
-            .emit_clicked();
+        let save = find_button(&window, "Save Gyro Calibration").unwrap();
+        for _ in 0..2 {
+            if gtk::prelude::GtkWindowExt::focus(&window).as_ref() == Some(save.upcast_ref()) {
+                break;
+            }
+            session.navigate_window(&window, "down");
+        }
+        assert_eq!(
+            gtk::prelude::GtkWindowExt::focus(&window).as_ref(),
+            Some(save.upcast_ref())
+        );
+        session.navigate_window(&window, "accept");
         wait_for(|| find_button(&window, "Done").is_some());
         assert!(record.exists());
-        find_button(&window, "Done").unwrap().emit_clicked();
+        session.navigate_window(&window, "accept");
         assert!(!window.is_visible());
     }
 }

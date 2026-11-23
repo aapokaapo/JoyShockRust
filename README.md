@@ -737,6 +737,14 @@ enter the number of complete turns. The active profile is preselected if
 its file is available. Choose another profile or use **Browse Profiles…**
 to find a different file. Select **Save Calibration** to store the result.
 
+In either calibration window, use **D-pad up/down** to move focus,
+**Cross** to activate the focused button and **Circle** to close. In the
+game calibration window, **D-pad left/right** adjusts the focused value
+or changes the selected profile. **L1/R1** adjusts sensitivity in
+smaller steps. Return focus to the calibration window after the in-game
+measurement. The system file picker opened by **Browse Profiles…**
+uses keyboard and mouse.
+
 Select **Done** to resume the bridge with the same in-memory profile and
 controller selection. To apply the saved calibration, select the
 updated profile in **Profiles**. If the tray was interrupted and the
