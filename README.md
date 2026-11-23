@@ -316,6 +316,10 @@ axis_lock = true
 Use `[keyboard.touch_pointer]` to move the virtual pointer with one
 finger. The sensitivity on each axis defaults to 0.5 counts per touchpad
 unit. Allowed values are 0–100, and 0 disables movement on that axis.
+Set `motion_threshold` to suppress small initial movements. The pointer
+begins moving when the finger exceeds that distance from its starting
+position. It uses the current report's motion and discards earlier
+movement. The threshold is in touchpad units and defaults to 0 (off).
 Combine this with `fingers = 2` under `[keyboard.touch_scroll]` to move
 the pointer with one finger and scroll with two.
 
@@ -323,6 +327,7 @@ the pointer with one finger and scroll with two.
 [keyboard.touch_pointer]
 sensitivity_x = 0.5
 sensitivity_y = 0.5
+motion_threshold = 10
 tap_to_click = true
 two_finger_tap_to_click = true
 tap_window_ms = 200

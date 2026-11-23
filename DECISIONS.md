@@ -439,6 +439,10 @@ steps select by absolute step count, with vertical taking ties.
 Touchpad pointer motion uses one tracked contact and preserves fractional
 counts independently per axis. Adding a second contact clears its baseline,
 so two-finger scrolling and single-finger pointing can share the pad.
+An optional radial threshold suppresses initial pointer motion until
+the contact moves far enough from its starting point. The crossing
+report starts motion without replaying suppressed movement. A contact
+change or two-finger gesture resets the threshold.
 
 One-finger left clicks and two-finger right clicks can be enabled
 independently. The tap window runs from first contact to final lift.

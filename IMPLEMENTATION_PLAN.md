@@ -208,7 +208,8 @@ distances. Profiles can reverse either axis independently of wheel steps
 from mapped buttons or lock each swipe to the axis selected at the
 first wheel step. Synthetic tests cover axis selection and reset.
 One-finger swipes can also drive relative pointer motion with separate axis
-sensitivity, yielding to two-finger scrolling.
+sensitivity and an optional radial start threshold, yielding to
+two-finger scrolling.
 The pointer profile can map short single-finger taps to left clicks and
 two-finger taps to right clicks. Both use a configurable duration and
 radial travel limit. Synthetic tests cover staggered contacts,

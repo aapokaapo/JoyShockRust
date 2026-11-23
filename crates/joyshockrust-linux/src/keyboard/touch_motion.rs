@@ -114,6 +114,8 @@ pub(super) struct PointerSettings {
     sensitivity_x: Option<f64>,
     sensitivity_y: Option<f64>,
     #[serde(default)]
+    motion_threshold: u16,
+    #[serde(default)]
     pub(super) tap_to_click: bool,
     #[serde(default)]
     pub(super) two_finger_tap_to_click: bool,
@@ -145,6 +147,8 @@ pub(super) struct PointerState {
     tracker: Tracker,
     remainder: [f64; 2],
     sensitivity: [f64; 2],
+    motion_threshold_squared: i64,
+    pending_displacement: Option<[i32; 2]>,
 }
 
 pub(super) struct TapState {
@@ -274,10 +278,13 @@ impl TapContacts {
 
 impl PointerState {
     pub(super) fn new(settings: PointerSettings) -> Self {
+        let threshold = i64::from(settings.motion_threshold);
         Self {
             tracker: Tracker::default(),
             remainder: [0.0; 2],
             sensitivity: settings.sensitivity(),
+            motion_threshold_squared: threshold * threshold,
+            pending_displacement: (threshold != 0).then_some([0; 2]),
         }
     }
 
@@ -288,8 +295,19 @@ impl PointerState {
         }
         let Some(delta) = self.tracker.advance(contacts, 1) else {
             self.remainder = [0.0; 2];
+            self.pending_displacement = (self.motion_threshold_squared != 0).then_some([0; 2]);
             return [0; 2];
         };
+        if let Some([x, y]) = &mut self.pending_displacement {
+            *x += delta[0];
+            *y += delta[1];
+            let [x, y] = [i64::from(*x), i64::from(*y)];
+            if x * x + y * y <= self.motion_threshold_squared {
+                return [0; 2];
+            }
+            // Start from this report's delta without replaying the suppressed motion.
+            self.pending_displacement = None;
+        }
         std::array::from_fn(|axis| {
             let total = self.remainder[axis] + f64::from(delta[axis]) * self.sensitivity[axis];
             let movement = total.trunc();

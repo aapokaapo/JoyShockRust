@@ -781,6 +781,11 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     taps with one and two fingers, then try holding for over half a second
     or moving either finger before lifting. Confirm only the taps within
     the configured time and travel limits produce clicks.
+28. Set `motion_threshold = 10` in `[keyboard.touch_pointer]`. Check that
+    small initial motion during a tap does not move the pointer. Make a
+    deliberate single-finger swipe and verify the pointer moves after the
+    threshold without jumping. Lift the finger and check that the next
+    contact starts with the threshold again.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

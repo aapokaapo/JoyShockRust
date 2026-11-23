@@ -2234,6 +2234,86 @@ mod tests {
     }
 
     #[test]
+    fn touch_pointer_start_threshold_resets_and_leaves_taps_and_scroll_independent() {
+        let config = config(
+            r#"
+            [keyboard.touch_pointer]
+            sensitivity_x = 1.0
+            sensitivity_y = 1.0
+            motion_threshold = 10
+            tap_to_click = true
+            [keyboard.touch_scroll]
+            fingers = 2
+            vertical_step = 10
+            "#,
+        );
+        let mut state = State::new(&config);
+        let start = Instant::now();
+        let contact = |id, x, y| Some(TouchContact { id, x, y });
+        let left = KeyCode::BTN_LEFT.0;
+        let x = RelativeAxisCode::REL_X.0;
+        let wheel = RelativeAxisCode::REL_WHEEL.0;
+        let allocations = allocation_counter::measure(|| {
+            for (ms, contacts, expected) in [
+                (0, [contact(1, 100, 100), None], None),
+                (20, [contact(1, 106, 108), None], None),
+                (35, [contact(1, 102, 100), None], None),
+                (60, [None; 2], Some((EventType::KEY, left, 1))),
+                (90, [None; 2], Some((EventType::KEY, left, 0))),
+                (100, [contact(1, 100, 100), None], None),
+                (110, [contact(1, 106, 108), None], None),
+                (
+                    120,
+                    [None, contact(1, 108, 108)],
+                    Some((EventType::RELATIVE, x, 2)),
+                ),
+                (
+                    130,
+                    [contact(1, 107, 108), None],
+                    Some((EventType::RELATIVE, x, -1)),
+                ),
+                (140, [contact(1, 107, 108), contact(2, 200, 200)], None),
+                (
+                    150,
+                    [contact(1, 107, 128), contact(2, 200, 220)],
+                    Some((EventType::RELATIVE, wheel, -2)),
+                ),
+                (160, [contact(1, 107, 128), None], None),
+                (170, [contact(1, 113, 136), None], None),
+                (
+                    180,
+                    [contact(1, 115, 136), None],
+                    Some((EventType::RELATIVE, x, 2)),
+                ),
+                (190, [contact(3, 100, 100), None], None),
+                (200, [contact(3, 105, 100), None], None),
+            ] {
+                let mut observed = None;
+                state
+                    .update(
+                        Input {
+                            contacts,
+                            ..Input::default()
+                        },
+                        start + Duration::from_millis(ms),
+                        |events| {
+                            assert_eq!(events.len(), 1, "{ms}");
+                            let event = events[0];
+                            assert_eq!(
+                                observed.replace((event.event_type(), event.code(), event.value())),
+                                None
+                            );
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(observed, expected, "{ms}");
+            }
+        });
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
     fn touch_pointer_profile_validates_sensitivities_and_tap_limits() {
         let settings = "version = 1\n[keyboard.touch_pointer]\n";
         assert!(crate::profile::parse(settings).is_ok());
@@ -2241,6 +2321,7 @@ mod tests {
             "sensitivity_x = -1",
             "sensitivity_y = nan",
             "sensitivity_y = 101",
+            "motion_threshold = -1",
             "tap_window_ms = 0",
             "tap_window_ms = -1",
             "tap_max_travel = -1",
