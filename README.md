@@ -334,9 +334,14 @@ tap_window_ms = 200
 tap_max_travel = 40
 ```
 
-`tap_to_click` enables one-finger left clicks.
-`two_finger_tap_to_click` enables two-finger right clicks. Both settings
-are off by default and can be enabled independently. Both use
+`tap_to_click` enables one-finger clicks, with `BTN_LEFT` as the default
+output. `two_finger_tap_to_click` enables two-finger clicks, with
+`BTN_RIGHT` as the default output. Both settings are off by default
+and can be enabled independently. Use `tap_button` or
+`two_finger_tap_button` to change the corresponding output to
+`BTN_LEFT`, `BTN_RIGHT`, `BTN_MIDDLE`, `BTN_SIDE` or `BTN_EXTRA`.
+For example, `two_finger_tap_button = "BTN_MIDDLE"` sends a middle click
+when two-finger taps are enabled. Both tap gestures use
 `tap_window_ms`, a positive whole number that defaults to 200. A tap
 must be shorter than this window from first contact to final lift.
 Each finger must stay within `tap_max_travel` touchpad units of its

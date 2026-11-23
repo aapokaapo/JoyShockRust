@@ -210,8 +210,8 @@ first wheel step. Synthetic tests cover axis selection and reset.
 One-finger swipes can also drive relative pointer motion with separate axis
 sensitivity and an optional radial start threshold, yielding to
 two-finger scrolling.
-The pointer profile can map short single-finger taps to left clicks and
-two-finger taps to right clicks. Both use a configurable duration and
+The pointer profile maps single- and two-finger taps to configurable
+mouse buttons, defaulting to left and right. Both use a configurable duration and
 radial travel limit. Synthetic tests cover staggered contacts,
 threshold boundaries and cancellation by touch scrolling.
 An opt-in session grab can suppress native evdev touchpad events from the

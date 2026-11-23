@@ -120,14 +120,8 @@ impl Config {
     }
 
     fn touch_tap_buttons(&self) -> [Option<KeyCode>; 2] {
-        self.touch_pointer.map_or([None; 2], |settings| {
-            [
-                settings.tap_to_click.then_some(KeyCode::BTN_LEFT),
-                settings
-                    .two_finger_tap_to_click
-                    .then_some(KeyCode::BTN_RIGHT),
-            ]
-        })
+        self.touch_pointer
+            .map_or([None; 2], touch_motion::PointerSettings::tap_buttons)
     }
 
     fn has_scroll(&self) -> bool {
@@ -624,12 +618,12 @@ impl State {
                 scroll.advance(input.contacts)
             });
         self.pulses.retain(|&(_, until)| until > now);
-        if let Some((tap, [left, right])) = &mut self.touch_tap {
+        if let Some((tap, [one_finger, two_fingers])) = &mut self.touch_tap {
             let cancelled = scroll != [0; WHEEL_AXES.len()]
                 || input.controls.buttons.contains(Button::TouchpadClick);
             let button = match tap.advance(input.contacts, cancelled, now) {
-                Some(touch_motion::TapCount::One) => *left,
-                Some(touch_motion::TapCount::Two) => *right,
+                Some(touch_motion::TapCount::One) => *one_finger,
+                Some(touch_motion::TapCount::Two) => *two_fingers,
                 None => None,
             };
             if let Some(button) = button {
@@ -2469,7 +2463,7 @@ mod tests {
     }
 
     #[test]
-    fn touch_pointer_profile_validates_sensitivities_and_tap_limits() {
+    fn touch_pointer_profile_validates_settings() {
         let settings = "version = 1\n[keyboard.touch_pointer]\n";
         assert!(crate::profile::parse(settings).is_ok());
         for invalid in [
@@ -2480,11 +2474,72 @@ mod tests {
             "tap_window_ms = 0",
             "tap_window_ms = -1",
             "tap_max_travel = -1",
+            "tap_button = 'KEY_SPACE'",
+            "two_finger_tap_button = 'BTN_SOUTH'",
+            "tap_button = 'BTN_UNKNOWN'",
         ] {
             assert!(
                 crate::profile::parse(&format!("{settings}{invalid}\n")).is_err(),
                 "{invalid}"
             );
+        }
+    }
+
+    #[test]
+    fn touch_taps_can_send_different_mouse_buttons() {
+        let config = config(
+            r#"
+            [keyboard.touch_pointer]
+            tap_to_click = true
+            tap_button = "BTN_MIDDLE"
+            two_finger_tap_to_click = true
+            two_finger_tap_button = "BTN_SIDE"
+            "#,
+        );
+        assert_eq!(
+            config.keys().collect::<Vec<_>>(),
+            [KeyCode::BTN_MIDDLE, KeyCode::BTN_SIDE]
+        );
+        let mut state = State::new(&config);
+        let start = Instant::now();
+        let a = Some(TouchContact {
+            id: 1,
+            x: 100,
+            y: 100,
+        });
+        let b = Some(TouchContact {
+            id: 2,
+            x: 200,
+            y: 200,
+        });
+        let middle = KeyCode::BTN_MIDDLE.0;
+        let side = KeyCode::BTN_SIDE.0;
+        for (ms, contacts, expected) in [
+            (0, [a, None], None),
+            (20, [None; 2], Some((middle, 1))),
+            (50, [None; 2], Some((middle, 0))),
+            (60, [a, b], None),
+            (80, [None; 2], Some((side, 1))),
+            (110, [None; 2], Some((side, 0))),
+        ] {
+            let mut observed = None;
+            state
+                .update(
+                    Input {
+                        contacts,
+                        ..Input::default()
+                    },
+                    start + Duration::from_millis(ms),
+                    |events| {
+                        assert_eq!(events.len(), 1);
+                        let event = events[0];
+                        assert_eq!(event.event_type(), EventType::KEY);
+                        assert_eq!(observed.replace((event.code(), event.value())), None);
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            assert_eq!(observed, expected, "{ms} ms");
         }
     }
 

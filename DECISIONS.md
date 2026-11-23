@@ -453,6 +453,8 @@ press cancels the candidate until all contacts lift. Clicks share the
 pulse deadline used by other mapped buttons.
 Both tap counts use the profile's time window and per-finger radial
 travel limit. They default to 200 ms and 40 touchpad units.
+Each tap count can override its mouse button using the same five
+button codes supported by keyboard-profile bindings.
 
 Updated 2026-11-23. The opt-in native touchpad grab is scoped to an evdev
 node under the active hidraw device's HID parent. The opened node must

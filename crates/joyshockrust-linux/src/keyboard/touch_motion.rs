@@ -3,10 +3,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use evdev::KeyCode;
 use joyshockrust_input::{DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH, TouchContact};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de};
 
-use super::HOLD_TIME;
+use super::{HOLD_TIME, is_mouse_button};
 
 const DEFAULT_TAP_MAX_TRAVEL: u16 = 40;
 
@@ -116,14 +117,39 @@ pub(super) struct PointerSettings {
     #[serde(default)]
     motion_threshold: u16,
     #[serde(default)]
-    pub(super) tap_to_click: bool,
+    tap_to_click: bool,
     #[serde(default)]
-    pub(super) two_finger_tap_to_click: bool,
+    two_finger_tap_to_click: bool,
+    #[serde(default, deserialize_with = "deserialize_tap_button")]
+    tap_button: Option<KeyCode>,
+    #[serde(default, deserialize_with = "deserialize_tap_button")]
+    two_finger_tap_button: Option<KeyCode>,
     tap_window_ms: Option<NonZeroU32>,
     tap_max_travel: Option<u16>,
 }
 
+fn deserialize_tap_button<'de, D>(deserializer: D) -> Result<Option<KeyCode>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let name = String::deserialize(deserializer)?;
+    name.parse::<KeyCode>()
+        .ok()
+        .filter(|&key| is_mouse_button(key))
+        .map(Some)
+        .ok_or_else(|| de::Error::custom(format!("expected a mouse button, got {name}")))
+}
+
 impl PointerSettings {
+    pub(super) fn tap_buttons(self) -> [Option<KeyCode>; 2] {
+        [
+            self.tap_to_click
+                .then_some(self.tap_button.unwrap_or(KeyCode::BTN_LEFT)),
+            self.two_finger_tap_to_click
+                .then_some(self.two_finger_tap_button.unwrap_or(KeyCode::BTN_RIGHT)),
+        ]
+    }
+
     pub(super) fn validate(self) -> Result<Self, &'static str> {
         if !self
             .sensitivity()

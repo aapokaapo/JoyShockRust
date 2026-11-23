@@ -795,6 +795,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     deliberate single-finger swipe and verify the pointer moves after the
     threshold without jumping. Lift the finger and check that the next
     contact starts with the threshold again.
+29. Enable both tap gestures in `[keyboard.touch_pointer]` and set
+    `tap_button = "BTN_MIDDLE"` and `two_finger_tap_button = "BTN_SIDE"`.
+    Check that each tap produces one press and release of the selected
+    mouse button in the virtual mouse event stream.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a
