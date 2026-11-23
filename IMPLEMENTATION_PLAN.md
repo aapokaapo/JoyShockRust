@@ -259,7 +259,7 @@ The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects
 physical controls and shows their keyboard, mouse and base gamepad
 bindings in an inspector. Advanced TOML covers the full profile schema.
-The Sticks and Gyro pages expose stepped sensitivity controls, radial
+The Sticks and Gyro pages expose stepped sensitivity controls, typed gyro values, radial
 response previews and editable game calibration values. The GTK 4 editor
 uses libadwaita navigation and follows the system appearance. The tray shows the active profile's
 filename for startup profiles and successful live loads.

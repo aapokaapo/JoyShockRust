@@ -854,9 +854,10 @@ saving displays an error while the saved profile remains usable.
 
 In **Sticks**, move each response slider one step and verify its own
 preview updates. Save and check the two per-stick values in
-**Advanced**. In **Gyro**, move X and Y separately. Enter RWC and
-in-game sensitivity, verify the values round-trip through saving and
-reopening, and confirm an invalid value prevents saving.
+**Advanced**. In **Gyro**, move X and Y separately and check each slider
+stops at 20. Type a value above 20 with a decimal comma and verify it
+survives saving and reopening. Confirm that invalid text prevents saving.
+Enter RWC and in-game sensitivity and verify they also round-trip.
 
 For the left stick, open **Keyboard mapping**. Bind Up, Left, Down and
 Right to W, A, S and D. Set inner **Key** to **Left Shift** in **Hold**

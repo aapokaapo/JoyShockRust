@@ -10,6 +10,9 @@ use crate::{
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
 const GYRO_FIELDS: [&str; 2] = ["sensitivity_x", "sensitivity_y"];
+const GYRO_SLIDER_MAX: f64 = 20.0;
+const GYRO_TEXT_MAX: f64 = 100.0;
+pub const GYRO_SENSITIVITY_ERROR: &str = "Enter a gyro sensitivity between 0 and 100.";
 const CALIBRATION_FIELDS: [&str; 2] = ["real_world_calibration", "in_game_sens"];
 const STICK_FIELDS: [&str; 2] = ["stick_curve_left", "stick_curve_right"];
 
@@ -76,15 +79,15 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     let page = adw::PreferencesPage::new();
     let response = adw::PreferencesGroup::builder()
         .title("Gyro sensitivity")
-        .description("Mouse counts per degree before game calibration.")
+        .description("Counts per degree. Slide from 0 to 20 or enter a value from 0 to 100.")
         .build();
-    for (key, label) in GYRO_FIELDS.into_iter().zip(["Horizontal", "Vertical"]) {
+    for (axis, (key, label)) in GYRO_FIELDS
+        .into_iter()
+        .zip(["Horizontal", "Vertical"])
+        .enumerate()
+    {
         let initial = gyro.map_or(4.0, |table| number(table, key, 4.0));
-        let ctx = ctx.clone();
-        let row = scale_row(label, initial, 0.0, 100.0, 10, move |value| {
-            ctx.edit(|doc| set_gyro_numbers(doc, [(key, value)]));
-        });
-        response.add(&row);
+        response.add(&gyro_sensitivity_row(ctx, axis, label, initial));
     }
     page.add(&response);
     page.add(&calibration_shortcut(ctx, gyro));
@@ -179,6 +182,111 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     });
     page.add(&calibration);
     page.upcast()
+}
+
+fn parse_gyro_sensitivity(text: &str) -> Option<f64> {
+    text.trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|value| (0.0..=GYRO_TEXT_MAX).contains(value))
+}
+
+fn gyro_sensitivity_row(ctx: &Context, axis: usize, label: &str, initial: f64) -> adw::ActionRow {
+    let scale = gtk::Scale::builder()
+        .adjustment(&gtk::Adjustment::new(
+            initial.clamp(0.0, GYRO_SLIDER_MAX),
+            0.0,
+            GYRO_SLIDER_MAX,
+            0.1,
+            1.0,
+            0.0,
+        ))
+        .draw_value(false)
+        .hexpand(true)
+        .valign(gtk::Align::Center)
+        .build();
+    scale.set_size_request(92, -1);
+    let axis_name = format!("{label} sensitivity");
+    scale.update_property(&[gtk::accessible::Property::Label(&axis_name)]);
+
+    let entry = gtk::Entry::builder()
+        .width_chars(7)
+        .max_width_chars(7)
+        .input_purpose(gtk::InputPurpose::Number)
+        .valign(gtk::Align::Center)
+        .build();
+    entry.update_property(&[
+        gtk::accessible::Property::Label(&axis_name),
+        gtk::accessible::Property::Description("Accepts values from 0 to 100."),
+    ]);
+    let invalid = ctx.editor.borrow().invalid_gyro_sensitivity[axis].clone();
+    if let Some(text) = &invalid {
+        entry.set_text(text);
+    } else {
+        entry.set_text(&initial.to_string());
+    }
+
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    controls.append(&scale);
+    controls.append(&entry);
+    let row = adw::ActionRow::builder().title(label).build();
+    row.add_suffix(&controls);
+    set_gyro_sensitivity_error(&row, &entry, invalid.is_some());
+
+    let syncing = Rc::new(Cell::new(false));
+    let updating_entry = entry.downgrade();
+    let updating_scale = syncing.clone();
+    scale.connect_value_changed(move |scale| {
+        if updating_scale.get() {
+            return;
+        }
+        let snapped = (scale.value() * 10.0).round() / 10.0;
+        updating_scale.set(true);
+        scale.set_value(snapped);
+        updating_scale.set(false);
+        if let Some(entry) = updating_entry.upgrade() {
+            entry.set_text(&format!("{snapped:.1}"));
+        }
+    });
+
+    let ctx = ctx.clone();
+    let updating_row = row.downgrade();
+    let scale = scale.downgrade();
+    entry.connect_changed(move |entry| {
+        let text = entry.text();
+        let value = parse_gyro_sensitivity(&text);
+        ctx.editor.borrow_mut().invalid_gyro_sensitivity[axis] =
+            value.is_none().then(|| text.into());
+        if let Some(row) = updating_row.upgrade() {
+            set_gyro_sensitivity_error(&row, entry, value.is_none());
+        }
+        if let Some(value) = value {
+            ctx.edit(|doc| set_gyro_numbers(doc, [(GYRO_FIELDS[axis], value)]));
+            if let Some(scale) = scale.upgrade() {
+                syncing.set(true);
+                scale.set_value(value.min(GYRO_SLIDER_MAX));
+                syncing.set(false);
+            }
+        }
+    });
+    row
+}
+
+fn set_gyro_sensitivity_error(row: &adw::ActionRow, entry: &gtk::Entry, invalid: bool) {
+    let state = if invalid {
+        gtk::AccessibleInvalidState::True
+    } else {
+        gtk::AccessibleInvalidState::False
+    };
+    entry.update_state(&[gtk::accessible::State::Invalid(state)]);
+    if invalid {
+        row.set_subtitle(GYRO_SENSITIVITY_ERROR);
+        entry.add_css_class("error");
+    } else {
+        row.set_subtitle("");
+        entry.remove_css_class("error");
+    }
 }
 
 fn calibration_shortcut(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {

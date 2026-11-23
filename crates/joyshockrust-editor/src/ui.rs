@@ -166,8 +166,7 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let confirmed = Rc::new(Cell::new(false));
     window.connect_close_request(move |window| {
         let editor = close_ctx.editor.borrow();
-        if confirmed.get() || (editor.text == editor.original && editor.calibration.error.is_none())
-        {
+        if confirmed.get() || (editor.text == editor.original && editor.draft_error().is_none()) {
             return glib::Propagation::Proceed;
         }
         let dialog = adw::AlertDialog::new(
@@ -238,6 +237,7 @@ fn advanced_page(ctx: &Context) -> gtk::ScrolledWindow {
             .text(&buffer.start_iter(), &buffer.end_iter(), true)
             .into();
         editor.calibration.reset();
+        editor.invalid_gyro_sensitivity = [None, None];
     });
     let text = gtk::TextView::builder()
         .buffer(&buffer)
@@ -457,6 +457,78 @@ pub(crate) mod tests {
                 .get("gyro")
                 .and_then(|gyro| gyro.get("calibration_hold"))
                 .is_none()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn gyro_sliders_and_typed_values_use_independent_ranges() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        editor
+            .text
+            .push_str("[gyro]\nsensitivity_x = 42.125 # existing profile\nsensitivity_y = 4.0\n");
+        let initial_text = editor.text.clone();
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: glib::WeakRef::new(),
+            overlay: glib::WeakRef::new(),
+        };
+        let controls = |axis: &str| {
+            let page = sensitivity::gyro_page(&ctx);
+            let row = descendants::<adw::ActionRow>(&page)
+                .into_iter()
+                .find(|row| row.title() == axis)
+                .unwrap();
+            let entry = descendants::<gtk::Entry>(row.upcast_ref()).pop().unwrap();
+            let scale = descendants::<gtk::Scale>(row.upcast_ref()).pop().unwrap();
+            (page, entry, scale)
+        };
+        let (_page, entry, scale) = controls("Horizontal");
+        assert_eq!(entry.text(), "42.125");
+        assert_eq!(scale.adjustment().upper(), 20.0);
+        assert_eq!(scale.value(), 20.0);
+        assert_eq!(ctx.editor.borrow().text, initial_text);
+
+        entry.set_text(" 26,875 ");
+        let doc = ctx.document().unwrap();
+        assert_eq!(doc["gyro"]["sensitivity_x"].as_float(), Some(26.875));
+        assert_eq!(doc["gyro"]["sensitivity_y"].as_float(), Some(4.0));
+        assert!(doc.to_string().contains("# existing profile"));
+        assert_eq!(scale.value(), 20.0);
+        entry.set_text("100");
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["sensitivity_x"].as_float(),
+            Some(100.0)
+        );
+
+        entry.set_text("100.1");
+        assert_eq!(
+            ctx.editor.borrow().validate().unwrap_err(),
+            sensitivity::GYRO_SENSITIVITY_ERROR
+        );
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["sensitivity_x"].as_float(),
+            Some(100.0)
+        );
+        let (_page, entry, scale) = controls("Horizontal");
+        assert_eq!(entry.text(), "100.1");
+        assert!(entry.has_css_class("error"));
+        scale.set_value(19.27);
+        assert_eq!(entry.text(), "19.3");
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["sensitivity_x"].as_float(),
+            Some(19.3)
+        );
+        assert!(ctx.editor.borrow().draft_error().is_none());
+
+        let (_page, entry, scale) = controls("Vertical");
+        entry.set_text("8.125");
+        assert_eq!(scale.value(), 8.125);
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["sensitivity_y"].as_float(),
+            Some(8.125)
         );
     }
 }

@@ -695,7 +695,10 @@ leave the release radius empty to use the bridge default. Select
 then **Save & Apply** to load them into the running bridge.
 
 The **Gyro** page has separate horizontal and vertical sensitivity
-sliders, from 0 to 100 counts per degree in 0.1 increments. Edit RWC
+controls. The sliders cover 0–20 counts per degree in increments of 0.1.
+Type any value from 0 to 100 in the fields, using a decimal point or comma.
+For values above 20, the field shows the actual sensitivity and the slider
+rests at its upper limit. Edit RWC
 and in-game sensitivity in the **Game calibration** text fields.
 Changing these settings creates a `[gyro]` section if needed, which
 enables the profile's gyro mouse.

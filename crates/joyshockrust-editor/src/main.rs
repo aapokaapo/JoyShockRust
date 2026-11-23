@@ -70,6 +70,7 @@ struct Editor {
     name: String,
     selected: &'static str,
     calibration: sensitivity::CalibrationDraft,
+    invalid_gyro_sensitivity: [Option<String>; 2],
 }
 
 impl Editor {
@@ -86,11 +87,21 @@ impl Editor {
             name: String::new(),
             selected: "cross",
             calibration: sensitivity::CalibrationDraft::default(),
+            invalid_gyro_sensitivity: [None, None],
+        })
+    }
+
+    fn draft_error(&self) -> Option<&'static str> {
+        self.calibration.error.or_else(|| {
+            self.invalid_gyro_sensitivity
+                .iter()
+                .any(Option::is_some)
+                .then_some(sensitivity::GYRO_SENSITIVITY_ERROR)
         })
     }
 
     fn validate(&self) -> Result<String, String> {
-        if let Some(error) = self.calibration.error {
+        if let Some(error) = self.draft_error() {
             return Err(error.into());
         }
         self.validate_profile_text(&self.text)?;
@@ -103,7 +114,7 @@ impl Editor {
     }
 
     fn save(&mut self) -> Result<PathBuf, String> {
-        if let Some(error) = self.calibration.error {
+        if let Some(error) = self.draft_error() {
             return Err(error.into());
         }
         if let Some(path) = &self.path {
