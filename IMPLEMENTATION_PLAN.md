@@ -250,7 +250,8 @@ The tray opens a Wayland real-world calibration window for a chosen
 profile. The bridge releases its virtual outputs while retaining the live
 profile and controller selection. The window uses the existing Flick
 Stick measurement and validates and saves the selected profile through
-the bridge CLI. The tray resumes the bridge after the window exits.
+the bridge CLI. The window follows readiness and sweep progress as they
+happen. The tray resumes the bridge after the window exits.
 
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects

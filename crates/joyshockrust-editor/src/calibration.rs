@@ -149,6 +149,11 @@ impl Calibration {
             "Tilt the right stick up, then sweep it around its edge until the camera completes one or more whole turns. At the landmark, center the stick and press Options again. Remember how many turns you completed.",
             false,
         );
+        let status = adw::ActionRow::builder()
+            .title("Measurement status")
+            .subtitle("Opening the controller and calibration mouse…")
+            .build();
+        group.add(&status);
         let cancel = button(&group, "Cancel", "");
         let window = self.window.clone();
         cancel.connect_clicked(move |_| {
@@ -163,18 +168,29 @@ impl Calibration {
             std::process::id().to_string().into(),
         ];
         let session = self.clone();
-        self.launch(&args, move |reply| {
-            match reply.and_then(|text| {
-                text.trim()
-                    .parse::<i32>()
-                    .ok()
+        self.launch(
+            &args,
+            move |line| {
+                let message = match line {
+                    "ready" => "Ready. Center the right stick and press Options.",
+                    "started" => "Measuring. Sweep the stick around its edge.",
+                    "center-stick" => "Center the right stick, then press Options again.",
+                    "no-motion" => "No movement recorded. Turn the camera before confirming.",
+                    _ => return false,
+                };
+                status.set_subtitle(message);
+                true
+            },
+            move |reply| match reply.and_then(|line| {
+                line.strip_prefix("counts ")
+                    .and_then(|counts| counts.parse::<i32>().ok())
                     .filter(|&counts| counts > 0)
                     .ok_or_else(|| "The measurement returned no mouse counts.".to_owned())
             }) {
                 Ok(counts) => session.confirm(sensitivity, counts, 1, None),
                 Err(error) => session.setup(sensitivity, Some(&error)),
-            }
-        });
+            },
+        );
     }
 
     fn confirm(self: &Rc<Self>, sensitivity: f64, counts: i32, turns: u32, message: Option<&str>) {
@@ -222,16 +238,20 @@ impl Calibration {
             turns.to_string().into(),
         ];
         let session = self.clone();
-        self.launch(&args, move |reply| {
-            session.saving.set(false);
-            match reply.and_then(|text| {
-                positive_decimal(text.trim())
-                    .ok_or_else(|| "The result could not be read.".to_owned())
-            }) {
-                Ok(calibration) => session.finished(calibration, sensitivity),
-                Err(error) => session.confirm(sensitivity, counts, turns, Some(&error)),
-            }
-        });
+        self.launch(
+            &args,
+            |_| false,
+            move |reply| {
+                session.saving.set(false);
+                match reply.and_then(|text| {
+                    positive_decimal(text.trim())
+                        .ok_or_else(|| "The result could not be read.".to_owned())
+                }) {
+                    Ok(calibration) => session.finished(calibration, sensitivity),
+                    Err(error) => session.confirm(sensitivity, counts, turns, Some(&error)),
+                }
+            },
+        );
     }
 
     fn finished(&self, calibration: f64, sensitivity: f64) {
@@ -259,12 +279,13 @@ impl Calibration {
     fn launch(
         self: &Rc<Self>,
         args: &[OsString],
+        mut progress: impl FnMut(&str) -> bool + 'static,
         finished: impl FnOnce(Result<String, String>) + 'static,
     ) {
         let argv: Vec<&OsStr> = std::iter::once(self.bridge.as_os_str())
             .chain(args.iter().map(OsString::as_os_str))
             .collect();
-        let flags = gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_PIPE;
+        let flags = gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_MERGE;
         let worker = match gio::Subprocess::newv(&argv, flags) {
             Ok(worker) => worker,
             Err(error) => {
@@ -275,12 +296,25 @@ impl Calibration {
         self.worker.replace(Some(worker.clone()));
         let session = self.clone();
         glib::MainContext::default().spawn_local(async move {
-            let result = worker.communicate_utf8_future(None).await;
-            // Even if decoding the reply failed, wait for the child to release its device.
-            if result.is_err() {
-                worker.force_exit();
-                let _ = worker.wait_future().await;
-            }
+            let stream = gio::DataInputStream::new(&worker.stdout_pipe().expect("piped stdout"));
+            let mut last = String::new();
+            let result = loop {
+                match stream.read_line_utf8_future(glib::Priority::DEFAULT).await {
+                    Ok(Some(line)) => {
+                        let line = line.trim();
+                        if !line.is_empty() && !progress(line) {
+                            last = line.to_owned();
+                        }
+                    }
+                    Ok(None) => break Ok(()),
+                    Err(error) => {
+                        worker.force_exit();
+                        break Err(error);
+                    }
+                }
+            };
+            // Drain the stream and reap the process before the tray may resume outputs.
+            let waited = worker.wait_future().await;
             session.worker.take();
             if session.closing.get() {
                 if let Some(window) = session.window.upgrade() {
@@ -290,17 +324,15 @@ impl Calibration {
             }
             finished(
                 result
+                    .and(waited)
                     .map_err(|error| error.to_string())
-                    .and_then(|(stdout, stderr)| {
+                    .and_then(|()| {
                         if worker.is_successful() {
-                            Ok(stdout.unwrap_or_default().to_string())
+                            Ok(last)
+                        } else if last.is_empty() {
+                            Err("Calibration process exited.".into())
                         } else {
-                            let error = stderr.unwrap_or_default();
-                            Err(error
-                                .lines()
-                                .last()
-                                .unwrap_or("Calibration process exited.")
-                                .to_owned())
+                            Err(last)
                         }
                     }),
             );
@@ -390,11 +422,27 @@ mod tests {
         fs::write(
             &helper,
             r#"#!/bin/sh
+wait_for_gate() {
+    attempts=0
+    while [ ! -f "$1" ] && [ "$attempts" -lt 250 ]; do
+        sleep 0.02
+        attempts=$((attempts + 1))
+    done
+    [ -f "$1" ] || exit 1
+}
 case "$1" in
     --measure-stick)
         [ "$2" = 2 ] || exit 1
         if [ "$3" = cancel ]; then exec sleep 60; fi
-        printf '28800\n'
+        printf 'ready\n'
+        wait_for_gate "$3.ready"
+        printf 'center-stick\n'
+        wait_for_gate "$3.centered"
+        printf 'started\n'
+        wait_for_gate "$3.swept"
+        printf 'no-motion\n'
+        wait_for_gate "$3.confirmed"
+        printf 'counts 28800\n'
         ;;
     --save-measurement)
         [ "$3" = 28800 ] && [ "$4" = 2 ] && [ "$5" = 4 ] || exit 1
@@ -416,10 +464,30 @@ esac
                 .into_iter()
                 .find(|button| button.label().as_deref() == Some(name))
         };
-        let window = open("measure");
+        let node = directory.path().join("measure");
+        let window = open(node.to_str().unwrap());
         find_button(&window, "Start Measurement")
             .unwrap()
             .emit_clicked();
+        for (message, gate) in [
+            ("Ready.", "ready"),
+            ("Center the right stick", "centered"),
+            ("Measuring.", "swept"),
+            ("No movement recorded.", "confirmed"),
+        ] {
+            wait_for(|| {
+                descendants::<adw::ActionRow>(window.upcast_ref())
+                    .iter()
+                    .any(|row| {
+                        row.title() == "Measurement status"
+                            && row
+                                .subtitle()
+                                .is_some_and(|subtitle| subtitle.starts_with(message))
+                    })
+            });
+            assert!(find_button(&window, "Save Calibration").is_none());
+            fs::write(node.with_extension(gate), "").unwrap();
+        }
         wait_for(|| find_button(&window, "Save Calibration").is_some());
         let turns = descendants::<adw::EntryRow>(window.upcast_ref())
             .into_iter()

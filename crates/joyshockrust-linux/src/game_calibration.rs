@@ -1,7 +1,7 @@
 use std::{
     error::Error,
     ffi::OsString,
-    io::{self, IsTerminal},
+    io::{self, IsTerminal, Write},
     ops::ControlFlow,
     path::Path,
     thread,
@@ -78,8 +78,12 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
         if nix::unistd::getppid().as_raw() != parent {
             return Err("calibration window has closed".into());
         }
-        let counts = measure_with_stick(sensitivity, Some(Path::new(&hidraw)))?;
-        println!("{counts}");
+        let mut stdout = io::stdout().lock();
+        let counts = measure_with_stick(sensitivity, Some(Path::new(&hidraw)), |progress| {
+            writeln!(stdout, "{}", progress.token())?;
+            stdout.flush()
+        })?;
+        writeln!(stdout, "counts {counts}")?;
         return Ok(());
     }
     if args.next_if(|arg| arg == "--save-measurement").is_some() {
@@ -164,7 +168,27 @@ fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dy
         |text| text.parse::<f64>().ok().filter(|&value| positive(value)),
     )?;
 
-    let counts = measure_with_stick(in_game_sens, hidraw)?;
+    let counts = measure_with_stick(in_game_sens, hidraw, |progress| {
+        match progress {
+            Progress::Ready => {
+                eprintln!(
+                    "Focus the game, aim at a landmark and press Options with the stick centered."
+                );
+                eprintln!(
+                    "Tilt the right stick up and rotate it until the camera completes one or more whole turns."
+                );
+                eprintln!(
+                    "Count the turns. At the landmark, center the stick and press Options again."
+                );
+            }
+            Progress::Started => eprintln!("Measuring the camera turn."),
+            Progress::CenterStick => eprintln!("Center the right stick, then press Options."),
+            Progress::NoMotion => {
+                eprintln!("No horizontal movement recorded. Turn the camera before confirming.")
+            }
+        }
+        Ok(())
+    })?;
     let turns = prompt_value(
         "Return to this terminal and enter the number of complete turns.",
         |text| text.parse::<u32>().ok().filter(|&turns| turns > 0),
@@ -175,7 +199,30 @@ fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dy
     Ok(())
 }
 
-fn measure_with_stick(in_game_sens: f64, hidraw: Option<&Path>) -> Result<i32, Box<dyn Error>> {
+#[derive(Clone, Copy)]
+enum Progress {
+    Ready,
+    Started,
+    CenterStick,
+    NoMotion,
+}
+
+impl Progress {
+    fn token(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Started => "started",
+            Self::CenterStick => "center-stick",
+            Self::NoMotion => "no-motion",
+        }
+    }
+}
+
+fn measure_with_stick(
+    in_game_sens: f64,
+    hidraw: Option<&Path>,
+    mut progress: impl FnMut(Progress) -> io::Result<()>,
+) -> Result<i32, Box<dyn Error>> {
     let config = crate::controller_config::ControllerConfig::load();
     let filter = config.filter();
     let (mut controller, identity) = match hidraw {
@@ -188,11 +235,7 @@ fn measure_with_stick(in_game_sens: f64, hidraw: Option<&Path>) -> Result<i32, B
     let mut output = gyro_mouse::open_output("JoyShockRust Game Calibration Mouse")?;
     let mut sweep = StickSweep::new((40.0 / in_game_sens).clamp(0.25, 10_000.0));
     let mut measured_counts = None;
-    eprintln!("Focus the game, aim at a landmark and press Options with the stick centered.");
-    eprintln!(
-        "Tilt the right stick up and rotate it until the camera completes one or more whole turns."
-    );
-    eprintln!("Count the turns. At the landmark, center the stick and press Options again.");
+    progress(Progress::Ready)?;
 
     forward_reports(
         &mut controller,
@@ -219,13 +262,9 @@ fn measure_with_stick(in_game_sens: f64, hidraw: Option<&Path>) -> Result<i32, B
             }
             match confirmation {
                 Confirmation::None => {}
-                Confirmation::Started => eprintln!("Measuring the camera turn."),
-                Confirmation::CenterStick => {
-                    eprintln!("Center the right stick, then press Options.")
-                }
-                Confirmation::NoMotion => {
-                    eprintln!("No horizontal movement recorded. Turn the camera before confirming.")
-                }
+                Confirmation::Started => progress(Progress::Started)?,
+                Confirmation::CenterStick => progress(Progress::CenterStick)?,
+                Confirmation::NoMotion => progress(Progress::NoMotion)?,
                 Confirmation::Finished(counts) => {
                     measured_counts = Some(counts);
                     return Ok(ControlFlow::Break(()));

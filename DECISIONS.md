@@ -493,7 +493,10 @@ before acknowledging the pause and keeps serving control requests.
 Discovery resumes with the existing profile and controller filter.
 The tray waits for the GTK calibration window, then resumes the bridge.
 The window runs the same Flick Stick sweep as the interactive CLI.
-Measurement and saving are separate commands. The save command validates
+Measurement emits line-delimited status on readiness and Options
+transitions. The GTK window drains these messages asynchronously before
+reaping the worker. Measurement and saving are separate commands. The
+save command validates
 and atomically updates the profile. Closing the window during measurement
 stops and waits for the measurement process before the tray resumes
 normal outputs.

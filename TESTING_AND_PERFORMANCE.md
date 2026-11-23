@@ -895,8 +895,12 @@ cargo test --locked -p joyshockrust-editor touchpad_widgets_edit_the_selected_ce
 
 Choose **Calibrate game sensitivity (RWC)** and a profile. While the
 Wayland window is open, check `outputs_paused=true` and verify the
-regular virtual outputs are removed. Start measurement and perform one
-or more complete turns using Options to confirm each end of the sweep.
+regular virtual outputs are removed. Start measurement and confirm the
+window shows **Ready**. Press Options with the stick off-center to see
+the centering prompt. Center the stick and press Options to see
+**Measuring**. With the stick still centered, press Options again and
+check for the no-movement prompt. Perform one or more complete turns and
+press Options with the stick centered to finish the sweep.
 Enter the total number of turns in the window. Verify that **Save
 Calibration** displays the result and updates the profile. Select
 **Done** and verify `outputs_paused=false`, the controller reconnects,
@@ -905,8 +909,9 @@ profile to apply the new values. Repeat, cancel during measurement,
 and verify the calibration mouse disappears and the profile stays
 unchanged.
 
-The Wayland widget test uses a simulated sweep and checks both Save
-and Cancel.
+The Wayland widget test pauses the simulated worker at each progress
+update and checks that the window responds before the worker exits. It
+also checks Save and Cancel.
 
 ```sh
 cargo test --locked -p joyshockrust-editor calibration_window_completes_and_cancels -- --ignored

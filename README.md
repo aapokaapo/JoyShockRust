@@ -707,8 +707,10 @@ bridge. Use Ctrl+S to save or Ctrl+Shift+S to save and apply.
 Choose a file under **Calibrate game sensitivity (RWC)** while a controller
 is connected. The tray pauses virtual outputs and opens the Wayland
 calibration window. Enter the game's mouse sensitivity and select **Start
-Measurement**. Focus the game, aim at a landmark and press Options with the
-right stick centered. Sweep the stick around its edge until the camera has
+Measurement**. Wait for **Ready**, then focus the game, aim at a landmark
+and press Options with the right stick centered. The window shows when
+measurement starts and whether the stick needs to be centered or more
+movement is needed. Sweep the stick around its edge until the camera has
 completed one or more whole turns and has returned to the landmark. Center
 the stick and press Options again. Return to the calibration window, enter
 the number of complete turns and select **Save Calibration**.
