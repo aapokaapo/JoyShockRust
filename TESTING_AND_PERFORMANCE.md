@@ -738,6 +738,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     `[keyboard.touch_scroll]`. Swipe slowly in each direction and verify
     wheel events arrive after the configured travel. Lift and reposition
     the finger and verify scrolling resumes only after a new swipe.
+19. Set `fingers = 2` in the same table. Swipe with one finger and verify
+    that it produces no wheel steps. Add a second finger, move both in the
+    same direction and check scrolling. Lift one finger and reposition it
+    before swiping again. The new pair should start without a jump.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

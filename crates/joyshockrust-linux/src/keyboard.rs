@@ -1931,11 +1931,59 @@ mod tests {
             "vertical_step = 0",
             "vertical_step = 1080",
             "horizontal_step = 1920",
+            "vertical_step = 100\nfingers = 0",
+            "vertical_step = 100\nfingers = 3",
         ] {
             let profile = format!("version = 1\n[keyboard.touch_scroll]\n{settings}\n");
             assert!(crate::profile::parse(&profile).is_err(), "{settings}");
         }
         assert!(config("[keyboard.touch_scroll]\nvertical_step = 120\n").has_scroll());
+    }
+
+    #[test]
+    fn two_finger_swipes_use_the_midpoint_and_reset_when_the_pair_changes() {
+        let config = config(
+            "[keyboard.touch_scroll]\nfingers = 2\nvertical_step = 5\nhorizontal_step = 5\n",
+        );
+        let mut state = State::new(&config);
+        let now = Instant::now();
+        let contact = |id, x, y| Some(TouchContact { id, x, y });
+        let v = RelativeAxisCode::REL_WHEEL.0;
+        let h = RelativeAxisCode::REL_HWHEEL.0;
+        for (contacts, expected) in [
+            ([contact(1, 100, 500), None], &[][..]),
+            ([contact(1, 100, 480), None], &[][..]),
+            ([contact(1, 100, 480), contact(2, 200, 300)], &[][..]),
+            ([contact(2, 209, 300), contact(1, 100, 471)], &[][..]),
+            (
+                [contact(1, 101, 470), contact(2, 209, 300)],
+                &[(v, 1), (h, 1)][..],
+            ),
+            ([contact(1, 101, 450), None], &[][..]),
+            ([contact(1, 101, 450), contact(2, 209, 250)], &[][..]),
+            ([contact(1, 101, 445), contact(2, 209, 245)], &[(v, 1)][..]),
+            ([contact(1, 101, 430), contact(3, 500, 750)], &[][..]),
+            ([contact(1, 101, 425), contact(1, 500, 745)], &[][..]),
+        ] {
+            let input = Input {
+                contacts,
+                ..Input::default()
+            };
+            let mut observed = Vec::new();
+            assert_eq!(
+                state
+                    .update(input, now, |events| {
+                        for event in events {
+                            assert_eq!(event.event_type(), EventType::RELATIVE);
+                            observed.push((event.code(), event.value()));
+                        }
+                        Ok(())
+                    })
+                    .unwrap(),
+                None
+            );
+            assert_eq!(observed, expected, "{contacts:?}");
+        }
     }
 
     #[test]

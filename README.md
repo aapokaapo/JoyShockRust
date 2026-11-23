@@ -292,11 +292,14 @@ scroll_repeat_ms = 80
 
 Use `[keyboard.touch_scroll]` to scroll by swiping the touchpad. Each
 configured axis emits one wheel step per specified distance in touchpad
-coordinate units. Omit an axis to disable it. The bridge follows the
-same finger until it lifts, then starts a new swipe from the next contact.
+coordinate units. Omit an axis to disable it. In one-finger mode, the
+bridge follows the same finger until it lifts.
+Set `fingers = 2` to scroll from the midpoint between two touches. Lifting
+either finger ends the swipe. The default is `fingers = 1`.
 
 ```toml
 [keyboard.touch_scroll]
+fingers = 2
 vertical_step = 120
 horizontal_step = 180
 ```
