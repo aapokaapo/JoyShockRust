@@ -343,7 +343,7 @@ impl ksni::Tray for Tray {
         menu.push(MenuItem::Separator);
         menu.push(
             CheckmarkItem {
-                label: "Start when I log in".into(),
+                label: "Start with system".into(),
                 checked: state.autostart,
                 activate: Box::new(|tray: &mut Tray| {
                     let _ = tray.actions.send(Action::Autostart(!tray.state.autostart));

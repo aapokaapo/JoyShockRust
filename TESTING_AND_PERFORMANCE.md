@@ -961,7 +961,7 @@ Fedora setup, moving the system's audio output away from the controller
 freed the ALSA playback device. The test then completed PCM playback
 with both DualSense and DualSense Edge.
 
-Enable **Start when I log in**, log out and back in, and confirm the tray
+Enable **Start with system**, log out and back in, and confirm the tray
 and bridge start. Clear the setting and repeat to confirm manual
 launch is needed. Use **Quit JoyShockRust** and verify both user units
 are inactive.

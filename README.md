@@ -743,7 +743,7 @@ updated profile in **Profiles**. If the tray was interrupted and the
 bridge is still paused, use **Resume virtual outputs** or run
 `joyshockrust-linux --set-outputs resume`.
 
-Check **Start when I log in** to enable desktop login startup. If you
+Check **Start with system** to enable desktop login startup. If you
 previously enabled the bridge unit directly, run
 `systemctl --user disable joyshockrust.service` once so the tray controls
 login startup. The tray requires a StatusNotifierItem host. Some desktops,
