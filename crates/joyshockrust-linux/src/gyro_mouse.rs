@@ -8,6 +8,7 @@ use evdev::{
     AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode, RelativeAxisCode as Axis,
     uinput::VirtualDevice,
 };
+use joyshockrust_core::Button;
 use joyshockrust_input::{
     FactoryCalibration, InputReport, RawImuSample, Timebase, TimestampUpdate, Transport,
 };
@@ -18,7 +19,9 @@ use joyshockrust_motion::{
 use super::{
     flick_stick::FlickStick,
     game_calibration::GameCalibration,
+    gyro_calibration::BiasWriter,
     gyro_gate::{Binding, GyroGate},
+    haptics::{Cue, Haptics},
 };
 
 pub struct GyroMouse {
@@ -26,15 +29,64 @@ pub struct GyroMouse {
     output: VirtualDevice,
     gate: GyroGate,
     flick: Option<FlickStick>,
+    hold: Option<HoldDetector>,
+    shortcut: Option<ShortcutCalibration>,
+    haptics: Option<Haptics>,
+    bias_writer: Option<BiasWriter>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Options {
     pub calibrate: bool,
+    pub calibration_hold: Option<HoldBinding>,
     pub binding: Binding,
     pub flick_stick: Option<f64>,
     pub sensitivity: Sensitivity,
     pub game_calibration: GameCalibration,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct HoldBinding {
+    pub button: Button,
+    pub duration: Duration,
+}
+
+struct HoldDetector {
+    binding: HoldBinding,
+    pressed_since: Option<Instant>,
+    fired: bool,
+}
+
+impl HoldDetector {
+    fn new(binding: HoldBinding) -> Self {
+        Self {
+            binding,
+            pressed_since: None,
+            fired: true,
+        }
+    }
+
+    fn observe(&mut self, pressed: bool, now: Instant) -> bool {
+        if !pressed {
+            self.pressed_since = None;
+            self.fired = false;
+            return false;
+        }
+        if self.fired {
+            return false;
+        }
+        if now.duration_since(*self.pressed_since.get_or_insert(now)) >= self.binding.duration {
+            self.fired = true;
+            return true;
+        }
+        false
+    }
+}
+
+struct ShortcutCalibration {
+    settle_at: Instant,
+    deadline: Instant,
+    measuring: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,9 +164,24 @@ impl GyroMouse {
             io::Error::other(format!("could not read factory calibration: {err}"))
         })?;
         let stored = super::gyro_calibration::load(input);
+        let output = open_output("JoyShockRust Gyro Mouse")?;
+        let bias_writer = if options.calibration_hold.is_some() {
+            BiasWriter::open(input).unwrap_or_else(|error| {
+                eprintln!("Could not prepare controller gyro calibration storage: {error}");
+                None
+            })
+        } else {
+            None
+        };
         Ok(Self {
             aim: GyroAim::new(factory, options.calibrate, options.gyro_scale(), stored),
-            output: open_output("JoyShockRust Gyro Mouse")?,
+            output,
+            hold: options.calibration_hold.map(HoldDetector::new),
+            shortcut: None,
+            haptics: options
+                .calibration_hold
+                .and_then(|_| Haptics::open(input, transport)),
+            bias_writer,
             gate: GyroGate::new(options.binding),
             flick: options.flick_scale().map(FlickStick::new),
         })
@@ -128,15 +195,64 @@ impl GyroMouse {
     }
 
     pub fn publish(&mut self, report: InputReport) -> io::Result<bool> {
+        let mut suppress_flick = false;
+        if let Some(hold) = &mut self.hold {
+            let pressed = report.controls.buttons.contains(hold.binding.button);
+            let now = Instant::now();
+            if hold.observe(pressed, now) && self.shortcut.is_none() {
+                self.shortcut = Some(ShortcutCalibration {
+                    settle_at: now + Duration::from_millis(500),
+                    deadline: now + Duration::from_secs(15),
+                    measuring: false,
+                });
+                self.aim.calibration = None;
+                self.aim.reset_motion();
+                self.aim.was_enabled = false;
+                if let Some(haptics) = &self.haptics {
+                    haptics.send(Cue::CalibrationStart);
+                }
+                eprintln!(
+                    "Gyro calibration requested. Release the button and keep the controller still."
+                );
+            }
+            if let Some(shortcut) = &mut self.shortcut {
+                suppress_flick = true;
+                if now >= shortcut.deadline {
+                    self.shortcut = None;
+                    self.aim.calibration = None;
+                    self.aim.reset_motion();
+                    eprintln!("Gyro calibration timed out. Previous calibration retained.");
+                    return Ok(false);
+                }
+                if !shortcut.measuring {
+                    if pressed || now < shortcut.settle_at {
+                        return Ok(false);
+                    }
+                    shortcut.measuring = true;
+                    self.aim.calibration = Some(StationaryCalibration::default());
+                }
+            }
+        }
         let was_calibrating = self.aim.calibration.is_some();
         let enabled = self
             .gate
             .enabled(&report.controls, &report.touch_contacts, Instant::now);
         let mut movement = self.aim.advance(report.imu, enabled);
-        if !was_calibrating && let Some(flick) = &mut self.flick {
+        if !was_calibrating
+            && !suppress_flick
+            && let Some(flick) = &mut self.flick
+        {
             movement[0] += flick.advance(report.controls.right_stick, report.imu.device_ticks);
         }
-        if was_calibrating && self.aim.calibration.is_none() {
+        if let Some(bias) = self.aim.completed_bias.take() {
+            if self.shortcut.take().is_some() {
+                if let Some(writer) = &self.bias_writer {
+                    writer.send(bias);
+                }
+                if let Some(haptics) = &self.haptics {
+                    haptics.send(Cue::CalibrationDone);
+                }
+            }
             eprintln!("Gyro rest calibration complete");
         }
         emit_movement(movement, |events| self.output.emit(events))
@@ -166,6 +282,7 @@ struct GyroAim {
     timebase: Timebase,
     motion: MotionEngine,
     calibration: Option<StationaryCalibration>,
+    completed_bias: Option<Calibration>,
     remainder: [f64; 2],
     sensitivity: [f64; 2],
     was_enabled: bool,
@@ -187,6 +304,7 @@ impl GyroAim {
             motion: MotionEngine::new(config, stored.unwrap_or_default())
                 .expect("valid gyro mouse defaults"),
             calibration: (calibrate && stored.is_none()).then(StationaryCalibration::default),
+            completed_bias: None,
             remainder: [0.0; 2],
             sensitivity,
             was_enabled: false,
@@ -243,6 +361,7 @@ impl GyroAim {
                 self.motion = MotionEngine::new(Self::config(), bias)
                     .expect("stationary calibration returns a bounded finite bias");
                 self.calibration = None;
+                self.completed_bias = Some(bias);
             }
             return [0; 2];
         }
@@ -442,6 +561,28 @@ mod tests {
             assert_eq!(aim.advance(sample(ticks), enabled), [0, 0], "{ticks}");
         }
         assert_eq!(aim.advance(sample(42_000), true), [-1, 0]);
+    }
+
+    #[test]
+    fn calibration_hold_rearms_only_after_release() {
+        let mut detector = HoldDetector::new(HoldBinding {
+            button: Button::Home,
+            duration: Duration::from_millis(1500),
+        });
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        assert!(!detector.observe(true, at(0)));
+        assert!(!detector.observe(true, at(2000)));
+        assert!(!detector.observe(false, at(2100)));
+        assert!(!detector.observe(true, at(2200)));
+        assert!(!detector.observe(false, at(2300)));
+        assert!(!detector.observe(true, at(2400)));
+        assert!(!detector.observe(true, at(3899)));
+        assert!(detector.observe(true, at(3900)));
+        assert!(!detector.observe(true, at(6000)));
+        assert!(!detector.observe(false, at(6100)));
+        assert!(!detector.observe(true, at(6200)));
+        assert!(detector.observe(true, at(7700)));
     }
 
     #[test]

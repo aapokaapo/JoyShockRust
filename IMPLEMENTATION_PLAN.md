@@ -277,7 +277,10 @@ The tray can also guide stationary gyro calibration and retain the
 correction per controller across restarts. Synthetic tests cover saving,
 cancellation and application of the correction.
 
-Next, verify both desktop calibration workflows on hardware.
+Profiles can bind stationary calibration to a physical button hold.
+USB actuator feedback marks calibration boundaries and RWC sweep steps.
+Next, verify the tactile cues, Bluetooth behavior and both desktop
+calibration workflows on hardware.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

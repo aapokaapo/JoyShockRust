@@ -19,6 +19,8 @@ mod gyro_gate;
 #[cfg(target_os = "linux")]
 mod gyro_mouse;
 #[cfg(target_os = "linux")]
+mod haptics;
+#[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod hidraw;
 #[cfg(target_os = "linux")]

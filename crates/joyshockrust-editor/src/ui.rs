@@ -416,4 +416,47 @@ pub(crate) mod tests {
         assert_eq!(stick["outer"]["mode"].as_str(), Some("keep_sprint"));
         window.close();
     }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn gyro_calibration_shortcut_can_be_set_and_removed() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        editor
+            .text
+            .push_str("[gyro.calibration_hold]\nbutton = 'l3'\nhold_ms = 2500\n");
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: glib::WeakRef::new(),
+            overlay: glib::WeakRef::new(),
+        };
+        let page = sensitivity::gyro_page(&ctx);
+        let row = descendants::<adw::ComboRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Hold button")
+            .unwrap();
+        let model = row.model().unwrap().downcast::<gtk::StringList>().unwrap();
+        let ps = (0..model.n_items())
+            .find(|&index| model.string(index).as_deref() == Some("PS button"))
+            .unwrap();
+        row.set_selected(ps);
+        let doc = ctx.document().unwrap();
+        assert_eq!(
+            doc["gyro"]["calibration_hold"]["button"].as_str(),
+            Some("ps")
+        );
+        assert_eq!(
+            doc["gyro"]["calibration_hold"]["hold_ms"].as_integer(),
+            Some(2500)
+        );
+        row.set_selected(0);
+        assert!(
+            ctx.document()
+                .unwrap()
+                .get("gyro")
+                .and_then(|gyro| gyro.get("calibration_hold"))
+                .is_none()
+        );
+    }
 }

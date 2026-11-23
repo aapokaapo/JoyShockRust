@@ -42,12 +42,35 @@ struct Profile {
 struct Gyro {
     #[serde(default)]
     calibrate: bool,
+    calibration_hold: Option<CalibrationHold>,
     flick_stick: Option<f64>,
     sensitivity_x: Option<f32>,
     sensitivity_y: Option<f32>,
     real_world_calibration: Option<f64>,
     in_game_sens: Option<f64>,
     binding: Option<GyroBinding>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CalibrationHold {
+    button: String,
+    hold_ms: Option<u64>,
+}
+
+impl CalibrationHold {
+    fn resolve(self) -> Result<gyro_mouse::HoldBinding, &'static str> {
+        let button = gyro_gate::button_by_name(&self.button)
+            .ok_or("gyro.calibration_hold.button must name a physical controller button")?;
+        let ms = self.hold_ms.unwrap_or(1500);
+        if !(250..=10_000).contains(&ms) {
+            return Err("gyro.calibration_hold.hold_ms must be between 250 and 10000");
+        }
+        Ok(gyro_mouse::HoldBinding {
+            button,
+            duration: std::time::Duration::from_millis(ms),
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -333,6 +356,10 @@ impl Gyro {
         };
         Ok(gyro_mouse::Options {
             calibrate: self.calibrate,
+            calibration_hold: self
+                .calibration_hold
+                .map(CalibrationHold::resolve)
+                .transpose()?,
             binding,
             flick_stick,
             game_calibration: GameCalibration::new(
@@ -351,6 +378,31 @@ impl Gyro {
 mod tests {
     use super::*;
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+    #[test]
+    fn controller_gyro_calibration_bindings_are_opt_in_and_validated() {
+        let config = |button, hold| {
+            format!("version = 1\n[gyro.calibration_hold]\nbutton = {button:?}\n{hold}")
+        };
+        let configured = parse(&config("ps", ""))
+            .unwrap()
+            .gyro
+            .unwrap()
+            .calibration_hold
+            .unwrap();
+        assert_eq!(configured.button, joyshockrust_core::Button::Home);
+        assert_eq!(configured.duration.as_millis(), 1500);
+        assert!(parse(&config("ps", "hold_ms = 100")).is_err());
+        assert!(parse(&config("not-a-button", "")).is_err());
+        assert!(
+            parse("version = 1\n[gyro]")
+                .unwrap()
+                .gyro
+                .unwrap()
+                .calibration_hold
+                .is_none()
+        );
+    }
 
     #[test]
     fn touch_region_controls_gyro_independently_of_gamepad_bindings() {

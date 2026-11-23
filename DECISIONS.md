@@ -508,6 +508,17 @@ Saving is explicit and stores the residual bias by stable controller ID.
 The bridge reads that correction when opening gyro output. A saved
 correction takes precedence over optional session-start estimation.
 
+2026-11-23. An opt-in physical hold binding starts the stationary
+estimator after the button is released and the start cue has time to
+settle. The report loop hands off persistence and feedback through
+bounded queues. Calibration cues and RWC detents use native USB
+actuator PCM. An audio worker finds the playback device under the
+same USB parent as the active controller. It sends 48 kHz four-channel
+PCM and keeps the audible channels silent. Bluetooth actuator streaming
+is pending hardware validation. RWC detents use the angular sweep
+before conversion to mouse counts.
+[USB audio descriptor](https://github.com/nondebug/dualsense/blob/02338358b6b4be2d64dbf661ae2a47842156cfcf/lsusb-descriptor-info.txt#L143-L156) · [Actuator channel routing](https://github.com/nondebug/dualsense/blob/02338358b6b4be2d64dbf661ae2a47842156cfcf/web-haptics-polyfill/README.md#L19-L24)
+
 The editor is a separate native window. Its controller diagram
 selects a physical input, and the inspector edits keyboard and mouse
 gestures and base gamepad remaps. Advanced TOML preserves access to

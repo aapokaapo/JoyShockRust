@@ -5,6 +5,8 @@ use std::{
     io::{self, Write},
     ops::ControlFlow,
     path::{Path, PathBuf},
+    sync::mpsc::{SyncSender, sync_channel},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -18,6 +20,7 @@ use crate::{
     ReportTimers, SessionEvent,
     controller_config::ControllerConfig,
     discovery, forward_reports,
+    haptics::{Cue, Haptics},
     hidraw::{self, ControllerId},
     profile,
 };
@@ -92,15 +95,46 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error
             if args.next().is_some() {
                 return Err("expected a controller ID and three bias values".into());
             }
-            validated_bias(bias)?;
-            let text = toml::to_string(&StoredBias {
-                gyro_bias_dps: bias,
-            })?;
-            profile::replace_file(&bias_path(id)?, text.as_bytes())?;
+            save(&bias_path(id)?, bias)?;
         }
         _ => return Err("expected --measure or --save".into()),
     }
     Ok(())
+}
+
+fn save(path: &Path, bias: [f32; 3]) -> Result<(), Box<dyn Error>> {
+    validated_bias(bias)?;
+    let text = toml::to_string(&StoredBias {
+        gyro_bias_dps: bias,
+    })?;
+    profile::replace_file(path, text.as_bytes())?;
+    Ok(())
+}
+
+pub struct BiasWriter(SyncSender<Calibration>);
+
+impl BiasWriter {
+    pub fn open(input: &File) -> io::Result<Option<Self>> {
+        let Some(id) = hidraw::controller_id(input)? else {
+            return Ok(None);
+        };
+        let path = bias_path(id)?;
+        let (sender, receiver) = sync_channel::<Calibration>(1);
+        thread::Builder::new()
+            .name("gyro-calibration-save".into())
+            .spawn(move || {
+                while let Ok(calibration) = receiver.recv() {
+                    if let Err(error) = save(&path, calibration.gyro_bias_dps) {
+                        eprintln!("Could not save controller gyro calibration: {error}");
+                    }
+                }
+            })?;
+        Ok(Some(Self(sender)))
+    }
+
+    pub fn send(&self, calibration: Calibration) {
+        let _ = self.0.try_send(calibration);
+    }
 }
 
 fn parse_number<T: std::str::FromStr>(arg: Option<OsString>) -> Result<T, &'static str> {
@@ -118,8 +152,18 @@ fn measure(node: &Path) -> Result<(), Box<dyn Error>> {
     let factory = hidraw::read_factory_calibration(&device, identity.transport)?;
     let mut sampler = Sampler::new(factory);
     let mut measured = None;
+    let haptics = Haptics::open(&device, identity.transport);
     println!("ready");
     io::stdout().flush()?;
+    if let Some(haptics) = &haptics {
+        haptics.send(Cue::CalibrationStart);
+    }
+    let settle_at = Instant::now()
+        + if haptics.is_some() {
+            Duration::from_millis(500)
+        } else {
+            Duration::ZERO
+        };
     forward_reports(
         &mut device,
         identity,
@@ -132,6 +176,7 @@ fn measure(node: &Path) -> Result<(), Box<dyn Error>> {
         },
         |event| {
             if let SessionEvent::Report(report) = event
+                && Instant::now() >= settle_at
                 && let Some(bias) = sampler.observe(report.imu)
             {
                 measured = Some(bias);
@@ -143,6 +188,9 @@ fn measure(node: &Path) -> Result<(), Box<dyn Error>> {
     let [x, y, z] = measured
         .ok_or("Controller disconnected before gyro calibration finished.")?
         .gyro_bias_dps;
+    if let Some(haptics) = haptics {
+        haptics.finish(Cue::CalibrationDone);
+    }
     println!("bias {id} {x} {y} {z}");
     Ok(())
 }

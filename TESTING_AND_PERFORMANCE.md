@@ -926,6 +926,14 @@ profile and compare stationary drift and deliberate slow aim. Verify that
 the same correction is used after reconnect and that a second controller
 keeps its own correction.
 
+Bind **Gyro → Controller gyro calibration → Hold button** to PS. Verify
+a tap leaves calibration idle. Hold PS for 1.5 seconds, then release it
+and set the controller down. On USB with `aplay`, verify the single
+start and double completion pulses. Repeat while moving for 15 seconds
+and verify the previous correction remains active. Run RWC over USB and
+rotate slowly around the right stick edge. Check that tactile steps
+follow rotation in either direction and cease when the stick centers.
+
 Enable **Start when I log in**, log out and back in, and confirm the tray
 and bridge start. Clear the setting and repeat to confirm manual
 launch is needed. Use **Quit JoyShockRust** and verify both user units

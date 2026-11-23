@@ -932,6 +932,27 @@ or under `~/.config` if XDG_CONFIG_HOME is unset. Cancel before saving to
 discard the measurement. A saved correction takes precedence over the
 optional session-start stationary calibration.
 
+In the profile editor, open **Gyro → Controller gyro calibration** and
+choose **PS button** under **Hold button**. Save and apply the profile.
+Hold PS for 1.5 seconds, release it, and leave the controller still. The
+new correction applies immediately and is saved for this controller.
+The shortcut reads the physical button, and the usual button mapping
+still runs. To customize the hold duration in TOML, use:
+
+```toml
+[gyro.calibration_hold]
+button = "ps"
+hold_ms = 1500
+```
+
+For advanced haptics, connect the controller by USB and install
+`alsa-utils` for `aplay`. The controller's four-channel ALSA playback
+device must be available. A single pulse marks the start and a double
+pulse marks completion. During RWC measurement, sweeping the stick
+produces short tactile detents every 15 degrees of relative stick
+rotation. Camera movement remains continuous. Bluetooth calibration
+is available with visual status or bridge logs.
+
 ## Game sensitivity calibration
 
 Use the right stick to turn the camera through whole rotations. Enable raw

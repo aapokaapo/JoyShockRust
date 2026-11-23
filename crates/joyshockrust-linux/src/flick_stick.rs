@@ -46,10 +46,20 @@ impl FlickStick {
     }
 
     pub fn advance(&mut self, stick: Stick, ticks: u32) -> i32 {
+        self.advance_with_rotation(stick, ticks, |_| {})
+    }
+
+    pub fn advance_with_rotation(
+        &mut self,
+        stick: Stick,
+        ticks: u32,
+        mut rotation: impl FnMut(Option<f64>),
+    ) -> i32 {
         let delta = match self.timebase.observe(ticks) {
             TimestampUpdate::FirstSample => Duration::ZERO,
             TimestampUpdate::Advanced { delta, .. } => delta,
             TimestampUpdate::Gap { .. } => {
+                rotation(None);
                 self.armed = false;
                 self.angle = None;
                 self.remaining_degrees = 0.0;
@@ -71,6 +81,7 @@ impl FlickStick {
 
         let radius_squared = stick.x * stick.x + stick.y * stick.y;
         if radius_squared <= RELEASE_RADIUS * RELEASE_RADIUS {
+            rotation(None);
             self.armed = true;
             self.angle = None;
         } else if self.armed
@@ -79,8 +90,11 @@ impl FlickStick {
             let current = f64::from(stick.x).atan2(-f64::from(stick.y));
             if let Some(previous) = self.angle.replace(current) {
                 let turn = (current - previous + PI).rem_euclid(TAU) - PI;
-                degrees += turn.to_degrees();
+                let degrees_rotated = turn.to_degrees();
+                rotation(Some(degrees_rotated));
+                degrees += degrees_rotated;
             } else {
+                rotation(None);
                 self.remaining_degrees += current.to_degrees();
                 self.remaining_time = FLICK_DURATION;
             }

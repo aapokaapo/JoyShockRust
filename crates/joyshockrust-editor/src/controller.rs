@@ -51,6 +51,15 @@ const EDGE: [(&str, &str); 4] = [
     ("paddle-right", "Right paddle"),
 ];
 
+pub(crate) fn physical_buttons() -> impl Iterator<Item = (String, String)> {
+    FRONT
+        .iter()
+        .filter(|control| !control.id.starts_with("dpad-"))
+        .map(|control| (control.id, control.name))
+        .chain(EDGE)
+        .map(|(id, name)| (id.into(), name.into()))
+}
+
 pub(crate) const GAMEPAD_TARGETS: [(&str, &str); 13] = [
     ("cross", "South · A / Cross"),
     ("circle", "East · B / Circle"),

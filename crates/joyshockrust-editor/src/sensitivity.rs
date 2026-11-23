@@ -2,7 +2,11 @@ use std::{cell::Cell, rc::Rc};
 
 use adw::{gtk, prelude::*};
 
-use crate::ui::{self, Context};
+use crate::{
+    bindings::replace_value,
+    controller,
+    ui::{self, Context},
+};
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
 const GYRO_FIELDS: [&str; 2] = ["sensitivity_x", "sensitivity_y"];
@@ -83,6 +87,7 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
         response.add(&row);
     }
     page.add(&response);
+    page.add(&calibration_shortcut(ctx, gyro));
 
     let calibration = adw::PreferencesGroup::builder()
         .title("Game calibration")
@@ -174,6 +179,59 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     });
     page.add(&calibration);
     page.upcast()
+}
+
+fn calibration_shortcut(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("Controller gyro calibration")
+        .description("Hold the selected button, then release it and leave the controller still.")
+        .build();
+    let shortcut = gyro.and_then(|table| table.get("calibration_hold"));
+    let current = match shortcut.map(Item::as_table_like) {
+        Some(Some(table)) => table.get("button").and_then(Item::as_str),
+        None => None,
+        Some(None) => {
+            group.add(&controller::message_row(
+                "Calibration shortcut",
+                "Edit this shortcut in Advanced TOML.",
+            ));
+            return group;
+        }
+    };
+    let ctx = ctx.clone();
+    group.add(&controller::dropdown(
+        "Hold button",
+        current,
+        "Disabled",
+        controller::physical_buttons(),
+        move |button| {
+            ctx.edit(|doc| {
+                let gyro = doc
+                    .entry("gyro")
+                    .or_insert_with(|| Item::Table(Table::new()))
+                    .as_table_like_mut()
+                    .ok_or("Edit this gyro configuration in Advanced TOML.")?;
+                if let Some(button) = button {
+                    let hold = gyro
+                        .entry("calibration_hold")
+                        .or_insert_with(|| {
+                            Item::Value(Value::InlineTable(toml_edit::InlineTable::new()))
+                        })
+                        .as_table_like_mut()
+                        .ok_or("Edit this shortcut in Advanced TOML.")?;
+                    if let Some(value) = hold.get_mut("button").and_then(Item::as_value_mut) {
+                        replace_value(value, Value::from(button));
+                    } else {
+                        hold.insert("button", toml_edit::value(button));
+                    }
+                } else {
+                    gyro.remove("calibration_hold");
+                }
+                Ok(())
+            });
+        },
+    ));
+    group
 }
 
 fn display_error(error: Option<&str>, warning: &gtk::Label, reset: &gtk::Button) {

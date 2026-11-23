@@ -13,7 +13,11 @@ use evdev::{EventType, InputEvent, RelativeAxisCode};
 use joyshockrust_core::{Button, Stick};
 
 use crate::{
-    SessionEvent, discovery, flick_stick::FlickStick, forward_reports, gyro_mouse, profile,
+    SessionEvent, discovery,
+    flick_stick::FlickStick,
+    forward_reports, gyro_mouse,
+    haptics::{Cue, Haptics},
+    profile,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -233,6 +237,7 @@ fn measure_with_stick(
         }
     };
     let mut output = gyro_mouse::open_output("JoyShockRust Game Calibration Mouse")?;
+    let haptics = Haptics::open(&controller, identity.transport);
     let mut sweep = StickSweep::new((40.0 / in_game_sens).clamp(0.25, 10_000.0));
     let mut measured_counts = None;
     progress(Progress::Ready)?;
@@ -248,11 +253,14 @@ fn measure_with_stick(
             let SessionEvent::Report(report) = event else {
                 return Ok(ControlFlow::Continue(()));
             };
-            let (delta, confirmation) = sweep.advance(
+            let (delta, confirmation, detent) = sweep.advance(
                 report.controls.right_stick,
                 report.imu.device_ticks,
                 report.controls.buttons.contains(Button::Start),
             );
+            if detent && let Some(haptics) = &haptics {
+                haptics.send(Cue::Detent);
+            }
             if delta != 0 {
                 output.emit(&[InputEvent::new(
                     EventType::RELATIVE.0,
@@ -262,7 +270,12 @@ fn measure_with_stick(
             }
             match confirmation {
                 Confirmation::None => {}
-                Confirmation::Started => progress(Progress::Started)?,
+                Confirmation::Started => {
+                    if let Some(haptics) = &haptics {
+                        haptics.send(Cue::CalibrationStart);
+                    }
+                    progress(Progress::Started)?;
+                }
                 Confirmation::CenterStick => progress(Progress::CenterStick)?,
                 Confirmation::NoMotion => progress(Progress::NoMotion)?,
                 Confirmation::Finished(counts) => {
@@ -274,6 +287,9 @@ fn measure_with_stick(
         },
     )?;
     let counts = measured_counts.ok_or("controller disconnected before calibration finished")?;
+    if let Some(haptics) = haptics {
+        haptics.finish(Cue::CalibrationDone);
+    }
     Ok(i32::try_from(counts)?)
 }
 
@@ -299,6 +315,28 @@ struct StickSweep {
     measuring: bool,
     options_pressed: bool,
     counts: i64,
+    dial: Dial,
+}
+
+#[derive(Default)]
+struct Dial {
+    travel: f64,
+}
+
+impl Dial {
+    fn rotate(&mut self, degrees: Option<f64>) -> bool {
+        const STEP: f64 = 15.0;
+        let Some(degrees) = degrees else {
+            self.travel = 0.0;
+            return false;
+        };
+        self.travel += degrees;
+        if self.travel.abs() >= STEP {
+            self.travel %= STEP;
+            return true;
+        }
+        false
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -317,14 +355,18 @@ impl StickSweep {
             measuring: false,
             options_pressed: true,
             counts: 0,
+            dial: Dial::default(),
         }
     }
 
-    fn advance(&mut self, stick: Stick, ticks: u32, options: bool) -> (i32, Confirmation) {
+    fn advance(&mut self, stick: Stick, ticks: u32, options: bool) -> (i32, Confirmation, bool) {
         let pressed = options && !self.options_pressed;
         self.options_pressed = options;
+        let mut detent = false;
         let delta = if self.measuring {
-            self.flick.advance(stick, ticks)
+            self.flick.advance_with_rotation(stick, ticks, |degrees| {
+                detent = self.dial.rotate(degrees);
+            })
         } else {
             0
         };
@@ -342,7 +384,7 @@ impl StickSweep {
         } else {
             Confirmation::Finished(self.counts.unsigned_abs())
         };
-        (delta, confirmation)
+        (delta, confirmation, detent)
     }
 }
 
@@ -405,21 +447,34 @@ mod tests {
             sweep.advance(stick, ticks, options)
         };
 
-        assert_eq!(advance(up, true), (0, Confirmation::None));
+        assert_eq!(advance(up, true), (0, Confirmation::None, false));
         advance(center, false);
-        assert_eq!(advance(center, true), (0, Confirmation::Started));
-        assert_eq!(advance(up, true), (0, Confirmation::None));
+        assert_eq!(advance(center, true), (0, Confirmation::Started, false));
+        assert_eq!(advance(up, true), (0, Confirmation::None, false));
         for direction in [right, down, left, up].into_iter().cycle().take(8) {
-            assert_eq!(advance(direction, false), (1800, Confirmation::None));
+            assert_eq!(advance(direction, false), (1800, Confirmation::None, true));
         }
-        assert_eq!(advance(up, true), (0, Confirmation::CenterStick));
+        assert_eq!(advance(up, true), (0, Confirmation::CenterStick, false));
         for _ in 0..3 {
             advance(center, false);
         }
-        let (delta, confirmation) = advance(center, true);
+        let (delta, confirmation, detent) = advance(center, true);
+        assert!(!detent);
         assert_eq!(delta, 0);
         assert_eq!(confirmation, Confirmation::Finished(14_400));
         assert_eq!(calculate(14_400, 2.0, 2.0).unwrap(), 40.0);
+    }
+
+    #[test]
+    fn dial_uses_relative_steps_and_resets_when_the_stick_recenters() {
+        let mut dial = Dial::default();
+        assert!(!dial.rotate(Some(10.0)));
+        assert!(!dial.rotate(Some(-2.0)));
+        assert!(dial.rotate(Some(8.0)));
+        assert!(!dial.rotate(Some(-14.0)));
+        assert!(dial.rotate(Some(-3.0)));
+        assert!(!dial.rotate(None));
+        assert!(!dial.rotate(Some(-10.0)));
     }
 
     #[test]
