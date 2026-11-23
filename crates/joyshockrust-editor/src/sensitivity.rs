@@ -93,6 +93,7 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
         return ui::advanced_required("Edit this gyro configuration in Advanced TOML.");
     };
     let page = adw::PreferencesPage::new();
+    page.add(&crate::gyro_activation::group(ctx, &doc));
     page.add(&gyro_sensitivity_group(ctx, gyro));
     page.add(&gyro_response_group(ctx, gyro));
     page.add(&flick_threshold_group(ctx, gyro));
@@ -592,7 +593,7 @@ fn display_error(error: Option<&str>, warning: &gtk::Label, reset: &gtk::Button)
     reset.set_visible(error.is_some());
 }
 
-fn gyro_table_mut(doc: &mut DocumentMut) -> Result<&mut dyn TableLike, &'static str> {
+pub(crate) fn gyro_table_mut(doc: &mut DocumentMut) -> Result<&mut dyn TableLike, &'static str> {
     doc.entry("gyro")
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_like_mut()

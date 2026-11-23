@@ -624,6 +624,63 @@ pub(crate) mod tests {
 
     #[test]
     #[ignore = "requires a Wayland compositor"]
+    fn gyro_activation_edits_buttons_touch_chords_and_triggers() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        editor.text.push_str("[gyro]\nsensitivity_x = 4.0 # retain\nbinding = { mode = 'disable-while-held', input = 'l2' }\n");
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: glib::WeakRef::new(),
+            overlay: glib::WeakRef::new(),
+        };
+        let page = sensitivity::gyro_page(&ctx);
+        let pick = |title, label| {
+            let row = descendants::<adw::ComboRow>(&page)
+                .into_iter()
+                .find(|row| row.title() == title)
+                .unwrap();
+            let model = row.model().unwrap().downcast::<gtk::StringList>().unwrap();
+            let selected = (0..model.n_items())
+                .find(|&index| model.string(index).as_deref() == Some(label))
+                .unwrap();
+            row.set_selected(selected);
+        };
+        let assert_binding = |expected| {
+            let doc = ctx.document().unwrap();
+            assert_eq!(crate::gyro_activation::binding(&doc).unwrap(), expected);
+            assert!(doc.to_string().contains("sensitivity_x = 4.0 # retain"));
+        };
+
+        pick("Activation mode", "Disable while held");
+        assert_binding(Some(("disable-while-held", "l2")));
+        pick("Activation mode", "Toggle on double tap");
+        pick("Input", "Touch region 1:2");
+        assert_binding(Some(("double-tap", "touch:1:2")));
+        assert_eq!(
+            ctx.document().unwrap()["touchpad"]["columns"].as_integer(),
+            Some(2)
+        );
+        pick("Activation mode", "Enable while both inputs are held");
+        pick("Second input", "L2 · Left trigger");
+        assert_binding(Some(("chord", "touch:1:2,l2")));
+        pick("Activation mode", "Enable while analog trigger is pulled");
+        pick("Trigger", "R2 · Right trigger");
+        let threshold = descendants::<adw::SpinRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Press threshold")
+            .unwrap();
+        threshold.set_value(0.5);
+        assert_binding(Some(("trigger", "r2:0.5:0.35")));
+        threshold.set_value(0.3);
+        assert_eq!(threshold.value(), 0.5);
+        assert_binding(Some(("trigger", "r2:0.5:0.35")));
+        pick("Activation mode", "Always active");
+        assert_binding(None);
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
     fn gyro_sliders_and_typed_values_use_independent_ranges() {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();

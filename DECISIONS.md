@@ -591,6 +591,10 @@ partial tap actions if the same pull reaches the full stage by default.
 The per-trigger `keyboard.keep_partial` setting keeps the lower gate
 active through full travel when enabled.
 
+The Gyro tab edits the profile’s single activation binding. Its button,
+touch, chord and trigger choices use the bridge’s existing profile schema.
+The touchpad’s cell editor edits the same binding for single touch inputs.
+
 The gyro editor offers 0–20 sliders for fine adjustment and text fields
 for the full 0–100 profile range. Opening a profile or typing a value
 above 20 keeps the recorded sensitivity and caps only the slider position.

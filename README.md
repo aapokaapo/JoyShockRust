@@ -725,6 +725,12 @@ leave the release radius empty to use the bridge default. Select
 **Update Mapping** to validate the settings and return to the profile,
 then **Save & Apply** to load them into the running bridge.
 
+In **Gyro → Gyro activation**, choose **Always active** or select a
+physical button, touch region, two-input chord, or analog trigger. The
+available modes include enabling or disabling while held and toggling
+on a press, tap, or double tap. The analog trigger mode lets you set
+separate press and release thresholds.
+
 The **Gyro** page has matching horizontal and vertical sensitivity
 sliders. Enable **Link horizontal and vertical** to use one slider and
 one numeric field for both axes. Linking copies the horizontal value to

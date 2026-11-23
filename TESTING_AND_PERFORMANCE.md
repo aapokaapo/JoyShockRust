@@ -909,6 +909,11 @@ at full pull** for L2 and save. Verify Q stays held when E engages, then
 ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
 
+In **Gyro → Gyro activation**, select **Disable while held** and L2,
+apply the profile, then check that holding and releasing L2 stops and
+resumes aim. Configure a touch region, a chord and an analog trigger in
+turn. Reopen the profile to check that the selected mode and inputs persist.
+
 In **Sticks**, move each response slider one step and verify its own
 preview updates. Save and check the two per-stick values in
 **Advanced**. In **Gyro**, move X and Y separately and check each slider

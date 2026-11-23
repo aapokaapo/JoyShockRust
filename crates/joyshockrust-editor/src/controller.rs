@@ -497,7 +497,32 @@ pub(crate) fn dropdown(
     choices: impl Iterator<Item = (String, String)>,
     changed: impl Fn(Option<&str>) + 'static,
 ) -> adw::ComboRow {
-    let mut choices: Vec<_> = std::iter::once((None, default.to_owned()))
+    choice_row(title, current, Some(default), choices, changed)
+}
+
+pub(crate) fn required_dropdown(
+    title: &str,
+    current: &str,
+    choices: impl Iterator<Item = (String, String)>,
+    changed: impl Fn(&str) + 'static,
+) -> adw::ComboRow {
+    choice_row(title, Some(current), None, choices, move |value| {
+        if let Some(value) = value {
+            changed(value);
+        }
+    })
+}
+
+fn choice_row(
+    title: &str,
+    current: Option<&str>,
+    default: Option<&str>,
+    choices: impl Iterator<Item = (String, String)>,
+    changed: impl Fn(Option<&str>) + 'static,
+) -> adw::ComboRow {
+    let mut choices: Vec<_> = default
+        .into_iter()
+        .map(|text| (None, text.to_owned()))
         .chain(choices.map(|(key, label)| (Some(key), label)))
         .collect();
     let selected = if let Some(index) = choices
