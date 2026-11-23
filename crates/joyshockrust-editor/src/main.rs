@@ -149,7 +149,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let [Some(profile), Some(node), None] = [args.next(), args.next(), args.next()] else {
             return Err("usage: joyshockrust-editor --calibrate-game PROFILE HIDRAW".into());
         };
-        return calibration::run(bridge, Some(profile.into()), node.into());
+        return calibration::run(
+            bridge,
+            Some(calibration::GameProfiles {
+                active: Some(profile.into()),
+                available: Vec::new(),
+            }),
+            node.into(),
+        );
+    }
+    if args
+        .next_if(|arg| arg == "--calibrate-game-select")
+        .is_some()
+    {
+        let node = args.next().ok_or("expected a controller node")?;
+        let active = if args.next_if(|arg| arg == "--active-profile").is_some() {
+            Some(args.next().ok_or("expected an active profile path")?.into())
+        } else {
+            None
+        };
+        let available = args.map(PathBuf::from).collect();
+        return calibration::run(
+            bridge,
+            Some(calibration::GameProfiles { active, available }),
+            node.into(),
+        );
     }
     if args
         .next_if(|arg| arg == "--calibrate-controller-gyro")

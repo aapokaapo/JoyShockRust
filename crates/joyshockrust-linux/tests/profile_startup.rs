@@ -218,6 +218,25 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
         ] {
             assert!(stdout.lines().any(|entry| entry == line), "{stdout}");
         }
+        let expected_path = match source {
+            "startup" => Some(&startup),
+            "loaded" => Some(&preset),
+            _ => None,
+        };
+        let path_field = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("profile_path_hex="));
+        let encoded = expected_path.map(|path| {
+            use std::fmt::Write;
+            path.as_os_str()
+                .as_encoded_bytes()
+                .iter()
+                .fold(String::new(), |mut hex, byte| {
+                    write!(&mut hex, "{byte:02x}").unwrap();
+                    hex
+                })
+        });
+        assert_eq!(path_field, encoded.as_deref());
         assert!(!stdout.contains("ff:ff:ff:ff:ff:ff"), "{stdout}");
     };
     check("auto", "dualsense-edge", false, "defaults");

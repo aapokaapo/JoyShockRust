@@ -893,7 +893,7 @@ controller in a Wayland session.
 cargo test --locked -p joyshockrust-editor touchpad_widgets_edit_the_selected_cell -- --ignored
 ```
 
-Choose **Calibrate game sensitivity (RWC)** and a profile. While the
+Choose **Calibrate game sensitivity (RWC)** with a named profile active. While the
 Wayland window is open, check `outputs_paused=true` and verify the
 regular virtual outputs are removed. Start measurement and confirm the
 window shows **Ready**. Press Options with the stick off-center to see
@@ -901,8 +901,9 @@ the centering prompt. Center the stick and press Options to see
 **Measuring**. With the stick still centered, press Options again and
 check for the no-movement prompt. Perform one or more complete turns and
 press Options with the stick centered to finish the sweep.
-Enter the total number of turns in the window. Verify that **Save
-Calibration** displays the result and updates the profile. Select
+Enter the total number of turns in the window. Verify the active file
+is preselected. Select a different destination and verify that **Save
+Calibration** displays the result and updates the selected profile. Select
 **Done** and verify `outputs_paused=false`, the controller reconnects,
 and the previous live profile remains active. Select the calibrated
 profile to apply the new values. Repeat, cancel during measurement,

@@ -6,7 +6,10 @@ use std::{
     io::{self, Read, Write},
     os::{
         fd::{AsFd, BorrowedFd},
-        unix::net::{UnixListener, UnixStream},
+        unix::{
+            ffi::OsStrExt,
+            net::{UnixListener, UnixStream},
+        },
     },
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -24,6 +27,7 @@ pub struct StatusSocket {
     filter: Cell<ControllerFilter>,
     profile_source: Cell<ProfileSource>,
     profile_name: RefCell<Option<String>>,
+    profile_path_hex: RefCell<Option<String>>,
     active_hidraw: RefCell<Option<String>>,
     gamepad_enabled: Cell<bool>,
     gamepad_sysfs: RefCell<Option<PathBuf>>,
@@ -98,6 +102,7 @@ impl StatusSocket {
             filter: Cell::default(),
             profile_source: Cell::default(),
             profile_name: RefCell::default(),
+            profile_path_hex: RefCell::default(),
             active_hidraw: RefCell::default(),
             gamepad_enabled: Cell::new(true),
             gamepad_sysfs: RefCell::default(),
@@ -115,10 +120,23 @@ impl StatusSocket {
         self.filter.set(filter);
     }
 
-    pub fn set_profile(&self, source: ProfileSource, name: Option<&OsStr>) {
+    pub fn set_profile(&self, source: ProfileSource, name: Option<&OsStr>, path: Option<&Path>) {
         self.profile_source.set(source);
         self.profile_name
             .replace(name.map(|name| name.to_string_lossy().escape_debug().to_string()));
+        self.profile_path_hex
+            .replace(
+                path.and_then(|path| std::path::absolute(path).ok())
+                    .map(|path| {
+                        use std::fmt::Write;
+                        let bytes = path.as_os_str().as_bytes();
+                        let mut encoded = String::with_capacity(bytes.len() * 2);
+                        for byte in bytes {
+                            let _ = write!(encoded, "{byte:02x}");
+                        }
+                        encoded
+                    }),
+            );
     }
 
     pub fn set_active_hidraw(&self, path: &Path) {
@@ -252,7 +270,7 @@ impl StatusSocket {
             .as_deref()
             .map_or(std::borrow::Cow::Borrowed("none"), Path::to_string_lossy);
         let outputs_paused = self.outputs_paused.get();
-        let response = format!(
+        let mut response = format!(
             "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\nactive_hidraw={active_hidraw}\nvirtual_gamepad_enabled={gamepad_enabled}\nvirtual_gamepad_sysfs={gamepad_sysfs}\nnative_touchpad_grabbed={touchpad_grabbed}\nnative_touchpad_grab_requested={touchpad_grab_requested}\noutputs_paused={outputs_paused}\nprofile_name={profile_name}\n",
             snapshot.gyro_configured,
             reports.decoded,
@@ -266,6 +284,10 @@ impl StatusSocket {
             reports.keyboard_batches,
             reports.mouse_button_batches,
         );
+        if let Some(path) = self.profile_path_hex.borrow().as_deref() {
+            use std::fmt::Write;
+            let _ = writeln!(response, "profile_path_hex={path}");
+        }
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
             match self.listener.accept() {
@@ -348,6 +370,7 @@ mod tests {
             filter: Cell::default(),
             profile_source: Cell::default(),
             profile_name: RefCell::default(),
+            profile_path_hex: RefCell::default(),
             active_hidraw: RefCell::default(),
             gamepad_enabled: Cell::new(true),
             gamepad_sysfs: RefCell::default(),
@@ -458,6 +481,7 @@ mod tests {
             filter: Cell::default(),
             profile_source: Cell::default(),
             profile_name: RefCell::default(),
+            profile_path_hex: RefCell::default(),
             active_hidraw: RefCell::default(),
             gamepad_enabled: Cell::new(true),
             gamepad_sysfs: RefCell::default(),
@@ -550,6 +574,7 @@ mod tests {
             filter: Cell::default(),
             profile_source: Cell::default(),
             profile_name: RefCell::default(),
+            profile_path_hex: RefCell::default(),
             active_hidraw: RefCell::default(),
             gamepad_enabled: Cell::new(true),
             gamepad_sysfs: RefCell::default(),

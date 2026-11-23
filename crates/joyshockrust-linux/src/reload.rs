@@ -37,6 +37,7 @@ use crate::{
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
 const MAX_PROFILE_NAME_BYTES: usize = 4096;
 const LOAD_PROFILE_PREFIX: &[u8] = b"\0load-profile\n";
+const LOAD_PROFILE_PATH_PREFIX: &[u8] = b"\0load-profile-path\n";
 const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
 const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
 const SET_GAMEPAD_PREFIX: &[u8] = b"\0set-gamepad\n";
@@ -147,6 +148,7 @@ pub enum Update {
 
 struct InlineProfile<'a> {
     name: Option<&'a OsStr>,
+    path: Option<&'a Path>,
     contents: &'a [u8],
 }
 
@@ -170,23 +172,42 @@ impl Request<'_> {
         let Some(Client::Load(_, data)) = &self.client else {
             return Ok(None);
         };
-        let Some(data) = data.strip_prefix(LOAD_PROFILE_PREFIX) else {
+        let (data, has_path) = if let Some(data) = data.strip_prefix(LOAD_PROFILE_PATH_PREFIX) {
+            (data, true)
+        } else if let Some(data) = data.strip_prefix(LOAD_PROFILE_PREFIX) {
+            (data, false)
+        } else {
             // Older clients send only the TOML bytes.
             return Ok(Some(InlineProfile {
                 name: None,
+                path: None,
                 contents: data,
             }));
         };
         let end = data
             .iter()
             .position(|&byte| byte == 0)
-            .ok_or("named profile request needs a filename and profile")?;
-        let name = &data[..end];
-        if name.is_empty() || name.len() > MAX_PROFILE_NAME_BYTES || name.contains(&b'/') {
-            return Err("invalid profile filename");
+            .ok_or("profile request needs a source and profile")?;
+        let source = &data[..end];
+        if source.is_empty() || source.len() > MAX_PROFILE_NAME_BYTES {
+            return Err("invalid profile source");
         }
+        let name = OsStr::from_bytes(source);
+        let path = Path::new(name);
+        let (name, path) = if has_path {
+            if !path.is_absolute() || path.file_name().is_none() {
+                return Err("expected an absolute profile path");
+            }
+            (path.file_name(), Some(path))
+        } else {
+            if source.contains(&b'/') {
+                return Err("invalid profile filename");
+            }
+            (Some(name), None)
+        };
         Ok(Some(InlineProfile {
-            name: Some(OsStr::from_bytes(name)),
+            name,
+            path,
             contents: &data[end + 1..],
         }))
     }
@@ -299,28 +320,24 @@ impl Request<'_> {
             return;
         }
         self.reload.outcome.set(Outcome::Applied);
-        let (source, name) = if self.is_unload() {
+        let (source, name, path) = if self.is_unload() {
             eprintln!("Profile unloaded from CLI");
-            (ProfileSource::Defaults, None)
+            (ProfileSource::Defaults, None, None)
         } else if matches!(self.client, Some(Client::Load(_, _))) {
             eprintln!("Profile loaded from CLI");
-            let name = self
-                .inline_profile()
-                .ok()
-                .flatten()
-                .and_then(|profile| profile.name);
-            (ProfileSource::Loaded, name)
+            let profile = self.inline_profile().ok().flatten();
+            let name = profile.as_ref().and_then(|profile| profile.name);
+            let path = profile.and_then(|profile| profile.path);
+            (ProfileSource::Loaded, name, path)
         } else {
-            if let Some(path) = &self.reload.path {
+            let path = self.reload.path.as_deref();
+            if let Some(path) = path {
                 eprintln!("Profile reloaded: {}", path.display());
             }
-            (
-                ProfileSource::Startup,
-                self.reload.path.as_deref().and_then(Path::file_name),
-            )
+            (ProfileSource::Startup, path.and_then(Path::file_name), path)
         };
         if let Some(status) = status {
-            status.set_profile(source, name);
+            status.set_profile(source, name, path);
         }
         self.reply(b"applied\n");
     }
@@ -412,20 +429,18 @@ pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<(
         ));
     }
 
-    let name = source
-        .file_name()
-        .map(OsStr::as_bytes)
-        .filter(|name| name.len() <= MAX_PROFILE_NAME_BYTES)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "expected a valid profile filename",
-            )
-        })?;
+    let absolute = std::path::absolute(source)?;
+    let path = absolute.as_os_str().as_bytes();
+    if path.len() > MAX_PROFILE_NAME_BYTES || absolute.file_name().is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid profile path",
+        ));
+    }
     let mut payload =
-        Vec::with_capacity(LOAD_PROFILE_PREFIX.len() + name.len() + 1 + profile.len());
-    payload.extend_from_slice(LOAD_PROFILE_PREFIX);
-    payload.extend_from_slice(name);
+        Vec::with_capacity(LOAD_PROFILE_PATH_PREFIX.len() + path.len() + 1 + profile.len());
+    payload.extend_from_slice(LOAD_PROFILE_PATH_PREFIX);
+    payload.extend_from_slice(path);
     payload.push(0);
     payload.extend_from_slice(&profile);
     send_update(&payload, reload_socket, "profile reload")
@@ -629,11 +644,14 @@ pub fn wait<'a>(
             return Err(io::Error::other("profile load socket lost"));
         }
         if !requested && client.is_none() && flags.contains(PollFlags::POLLIN) {
-            let mut data =
-                vec![
-                    0;
-                    LOAD_PROFILE_PREFIX.len() + MAX_PROFILE_NAME_BYTES + 1 + MAX_PROFILE_BYTES + 1
-                ];
+            let mut data = vec![
+                0;
+                LOAD_PROFILE_PATH_PREFIX.len()
+                    + MAX_PROFILE_NAME_BYTES
+                    + 1
+                    + MAX_PROFILE_BYTES
+                    + 1
+            ];
             match socket.recv_from(&mut data) {
                 Ok((len, address)) if !address.is_unnamed() => {
                     data.truncate(len);

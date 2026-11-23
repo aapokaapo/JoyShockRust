@@ -546,7 +546,9 @@ for enforcing radius ordering and the requirement for a movement key
 when a zone uses keep sprint. The dialog keeps existing deadzone and
 direction hysteresis settings.
 
-The status reply includes the filename of the last applied profile,
-without its directory. Named live loads carry the filename with the
-TOML bytes. The bridge accepts legacy name-free loads and preserves
-the current name when an update is rejected.
+The status reply includes a display filename and, when known, the
+active profile's absolute path as encoded bytes. RWC uses the exact path
+to preselect a destination even when profiles share a filename. Live
+loads carry path metadata and the TOML bytes. The bridge still accepts
+legacy name-only and name-free loads. Rejections preserve the current
+profile identity, and unloading clears it.

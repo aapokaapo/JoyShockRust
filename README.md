@@ -704,16 +704,17 @@ Open the profile actions menu to **Validate Profile** or **Save** to
 disk. **Save & Apply** writes the profile and loads it into the running
 bridge. Use Ctrl+S to save or Ctrl+Shift+S to save and apply.
 
-Choose a file under **Calibrate game sensitivity (RWC)** while a controller
-is connected. The tray pauses virtual outputs and opens the Wayland
+Select **Calibrate game sensitivity (RWC)** while a controller is connected. The tray pauses virtual outputs and opens the Wayland
 calibration window. Enter the game's mouse sensitivity and select **Start
 Measurement**. Wait for **Ready**, then focus the game, aim at a landmark
 and press Options with the right stick centered. The window shows when
 measurement starts and whether the stick needs to be centered or more
 movement is needed. Sweep the stick around its edge until the camera has
 completed one or more whole turns and has returned to the landmark. Center
-the stick and press Options again. Return to the calibration window, enter
-the number of complete turns and select **Save Calibration**.
+the stick and press Options again. Return to the calibration window and
+enter the number of complete turns. The active profile is preselected if
+its file is available. Choose another profile or use **Browse Profiles…**
+to find a different file. Select **Save Calibration** to store the result.
 
 Select **Done** to resume the bridge with the same in-memory profile and
 controller selection. To apply the saved calibration, select the

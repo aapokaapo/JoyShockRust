@@ -1,8 +1,8 @@
 use std::{
     env, fs,
     io::{self, Read},
-    os::unix::net::UnixStream,
-    path::{Path, PathBuf},
+    os::unix::{ffi::OsStringExt, net::UnixStream},
+    path::PathBuf,
     process::{Child, Command},
     sync::mpsc,
     time::{Duration, Instant},
@@ -70,6 +70,7 @@ struct Status {
     battery: String,
     active_node: Option<String>,
     profile: String,
+    active_profile: Option<PathBuf>,
     outputs_paused: bool,
 }
 
@@ -140,9 +141,23 @@ impl Status {
                 .filter(|_| connected)
                 .map(str::to_owned),
             profile: profile.into(),
+            active_profile: field("profile_path_hex").and_then(decode_profile_path),
             outputs_paused: field("outputs_paused") == Some("true"),
         })
     }
+}
+
+fn decode_profile_path(hex: &str) -> Option<PathBuf> {
+    let (chunks, remainder) = hex.as_bytes().as_chunks::<2>();
+    if !remainder.is_empty() {
+        return None;
+    }
+    let bytes: Vec<u8> = chunks
+        .iter()
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect::<Option<_>>()?;
+    let path = PathBuf::from(std::ffi::OsString::from_vec(bytes));
+    path.is_absolute().then_some(path)
 }
 
 #[derive(Clone, Debug)]
@@ -151,7 +166,7 @@ enum Action {
     AutoSelect,
     Load(PathBuf),
     Edit(Option<PathBuf>),
-    Calibrate(PathBuf),
+    CalibrateGame,
     CalibrateGyro,
     Unload,
     ResumeOutputs,
@@ -276,30 +291,10 @@ impl ksni::Tray for Tray {
             .is_some_and(|status| status.active_node.is_some())
         {
             menu.push(item("Calibrate Controller Gyro", Action::CalibrateGyro));
-        }
-        if state
-            .status
-            .as_ref()
-            .is_some_and(|status| status.active_node.is_some())
-            && !state.profiles.is_empty()
-        {
-            menu.push(
-                SubMenu {
-                    label: "Calibrate game sensitivity (RWC)".into(),
-                    submenu: state
-                        .profiles
-                        .iter()
-                        .filter_map(|path| {
-                            Some(item(
-                                path.file_stem()?.to_string_lossy(),
-                                Action::Calibrate(path.clone()),
-                            ))
-                        })
-                        .collect(),
-                    ..Default::default()
-                }
-                .into(),
-            );
+            menu.push(item(
+                "Calibrate game sensitivity (RWC)",
+                Action::CalibrateGame,
+            ));
         }
 
         let mut profiles = vec![item("Default mappings", Action::Unload)];
@@ -401,7 +396,7 @@ impl Desktop {
             .map(|_| ())
     }
 
-    fn calibrate(&self, profile: Option<&Path>, status: &Status) -> io::Result<Child> {
+    fn calibrate(&self, game: bool, status: &Status) -> io::Result<Child> {
         let node = status
             .active_node
             .as_deref()
@@ -412,17 +407,15 @@ impl Desktop {
             })
             .ok_or_else(|| io::Error::other("connect a controller to calibrate"))?;
         let mut dialog = Command::new(self.bridge.with_file_name("joyshockrust-editor"));
-        if let Some(profile) = profile {
-            output(
-                Command::new(&self.bridge)
-                    .arg("--check-profile")
-                    .arg(profile),
-            )?;
-            dialog.arg("--calibrate-game").arg(profile);
+        if game {
+            dialog.args(["--calibrate-game-select", node]);
+            if let Some(profile) = &status.active_profile {
+                dialog.arg("--active-profile").arg(profile);
+            }
+            dialog.args(self.profile_paths());
         } else {
-            dialog.arg("--calibrate-controller-gyro");
+            dialog.args(["--calibrate-controller-gyro", node]);
         }
-        dialog.arg(node);
         self.set_outputs_paused(true)?;
         match dialog.spawn() {
             Ok(child) => Ok(child),
@@ -469,7 +462,7 @@ impl Desktop {
             Action::Unload => {
                 self.command(&["--unload-profile"])?;
             }
-            Action::Calibrate(_) | Action::CalibrateGyro => {
+            Action::CalibrateGame | Action::CalibrateGyro => {
                 unreachable!("calibration is handled by the tray loop")
             }
             Action::ResumeOutputs => self.set_outputs_paused(false)?,
@@ -629,16 +622,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Ok(Action::Edit(_) | Action::Quit) if editor.is_some() => {}
-            Ok(action @ (Action::Calibrate(_) | Action::CalibrateGyro)) => {
-                let profile = match &action {
-                    Action::Calibrate(path) => Some(path.as_path()),
-                    _ => None,
-                };
+            Ok(action @ (Action::CalibrateGame | Action::CalibrateGyro)) => {
                 let result = state
                     .status
                     .as_ref()
                     .ok_or_else(|| io::Error::other("bridge unavailable"))
-                    .and_then(|status| desktop.calibrate(profile, status));
+                    .and_then(|status| {
+                        desktop.calibrate(matches!(action, Action::CalibrateGame), status)
+                    });
                 match result {
                     Ok(child) => {
                         calibration = Some(child);
@@ -693,6 +684,14 @@ mod tests {
                 .battery,
             "Charging"
         );
+        assert_eq!(
+            Status::parse(&format!(
+                "{connected}\nprofile_path_hex=2f746d702f612e746f6d6c"
+            ))
+            .unwrap()
+            .active_profile,
+            Some(PathBuf::from("/tmp/a.toml"))
+        );
         let waiting = Status::parse(&connected.replace("connected", "waiting")).unwrap();
         assert_eq!(waiting.controller, "Waiting for a controller");
         assert_eq!(waiting.active_node, None);
@@ -725,6 +724,21 @@ mod tests {
         assert!(matches!(
             receiver.try_recv().unwrap(),
             Action::CalibrateGyro
+        ));
+        let button = tray
+            .menu()
+            .into_iter()
+            .find_map(|entry| match entry {
+                MenuItem::Standard(item) if item.label == "Calibrate game sensitivity (RWC)" => {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .unwrap();
+        (button.activate)(&mut tray);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Action::CalibrateGame
         ));
         tray.state.status = Status::parse("version=1\ncontroller=waiting");
         assert!(!tray.menu().into_iter().any(|entry| matches!(entry,
@@ -767,9 +781,7 @@ mod tests {
         assert!(
             matches!(receiver.try_recv().unwrap(), Action::Select(selected) if selected == controller)
         );
-        assert!(
-            matches!(receiver.try_recv().unwrap(), Action::Calibrate(selected) if selected == profile)
-        );
+
         assert!(
             matches!(receiver.try_recv().unwrap(), Action::Load(selected) if selected == profile)
         );

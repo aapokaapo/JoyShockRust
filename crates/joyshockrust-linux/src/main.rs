@@ -543,14 +543,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let status = status.as_ref();
     if let Some(status) = status {
         status.update(None, runtime.gyro.is_some());
-        let name = if matches!(profile_source, ProfileSource::Startup) {
-            startup_profile
-                .as_deref()
-                .and_then(std::path::Path::file_name)
-        } else {
-            None
-        };
-        status.set_profile(profile_source, name);
+        let path = startup_profile
+            .as_deref()
+            .filter(|_| matches!(profile_source, ProfileSource::Startup));
+        status.set_profile(
+            profile_source,
+            path.and_then(std::path::Path::file_name),
+            path,
+        );
         status.set_touchpad_policy(grab_touchpad || runtime.grab_touchpad, false);
     }
     let mut controller_config = controller_config::ControllerConfig::load();
