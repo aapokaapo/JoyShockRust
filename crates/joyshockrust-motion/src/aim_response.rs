@@ -1,6 +1,9 @@
 //! Optional response shaping applied after calibrated motion integration.
 
-use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
+use std::{
+    f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU},
+    time::Duration,
+};
 
 pub const DEFAULT_FLICK_AXIAL_THRESHOLD_DEG: f64 = 4.0;
 pub const MAX_FLICK_AXIAL_THRESHOLD_DEG: f64 = 30.0;
@@ -142,13 +145,17 @@ impl GyroResponse {
         ]
     }
 
-    pub fn gain(self, angular_velocity: [f32; 3]) -> f64 {
+    /// Gain for the interval's integrated aim angle in degrees.
+    pub fn interval_gain(self, aim_delta: [f32; 2], duration: Duration) -> f64 {
+        if duration.is_zero() {
+            return 0.0;
+        }
         let accelerate = self.acceleration_enabled && self.multiplier > 1.0;
         if self.min_speed == 0.0 && !accelerate {
             return 1.0;
         }
-        let [pitch, yaw, _] = angular_velocity.map(f64::from);
-        let speed = pitch.hypot(yaw);
+        let [yaw, pitch] = aim_delta.map(f64::from);
+        let speed = pitch.hypot(yaw) / duration.as_secs_f64();
         if speed < self.min_speed {
             return 0.0;
         }
@@ -190,6 +197,7 @@ mod tests {
     #[test]
     fn gyro_threshold_and_acceleration_follow_pitch_yaw_speed() {
         let curve = GyroResponse::new(3.0, 20.0, 100.0, 3.0).unwrap();
+        let second = Duration::from_secs(1);
         for (pitch, yaw, gain) in [
             (0.5, 1.0, 0.0),
             (0.0, -20.0, 1.0),
@@ -197,19 +205,22 @@ mod tests {
             (0.0, 100.0, 3.0),
             (0.0, -120.0, 3.0),
         ] {
-            assert_eq!(curve.gain([pitch, yaw, 100.0]), gain);
+            assert_eq!(curve.interval_gain([yaw, pitch], second), gain);
         }
         let disabled = curve.with_acceleration_enabled(false);
-        assert_eq!(disabled.gain([0.5, 1.0, 0.0]), 0.0);
-        assert_eq!(disabled.gain([0.0, 120.0, 0.0]), 1.0);
+        assert_eq!(disabled.interval_gain([0.5, 1.0], second), 0.0);
+        assert_eq!(disabled.interval_gain([0.0, 120.0], second), 1.0);
         assert_eq!(disabled.values(), curve.values());
         assert_eq!(disabled.with_acceleration_enabled(true), curve);
-        assert_eq!(GyroResponse::default().gain([0.0; 3]), 0.0);
-        assert_eq!(GyroResponse::default().gain([0.0, 0.25, 0.0]), 1.0);
+        assert_eq!(GyroResponse::default().interval_gain([0.0; 2], second), 0.0);
+        assert_eq!(
+            GyroResponse::default().interval_gain([0.0, 0.25], second),
+            1.0
+        );
         assert_eq!(
             GyroResponse::new(0.0, 30.0, 180.0, 1.0)
                 .unwrap()
-                .gain([0.0, 0.1, 0.0]),
+                .interval_gain([0.0, 0.1], second),
             1.0
         );
         assert!(GyroResponse::new(0.0, 10.0, 10.0, 1.0).is_err());

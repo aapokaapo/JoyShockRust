@@ -380,15 +380,15 @@ impl GyroAim {
         if !emit_motion {
             self.remainder = [0.0; 2];
         }
-        let elapsed = match self.timebase.observe(sample.device_ticks) {
-            TimestampUpdate::FirstSample => Duration::ZERO,
-            TimestampUpdate::Advanced { elapsed, .. } => elapsed,
+        let (elapsed, interval) = match self.timebase.observe(sample.device_ticks) {
+            TimestampUpdate::FirstSample => (Duration::ZERO, Duration::ZERO),
+            TimestampUpdate::Advanced { elapsed, delta, .. } => (elapsed, delta),
             TimestampUpdate::Gap { .. } => {
                 self.reset_motion();
                 if let Some(calibration) = &mut self.calibration {
                     calibration.reset();
                 }
-                Duration::ZERO
+                (Duration::ZERO, Duration::ZERO)
             }
             TimestampUpdate::Repeated { .. } | TimestampUpdate::OutOfOrder { .. } => return [0; 2],
         };
@@ -416,7 +416,8 @@ impl GyroAim {
             return [0; 2];
         }
 
-        let gain = self.response.gain(output.angular_velocity);
+        // Match the speed used for the gain to the interval being integrated.
+        let gain = self.response.interval_gain(output.aim_delta, interval);
         if gain == 0.0 {
             self.remainder = [0.0; 2];
             return [0; 2];
@@ -583,6 +584,27 @@ mod tests {
             total[1] += delta[1];
         }
         assert_eq!(total, [-8, 4]);
+    }
+
+    #[test]
+    fn acceleration_preserves_balanced_small_motion_with_uneven_report_timing() {
+        let mut aim = aim(false).with_response(GyroResponse::new(0.2, 0.2, 1.0, 4.0).unwrap());
+        aim.set_sensitivity([200.0, 200.0]);
+        let sample = |ms: u32, yaw| RawImuSample {
+            gyro_counts: [0, yaw, 0],
+            device_ticks: ms * 3_000,
+            ..sample(0)
+        };
+        assert_eq!(aim.advance(sample(0, 0), true), [0, 0]);
+        // Equal positive and negative rotations, with the fast end of the
+        // interval alternating between the short and long reporting gaps.
+        let mut total = 0;
+        for start in (0..1000).step_by(50) {
+            for (offset, yaw) in [(5, 16), (25, 0), (45, -16), (50, 0)] {
+                total += aim.advance(sample(start + offset, yaw), true)[0];
+            }
+        }
+        assert_eq!(total, 0);
     }
 
     #[test]

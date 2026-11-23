@@ -672,14 +672,15 @@ mod tests {
         assert_eq!(valid.flick_axial_threshold(), 12.0);
         assert_eq!(valid.flick_steering_sensitivity, Some(0.35));
         assert_eq!(valid.response.values(), [2.0, 25.0, 120.0, 2.5]);
-        assert_eq!(valid.response.gain([0.0, 200.0, 0.0]), 2.5);
+        let second = std::time::Duration::from_secs(1);
+        assert_eq!(valid.response.interval_gain([0.0, 200.0], second), 2.5);
         for (enabled, gain) in [(false, 1.0), (true, 2.5)] {
             let profile = parse(&format!(
                 "version = 1\n[gyro]\nthreshold_dps = 2\naccel_multiplier = 2.5\naccel_enabled = {enabled}"
             )).unwrap();
             let response = profile.gyro.unwrap().response;
-            assert_eq!(response.gain([0.0, 200.0, 0.0]), gain);
-            assert_eq!(response.gain([0.0, 1.0, 0.0]), 0.0);
+            assert_eq!(response.interval_gain([0.0, 200.0], second), gain);
+            assert_eq!(response.interval_gain([0.0, 1.0], second), 0.0);
         }
         for settings in [
             "flick_axial_threshold_deg = -1",

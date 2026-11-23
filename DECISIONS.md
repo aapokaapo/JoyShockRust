@@ -603,7 +603,9 @@ TOML values together. The link switch is part of the editor session. The gyro ac
 switch is saved with the profile. Disabling it retains the configured
 curve and keeps applying the minimum-speed cutoff. The default cutoff
 of 0.2°/s suppresses small residual bias after calibration. An explicit
-zero retains unfiltered slow aim.
+zero retains unfiltered slow aim. Speed-dependent gain uses the average
+speed over the same device-time interval as the integrated aim delta,
+so the gain is independent of which end of the interval is faster.
 
 The status reply includes a display filename and, when known, the
 active profile's absolute path as encoded bytes. RWC uses the exact path
