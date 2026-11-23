@@ -4,7 +4,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use evdev::{AttributeSet, EventType, InputEvent, KeyCode, uinput::VirtualDevice};
+use evdev::{
+    AttributeSet, EventType, InputEvent, KeyCode, RelativeAxisCode, uinput::VirtualDevice,
+};
 use joyshockrust_core::{Button, Controls, DPad};
 use joyshockrust_input::{InputReport, TouchContact};
 use serde::Deserialize;
@@ -16,6 +18,8 @@ use crate::touchpad::{Grid, TouchRegion};
 mod stick;
 
 const TAP_KEY_TIME: Duration = Duration::from_millis(30);
+const WHEEL_AXES: [RelativeAxisCode; 2] =
+    [RelativeAxisCode::REL_WHEEL, RelativeAxisCode::REL_HWHEEL];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,6 +48,48 @@ struct RawBinding {
 enum RawOutput {
     Single(String),
     Combination(Vec<String>),
+    Scroll(ScrollOutput),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScrollOutput {
+    scroll: ScrollDirection,
+}
+
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum ScrollDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl ScrollDirection {
+    fn step(self) -> (usize, i32) {
+        match self {
+            Self::Up => (0, 1),
+            Self::Down => (0, -1),
+            Self::Left => (1, -1),
+            Self::Right => (1, 1),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+enum Action {
+    Keys(Box<[KeyCode]>),
+    Scroll(ScrollDirection),
+}
+
+impl Action {
+    fn keys(&self) -> &[KeyCode] {
+        match self {
+            Self::Keys(keys) => keys,
+            Self::Scroll(_) => &[],
+        }
+    }
 }
 
 #[derive(PartialEq)]
@@ -57,12 +103,23 @@ impl Config {
         self.buttons
             .iter()
             .flat_map(|binding| {
-                [&*binding.tap, &*binding.hold, &*binding.double_tap]
-                    .into_iter()
-                    .flatten()
-                    .copied()
+                [
+                    binding.tap.as_ref().map_or(&[][..], Action::keys),
+                    &binding.hold,
+                    binding.double_tap.as_ref().map_or(&[][..], Action::keys),
+                ]
+                .into_iter()
+                .flatten()
+                .copied()
             })
             .chain(self.sticks.iter().flat_map(|binding| binding.keys()))
+    }
+
+    fn has_scroll(&self) -> bool {
+        self.buttons.iter().any(|binding| {
+            matches!(binding.tap, Some(Action::Scroll(_)))
+                || matches!(binding.double_tap, Some(Action::Scroll(_)))
+        })
     }
 }
 
@@ -111,11 +168,11 @@ fn is_modifier(key: KeyCode) -> bool {
 }
 
 impl RawOutput {
-    fn resolve(output: Option<Self>) -> Result<Box<[KeyCode]>, String> {
-        match output {
-            None => Ok(Box::default()),
-            Some(Self::Single(name)) => Ok(Box::new([gesture_key(&name)?])),
-            Some(Self::Combination(names)) => {
+    fn resolve(self) -> Result<Action, String> {
+        match self {
+            Self::Single(name) => Ok(Action::Keys(Box::new([gesture_key(&name)?]))),
+            Self::Scroll(output) => Ok(Action::Scroll(output.scroll)),
+            Self::Combination(names) => {
                 if names.is_empty() {
                     return Err("gesture combination needs at least one output".into());
                 }
@@ -127,7 +184,7 @@ impl RawOutput {
                 if keys.windows(2).any(|pair| pair[0] == pair[1]) {
                     return Err("gesture combination outputs must be distinct".into());
                 }
-                Ok(keys.into_boxed_slice())
+                Ok(Action::Keys(keys.into_boxed_slice()))
             }
         }
     }
@@ -145,9 +202,9 @@ enum Source {
 #[derive(Clone, PartialEq)]
 struct Binding {
     source: BindingSource,
-    tap: Box<[KeyCode]>,
+    tap: Option<Action>,
     hold: Box<[KeyCode]>,
-    double_tap: Box<[KeyCode]>,
+    double_tap: Option<Action>,
     hold_time: Duration,
     double_tap_window: Duration,
 }
@@ -264,9 +321,15 @@ impl Settings {
             }
             let binding = Binding {
                 source,
-                tap: RawOutput::resolve(raw.tap)?,
-                hold: RawOutput::resolve(raw.hold)?,
-                double_tap: RawOutput::resolve(raw.double_tap)?,
+                tap: raw.tap.map(RawOutput::resolve).transpose()?,
+                hold: match raw.hold.map(RawOutput::resolve).transpose()? {
+                    Some(Action::Keys(keys)) => keys,
+                    Some(Action::Scroll(_)) => {
+                        return Err("scroll requires a tap or double_tap action".into());
+                    }
+                    None => Box::default(),
+                },
+                double_tap: raw.double_tap.map(RawOutput::resolve).transpose()?,
                 hold_time: raw
                     .hold_ms
                     .map_or(HOLD_TIME, |ms| Duration::from_millis(ms.get().into())),
@@ -274,9 +337,9 @@ impl Settings {
                     Duration::from_millis(ms.get().into())
                 }),
             };
-            if binding.tap.is_empty() && binding.hold.is_empty() && binding.double_tap.is_empty() {
+            if binding.tap.is_none() && binding.hold.is_empty() && binding.double_tap.is_none() {
                 return Err(format!(
-                    "keyboard binding for {name} needs at least one key"
+                    "keyboard binding for {name} needs at least one output"
                 ));
             }
             bindings.push(binding);
@@ -321,7 +384,12 @@ struct Gesture {
 }
 
 impl Gesture {
-    fn update(&mut self, input: &Input, click: Option<TouchContact>, now: Instant) -> &[KeyCode] {
+    fn update(
+        &mut self,
+        input: &Input,
+        click: Option<TouchContact>,
+        now: Instant,
+    ) -> Option<&Action> {
         let pressed = match self.binding.source {
             BindingSource::Single(source) => {
                 self.source_pressed[0] = source.pressed(input, click, self.source_pressed[0]);
@@ -337,14 +405,14 @@ impl Gesture {
                 self.source_pressed[0] && self.source_pressed[1]
             }
         };
-        let mut pulse: &[KeyCode] = &[];
+        let mut pulse = None;
         if self.pending_tap.is_some_and(|deadline| deadline <= now) {
             self.pending_tap = None;
-            pulse = &self.binding.tap;
+            pulse = self.binding.tap.as_ref();
         }
         match self.press {
             Press::Up
-                if pressed && self.binding.tap.is_empty() && self.binding.double_tap.is_empty() =>
+                if pressed && self.binding.tap.is_none() && self.binding.double_tap.is_none() =>
             {
                 self.press = Press::Held;
             }
@@ -352,14 +420,14 @@ impl Gesture {
             Press::Down(start) if !pressed => {
                 self.press = Press::Up;
                 if now.duration_since(start) < self.binding.hold_time {
-                    if !self.binding.double_tap.is_empty() {
+                    if let Some(double_tap) = &self.binding.double_tap {
                         if self.pending_tap.take().is_some() {
-                            pulse = &self.binding.double_tap;
+                            pulse = Some(double_tap);
                         } else {
                             self.pending_tap = Some(now + self.binding.double_tap_window);
                         }
                     } else {
-                        pulse = &self.binding.tap;
+                        pulse = self.binding.tap.as_ref();
                     }
                 }
             }
@@ -452,7 +520,9 @@ impl State {
                 .collect(),
             held: AttributeSet::new(),
             next_held: AttributeSet::new(),
-            events: Vec::with_capacity(key_count),
+            events: Vec::with_capacity(
+                key_count + usize::from(config.has_scroll()) * WHEEL_AXES.len(),
+            ),
             input: Input::default(),
             click: None,
         }
@@ -477,15 +547,25 @@ impl State {
             held.remove(key);
         }
         let mut deadline = None;
+        let mut scroll = [0_i32; WHEEL_AXES.len()];
         self.pulses.retain(|&(_, until)| until > now);
         for gesture in &mut self.gestures {
-            for &key in gesture.update(&input, self.click, now) {
-                let until = now + TAP_KEY_TIME;
-                if let Some(pulse) = self.pulses.iter_mut().find(|pulse| pulse.0 == key) {
-                    pulse.1 = until;
-                } else {
-                    self.pulses.push((key, until));
+            match gesture.update(&input, self.click, now) {
+                Some(Action::Keys(keys)) => {
+                    let until = now + TAP_KEY_TIME;
+                    for &key in keys {
+                        if let Some(pulse) = self.pulses.iter_mut().find(|pulse| pulse.0 == key) {
+                            pulse.1 = until;
+                        } else {
+                            self.pulses.push((key, until));
+                        }
+                    }
                 }
+                Some(Action::Scroll(direction)) => {
+                    let (axis, step) = direction.step();
+                    scroll[axis] = scroll[axis].saturating_add(step);
+                }
+                None => {}
             }
             if matches!(gesture.press, Press::Held) {
                 for &key in &gesture.binding.hold {
@@ -532,6 +612,12 @@ impl State {
             };
             (order, key.0)
         });
+        for (axis, delta) in WHEEL_AXES.into_iter().zip(scroll) {
+            if delta != 0 {
+                self.events
+                    .push(InputEvent::new(EventType::RELATIVE.0, axis.0, delta));
+            }
+        }
         if !self.events.is_empty() {
             emit(&self.events)?;
         }
@@ -606,7 +692,7 @@ fn emit_mixed_batches(
     keys.clear();
     buttons.clear();
     for &event in events {
-        if is_mouse_button(KeyCode(event.code())) {
+        if event.event_type() == EventType::RELATIVE || is_mouse_button(KeyCode(event.code())) {
             buttons.push(event);
         } else {
             keys.push(event);
@@ -616,7 +702,7 @@ fn emit_mixed_batches(
         return send(Target::Mouse, buttons);
     }
     // State emits releases before presses. Keep mouse releases under the old
-    // modifiers and send mouse presses after the keyboard changes.
+    // modifiers and send mouse presses and wheel steps after the keyboard changes.
     let (releases, presses) = buttons.split_at(buttons.partition_point(|event| event.value() == 0));
     if !releases.is_empty() {
         send(Target::Mouse, releases)?;
@@ -649,6 +735,7 @@ impl<'a> Keyboard<'a> {
         }
         let key_count = keys.iter().count();
         let button_count = buttons.iter().count();
+        let scroll = config.has_scroll();
         let keyboard = if key_count > 0 {
             // Advertise the standard key range used by udev to recognize a keyboard.
             for code in KeyCode::KEY_ESC.0..=KeyCode::KEY_D.0 {
@@ -663,9 +750,13 @@ impl<'a> Keyboard<'a> {
         } else {
             None
         };
-        let mouse = (button_count > 0)
+        let mouse = (button_count > 0 || scroll)
             .then(|| {
-                crate::gyro_mouse::open_output_with_buttons("JoyShockRust Button Mouse", buttons)
+                crate::gyro_mouse::open_output_with_buttons(
+                    "JoyShockRust Button Mouse",
+                    buttons,
+                    scroll,
+                )
             })
             .transpose()?;
         Ok(Some(Self {
@@ -674,7 +765,7 @@ impl<'a> Keyboard<'a> {
                 keyboard,
                 mouse,
                 keys: Vec::with_capacity(key_count),
-                buttons: Vec::with_capacity(button_count),
+                buttons: Vec::with_capacity(button_count + usize::from(scroll) * WHEEL_AXES.len()),
                 status,
             },
         }))
@@ -1582,6 +1673,98 @@ mod tests {
             let profile =
                 format!("version = 1\n[[keyboard.bindings]]\nbutton = 'cross'\nhold = {value}\n");
             assert!(crate::profile::parse(&profile).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn scroll_taps_use_the_mouse_without_scheduling_a_key_release() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            button = "cross"
+            tap = { scroll = "down" }
+            double_tap = { scroll = "right" }
+            double_tap_ms = 100
+            [[keyboard.bindings]]
+            button = "r1"
+            hold = "KEY_F13"
+        "#,
+        );
+        let mut state = State::new(&config);
+        let mut keys = Vec::with_capacity(1);
+        let mut mouse = Vec::with_capacity(2);
+        let mut events = Vec::with_capacity(5);
+        let start = Instant::now();
+        let allocations = allocation_counter::measure(|| {
+            for (ms, cross, r1, deadline) in [
+                (0, true, false, None),
+                (10, false, false, Some(110)),
+                (109, false, false, Some(110)),
+                (110, false, true, None),
+                (200, true, true, None),
+                (210, false, true, Some(310)),
+                (240, true, true, Some(310)),
+                (250, false, true, None),
+                (350, false, false, None),
+            ] {
+                let mut controls = Controls::default();
+                if cross {
+                    controls.buttons.insert(Button::South);
+                }
+                if r1 {
+                    controls.buttons.insert(Button::RightShoulder);
+                }
+                let next = state
+                    .update(
+                        input(controls),
+                        start + Duration::from_millis(ms),
+                        |batch| {
+                            emit_mixed_batches(batch, &mut keys, &mut mouse, |target, batch| {
+                                events.extend(batch.iter().map(|event| {
+                                    (ms, target, event.event_type(), event.code(), event.value())
+                                }));
+                                Ok(())
+                            })
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(next, deadline.map(|ms| start + Duration::from_millis(ms)));
+            }
+        });
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
+        assert_eq!(
+            events,
+            [
+                (110, Target::Keyboard, EventType::KEY, KeyCode::KEY_F13.0, 1),
+                (
+                    110,
+                    Target::Mouse,
+                    EventType::RELATIVE,
+                    RelativeAxisCode::REL_WHEEL.0,
+                    -1
+                ),
+                (
+                    250,
+                    Target::Mouse,
+                    EventType::RELATIVE,
+                    RelativeAxisCode::REL_HWHEEL.0,
+                    1
+                ),
+                (350, Target::Keyboard, EventType::KEY, KeyCode::KEY_F13.0, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn scroll_requires_a_known_direction_and_a_tap_gesture() {
+        for setting in [
+            "tap = { scroll = 'diagonal' }",
+            "tap = { scroll = 'up', unexpected = true }",
+            "hold = { scroll = 'up' }",
+        ] {
+            let profile =
+                format!("version = 1\n[[keyboard.bindings]]\nbutton = 'cross'\n{setting}\n");
+            assert!(crate::profile::parse(&profile).is_err(), "{setting}");
         }
     }
 

@@ -414,6 +414,11 @@ ownership with other bindings. Ctrl, Shift, Alt and Meta precede regular
 key presses and follow regular key releases. Across devices, mouse
 releases precede the keyboard update and mouse presses follow it.
 
+Updated 2026-11-23. Tap and double-tap can emit one relative wheel step
+on the button mouse. Wheel actions use gesture timing and generate no key
+release event. Wheel capabilities are advertised for profiles that use them.
+[Linux relative events](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/Documentation/input/event-codes.rst)
+
 Keyboard bindings can override hold and double-tap deadlines independently.
 Both timers use the existing monotonic report and readiness clock. The
 default timings and immediate behavior of hold-only bindings are retained.

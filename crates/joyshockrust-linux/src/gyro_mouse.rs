@@ -81,16 +81,21 @@ pub fn validate_flick_scale(scale: f64) -> Result<f64, &'static str> {
 }
 
 pub fn open_output(name: &str) -> io::Result<VirtualDevice> {
-    open_output_with_buttons(name, AttributeSet::new())
+    open_output_with_buttons(name, AttributeSet::new(), false)
 }
 
 pub(crate) fn open_output_with_buttons(
     name: &str,
     mut keys: AttributeSet<KeyCode>,
+    scroll: bool,
 ) -> io::Result<VirtualDevice> {
-    let axes = [Axis::REL_X, Axis::REL_Y]
+    let mut axes = [Axis::REL_X, Axis::REL_Y]
         .into_iter()
         .collect::<AttributeSet<_>>();
+    if scroll {
+        axes.insert(Axis::REL_WHEEL);
+        axes.insert(Axis::REL_HWHEEL);
+    }
     // Advertise the left button so consumers classify this as a mouse.
     keys.insert(KeyCode::BTN_LEFT);
     VirtualDevice::builder()?

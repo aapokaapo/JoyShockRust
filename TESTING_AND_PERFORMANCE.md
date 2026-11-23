@@ -726,6 +726,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     up, then move gradually toward the upper-left diagonal. Observe W
     alone until A engages. Back off toward straight up and verify that
     A remains held through the same angle before releasing closer to up.
+16. Bind D-pad Up and Down to opposite wheel directions. In a scrollable
+    window, tap each direction and verify one wheel step per tap. Bind a
+    horizontal scroll action to a double tap and verify it emits only
+    after the second short release.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

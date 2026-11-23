@@ -265,6 +265,19 @@ These gestures are sent by **JoyShockRust Button Mouse**, which also
 works in profiles with gyro disabled. Gyro and Flick Stick movement
 continue through **JoyShockRust Gyro Mouse** when enabled.
 
+Set `tap` or `double_tap` to a scroll action to emit one mouse wheel
+step. Directions are `up`, `down`, `left` and `right`.
+
+```toml
+[[keyboard.bindings]]
+button = "dpad-up"
+tap = { scroll = "up" }
+
+[[keyboard.bindings]]
+button = "dpad-down"
+tap = { scroll = "down" }
+```
+
 Use `chord` in place of `button` or `trigger` to require two active
 inputs. Either press order works. The second input completes the chord,
 and releasing either input ends it. Separate bindings for the member
@@ -495,7 +508,7 @@ slots, including any parser rejections.
 `uinput_gamepad_batches` and `uinput_mouse_batches` count synchronized
 event batches successfully submitted by the gamepad and gyro mouse.
 `uinput_keyboard_batches` and `uinput_mouse_button_batches` count batches
-from the keyboard and button mouse. Both include timer-driven events and
+from the keyboard and button mouse, including wheel steps. Both include timer-driven events and
 releases sent on profile reload. All four counters reset on disconnect.
 `controller_sessions_started` and `controller_sessions_ended` count
 session transitions since the bridge process started.
