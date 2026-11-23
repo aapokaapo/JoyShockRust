@@ -20,6 +20,7 @@ enum Side {
 pub(super) struct Settings {
     side: Side,
     deadzone: Option<f32>,
+    deadzone_release: Option<f32>,
     up: Option<String>,
     right: Option<String>,
     down: Option<String>,
@@ -50,6 +51,7 @@ enum OuterMode {
 pub(super) struct Binding {
     side: Side,
     deadzone_squared: f32,
+    deadzone_release_squared: f32,
     directions: [Option<KeyCode>; 4],
     outer: Option<Outer>,
 }
@@ -81,6 +83,10 @@ impl Settings {
         let deadzone = self.deadzone.unwrap_or(0.2);
         if !(0.0..1.0).contains(&deadzone) {
             return Err("keyboard stick deadzone must be in [0, 1)".into());
+        }
+        let deadzone_release = self.deadzone_release.unwrap_or(deadzone);
+        if !(0.0..=deadzone).contains(&deadzone_release) {
+            return Err("keyboard stick deadzone_release must be between 0 and deadzone".into());
         }
         let directions = [
             parse_key(self.up)?,
@@ -120,6 +126,7 @@ impl Settings {
         Ok(Binding {
             side: self.side,
             deadzone_squared: deadzone * deadzone,
+            deadzone_release_squared: deadzone_release * deadzone_release,
             directions,
             outer,
         })
@@ -149,6 +156,7 @@ impl Binding {
 
 pub(super) struct State {
     binding: Binding,
+    directions_active: bool,
     outer_active: bool,
     sent_active: bool,
     pulse: PulsePhase,
@@ -166,6 +174,7 @@ impl State {
     pub(super) fn new(binding: Binding) -> Self {
         Self {
             binding,
+            directions_active: false,
             outer_active: false,
             sent_active: false,
             pulse: PulsePhase::Ready,
@@ -183,8 +192,14 @@ impl State {
             Side::Right => controls.right_stick,
         };
         let radius_squared = x * x + y * y;
+        let direction_threshold = if self.directions_active {
+            self.binding.deadzone_release_squared
+        } else {
+            self.binding.deadzone_squared
+        };
+        self.directions_active = radius_squared > direction_threshold;
         let mut moving = false;
-        if radius_squared > self.binding.deadzone_squared {
+        if self.directions_active {
             let horizontal = x.abs() >= y.abs() * DIAGONAL_RATIO;
             let vertical = y.abs() >= x.abs() * DIAGONAL_RATIO;
             let directions = [

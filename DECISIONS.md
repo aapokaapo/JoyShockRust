@@ -382,6 +382,9 @@ whether another press is needed. Keep-sprint mode pulses once and
 re-arms when the stick has released all of its mapped direction keys.
 Pulsed outer keys have a single binding. Changes from one input report
 are emitted together, with sprint pulses following movement presses.
+Direction keys can also use a smaller release radius near center. This
+preserves continuous movement in `keep_sprint` mode through minor stick
+motion near the deadzone boundary.
 
 Keyboard trigger bindings use normalized travel and share the gyro
 trigger gate's threshold behavior. Each distinct threshold pair tracks

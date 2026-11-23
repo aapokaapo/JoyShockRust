@@ -1062,6 +1062,8 @@ mod tests {
             r#"
             [[keyboard.sticks]]
             side = "left"
+            deadzone = 0.3
+            deadzone_release = 0.2
             up = "KEY_W"
             left = "KEY_A"
             right = "KEY_D"
@@ -1075,12 +1077,14 @@ mod tests {
         let d = KeyCode::KEY_D.0;
         let shift = KeyCode::KEY_LEFTSHIFT.0;
         let frames = [
-            (0, -0.8, -0.8, &[(w, 1), (a, 1), (shift, 1)][..], Some(30)),
-            (30, -0.8, -0.8, &[(shift, 0)][..], None),
-            (60, -0.3, -0.3, &[][..], None), // Slowing the stick keeps sprint active.
+            (0, -0.18, -0.18, &[][..], None), // Below the activation radius.
+            (1, -0.8, -0.8, &[(w, 1), (a, 1), (shift, 1)][..], Some(31)),
+            (31, -0.8, -0.8, &[(shift, 0)][..], None),
+            (60, -0.18, -0.18, &[][..], None), // Both direction keys survive between thresholds.
             (70, 0.4, 0.0, &[(w, 0), (a, 0), (d, 1)][..], None),
             (80, 1.0, 0.0, &[][..], None), // Re-entering the zone while moving.
-            (90, 0.0, 0.0, &[(d, 0)][..], None), // Center needs no second press.
+            (90, 0.2, 0.0, &[(d, 0)][..], None), // The release radius ends movement.
+            (95, 0.25, 0.0, &[][..], None), // Noise within the band keeps movement released.
             (100, 0.0, -0.4, &[(w, 1)][..], None),
             (110, 0.0, -1.0, &[(shift, 1)][..], Some(140)),
             (115, 0.0, 0.0, &[(w, 0)][..], Some(140)),
@@ -1184,6 +1188,9 @@ mod tests {
                 binding.replace("threshold = 0.8", "mode = 'toggle', threshold = 0.8")
             ),
             format!("{binding}deadzone = nan\n"),
+            format!("{binding}deadzone_release = 0.3\n"),
+            format!("{binding}deadzone_release = -0.1\n"),
+            format!("{binding}deadzone_release = nan\n"),
             format!("{binding}{binding}"),
         ] {
             assert!(

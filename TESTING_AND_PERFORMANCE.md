@@ -718,6 +718,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     that tapping it performs Shift+click in an application that supports
     it. In a key-event viewer, check the Shift press before the mouse
     press and the mouse release before the Shift release.
+14. Set `deadzone = 0.3` and `deadzone_release = 0.2` on the left stick.
+    Start from center and tilt the stick just under 30% to check that no
+    direction key activates. Push beyond 30%, then back off slowly. The
+    direction keys should remain held until the radius reaches 20%.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

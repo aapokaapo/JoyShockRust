@@ -285,6 +285,7 @@ held while entering or leaving that zone.
 [[keyboard.sticks]]
 side = "left"
 deadzone = 0.2
+deadzone_release = 0.15
 up = "KEY_W"
 left = "KEY_A"
 down = "KEY_S"
@@ -293,8 +294,10 @@ outer = { key = "KEY_LEFTSHIFT", threshold = 0.8, release = 0.7 }
 ```
 
 `side` accepts `left` or `right`. Radius is measured from the center,
-with 1.0 representing full deflection along an axis. Inside the deadzone,
-all stick keys release. Diagonals can hold two direction keys. The outer
+with 1.0 representing full deflection along an axis. Direction keys engage
+above `deadzone` and release at or below `deadzone_release`. The release
+value can be anywhere from zero to `deadzone` and defaults to `deadzone`.
+Diagonals can hold two direction keys. The outer
 key engages at `threshold` and releases at `release`. The separate
 release threshold prevents flickering near the boundary. A profile can
 omit `outer` for direction keys alone.
