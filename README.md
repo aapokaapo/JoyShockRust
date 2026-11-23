@@ -345,6 +345,28 @@ aim off during the touch. Touch regions also work with `toggle`, `tap-hold`,
 `mode = "chord"` requires both inputs. The existing `touchpad` input
 selects the physical click.
 
+#### Touchpad regions as keyboard and mouse inputs
+
+Use `touch:ROW:COLUMN` or `click:ROW:COLUMN` as `button` in a keyboard
+binding. Either finger can activate a touch input. A click input uses
+the first active contact at the moment the pad is pressed and keeps
+that region until release. Tap, hold and double-tap work for both.
+The grid can be shared with gyro and gamepad mappings.
+
+```toml
+[touchpad]
+rows = 1
+columns = 2
+
+[[keyboard.bindings]]
+button = "touch:1:1"
+hold = "KEY_TAB"
+
+[[keyboard.bindings]]
+button = "click:1:2"
+hold = "BTN_LEFT"
+```
+
 ## Device diagnostics
 
 Run `cargo run --locked -p joyshockrust-linux -- --diagnose` to list wired

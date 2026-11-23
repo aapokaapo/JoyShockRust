@@ -706,7 +706,7 @@ fn serve_session(
                     // A deadline can fall between two reports in the same read batch.
                     keyboard.tick(now)?;
                 }
-                keyboard_deadline.set(keyboard.publish(report.controls, now)?);
+                keyboard_deadline.set(keyboard.publish(report, now)?);
             }
             let gamepad_batch = if let Some(output) = &mut output {
                 let controls =

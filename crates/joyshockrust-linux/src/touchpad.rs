@@ -49,7 +49,11 @@ impl TouchRegion {
         contacts
             .iter()
             .flatten()
-            .any(|contact| self.size.index(*contact) == self.index)
+            .any(|&contact| self.contains(contact))
+    }
+
+    pub fn contains(self, contact: TouchContact) -> bool {
+        self.size.index(contact) == self.index
     }
 }
 
@@ -116,7 +120,14 @@ impl Config {
 }
 
 impl Grid {
-    pub fn region(&self, row: usize, column: usize) -> Result<TouchRegion, &'static str> {
+    pub fn parse_region(&self, spec: &str) -> Result<TouchRegion, &'static str> {
+        let (row, column) = spec
+            .split_once(':')
+            .ok_or("expected ROW:COLUMN for a touchpad region")?;
+        let row = row.parse().map_err(|_| "invalid touchpad region row")?;
+        let column = column
+            .parse()
+            .map_err(|_| "invalid touchpad region column")?;
         self.size.region(row, column)
     }
 

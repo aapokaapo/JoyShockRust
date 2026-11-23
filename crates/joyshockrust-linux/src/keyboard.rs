@@ -5,9 +5,11 @@ use std::{
 
 use evdev::{AttributeSet, EventType, InputEvent, KeyCode, uinput::VirtualDevice};
 use joyshockrust_core::{Button, Controls, DPad};
+use joyshockrust_input::{InputReport, TouchContact};
 use serde::Deserialize;
 
 use crate::gyro_gate::{self, DOUBLE_TAP_WINDOW, HOLD_TIME, TriggerGate};
+use crate::touchpad::{Grid, TouchRegion};
 
 mod stick;
 
@@ -92,6 +94,8 @@ enum Source {
     Button(Button),
     Direction(DPad),
     Trigger(TriggerGate),
+    Touch(TouchRegion),
+    TouchClick(TouchRegion),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -103,21 +107,39 @@ struct Binding {
 }
 
 impl Source {
-    fn parse(name: &str) -> Option<Self> {
+    fn parse(name: &str, grid: Option<&Grid>) -> Result<Self, String> {
+        if let Some((kind, spec)) = name.split_once(':') {
+            let source = match kind {
+                "touch" => Self::Touch,
+                "click" => Self::TouchClick,
+                _ => return Err(format!("unknown keyboard binding button {name}")),
+            };
+            let region = grid
+                .ok_or("keyboard touchpad binding requires a [touchpad] grid")?
+                .parse_region(spec)?;
+            return Ok(source(region));
+        }
         let direction = match name {
             "dpad-up" => DPad::Up,
             "dpad-right" => DPad::Right,
             "dpad-down" => DPad::Down,
             "dpad-left" => DPad::Left,
-            _ => return gyro_gate::button_by_name(name).map(Self::Button),
+            _ => {
+                return gyro_gate::button_by_name(name)
+                    .map(Self::Button)
+                    .ok_or_else(|| format!("unknown keyboard binding button {name}"));
+            }
         };
-        Some(Self::Direction(direction))
+        Ok(Self::Direction(direction))
     }
 
-    fn pressed(self, controls: Controls, was_pressed: bool) -> bool {
+    fn pressed(self, input: &Input, click: Option<TouchContact>, was_pressed: bool) -> bool {
+        let controls = &input.controls;
         match self {
             Self::Button(button) => controls.buttons.contains(button),
-            Self::Trigger(trigger) => trigger.pressed(&controls, was_pressed),
+            Self::Trigger(trigger) => trigger.pressed(controls, was_pressed),
+            Self::Touch(region) => region.pressed(&input.contacts),
+            Self::TouchClick(region) => click.is_some_and(|contact| region.contains(contact)),
             Self::Direction(direction) => {
                 controls.dpad == direction
                     || matches!(
@@ -133,15 +155,11 @@ impl Source {
 }
 
 impl Settings {
-    pub fn resolve(self) -> Result<Config, String> {
+    pub fn resolve(self, grid: Option<&Grid>) -> Result<Config, String> {
         let mut bindings = Vec::<Binding>::new();
         for raw in self.bindings {
             let (source, name) = match (raw.button.as_deref(), raw.trigger.as_deref()) {
-                (Some(name), None) => (
-                    Source::parse(name)
-                        .ok_or_else(|| format!("unknown keyboard binding button {name}"))?,
-                    name,
-                ),
+                (Some(name), None) => (Source::parse(name, grid)?, name),
                 (None, Some(spec)) => (
                     Source::Trigger(TriggerGate::parse(spec).map_err(|error| {
                         format!("invalid keyboard binding trigger {spec}: {error}")
@@ -207,11 +225,16 @@ struct Gesture {
 }
 
 impl Gesture {
-    fn update(&mut self, controls: Controls, now: Instant) -> Option<KeyCode> {
+    fn update(
+        &mut self,
+        input: &Input,
+        click: Option<TouchContact>,
+        now: Instant,
+    ) -> Option<KeyCode> {
         let pressed = self
             .binding
             .source
-            .pressed(controls, !matches!(self.press, Press::Up));
+            .pressed(input, click, !matches!(self.press, Press::Up));
         let mut pulse = None;
         if self.pending_tap.is_some_and(|deadline| deadline <= now) {
             self.pending_tap = None;
@@ -256,6 +279,21 @@ impl Gesture {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct Input {
+    controls: Controls,
+    contacts: [Option<TouchContact>; 2],
+}
+
+impl From<InputReport> for Input {
+    fn from(report: InputReport) -> Self {
+        Self {
+            controls: report.controls,
+            contacts: report.touch_contacts,
+        }
+    }
+}
+
 struct State {
     gestures: Vec<Gesture>,
     sticks: Vec<stick::State>,
@@ -266,7 +304,8 @@ struct State {
     held: AttributeSet<KeyCode>,
     next_held: AttributeSet<KeyCode>,
     events: Vec<InputEvent>,
-    controls: Controls,
+    input: Input,
+    click: Option<TouchContact>,
 }
 
 impl State {
@@ -306,17 +345,24 @@ impl State {
             held: AttributeSet::new(),
             next_held: AttributeSet::new(),
             events,
-            controls: Controls::default(),
+            input: Input::default(),
+            click: None,
         }
     }
 
     fn update(
         &mut self,
-        controls: Controls,
+        input: Input,
         now: Instant,
         mut emit: impl FnMut(&[InputEvent]) -> io::Result<()>,
     ) -> io::Result<Option<Instant>> {
-        self.controls = controls;
+        if !input.controls.buttons.contains(Button::TouchpadClick) {
+            self.click = None;
+        } else if !self.input.controls.buttons.contains(Button::TouchpadClick) {
+            // Match gamepad mapping: latch the first active contact at the click edge.
+            self.click = input.contacts.into_iter().flatten().next();
+        }
+        self.input = input;
         // Reuse the bitsets. evdev's key bitset allocates on construction.
         let held = &mut self.next_held;
         for key in self.mapped_keys.iter() {
@@ -325,7 +371,7 @@ impl State {
         let mut deadline = None;
         self.pulses.retain(|&(_, until)| until > now);
         for gesture in &mut self.gestures {
-            if let Some(key) = gesture.update(controls, now) {
+            if let Some(key) = gesture.update(&input, self.click, now) {
                 let until = now + TAP_KEY_TIME;
                 if let Some(pulse) = self.pulses.iter_mut().find(|pulse| pulse.0 == key) {
                     pulse.1 = until;
@@ -347,7 +393,7 @@ impl State {
         for stick in &mut self.sticks {
             deadline = deadline
                 .into_iter()
-                .chain(stick.update(controls, now, held))
+                .chain(stick.update(input.controls, now, held))
                 .min();
         }
         self.events.clear();
@@ -469,13 +515,14 @@ impl Keyboard {
         }))
     }
 
-    pub fn publish(&mut self, controls: Controls, now: Instant) -> io::Result<Option<Instant>> {
+    pub fn publish(&mut self, report: InputReport, now: Instant) -> io::Result<Option<Instant>> {
         self.state
-            .update(controls, now, |events| self.outputs.emit(events))
+            .update(report.into(), now, |events| self.outputs.emit(events))
     }
 
     pub fn tick(&mut self, now: Instant) -> io::Result<Option<Instant>> {
-        self.publish(self.state.controls, now)
+        self.state
+            .update(self.state.input, now, |events| self.outputs.emit(events))
     }
 
     pub fn release(&mut self) -> io::Result<()> {
@@ -501,6 +548,13 @@ mod tests {
             .unwrap()
             .keyboard
             .unwrap()
+    }
+
+    fn input(controls: Controls) -> Input {
+        Input {
+            controls,
+            ..Input::default()
+        }
     }
 
     #[test]
@@ -538,10 +592,14 @@ mod tests {
                     controls.buttons.insert(Button::South);
                 }
                 let deadline = state
-                    .update(controls, start + Duration::from_millis(ms), |batch| {
-                        events.extend(batch.iter().map(|event| (event.code(), event.value())));
-                        Ok(())
-                    })
+                    .update(
+                        input(controls),
+                        start + Duration::from_millis(ms),
+                        |batch| {
+                            events.extend(batch.iter().map(|event| (event.code(), event.value())));
+                            Ok(())
+                        },
+                    )
                     .unwrap();
                 assert_eq!(
                     deadline,
@@ -599,10 +657,14 @@ mod tests {
             }
             assert!(
                 state
-                    .update(controls, start + Duration::from_millis(ms), |batch| {
-                        events.extend(batch.iter().map(|event| (event.code(), event.value())));
-                        Ok(())
-                    })
+                    .update(
+                        input(controls),
+                        start + Duration::from_millis(ms),
+                        |batch| {
+                            events.extend(batch.iter().map(|event| (event.code(), event.value())));
+                            Ok(())
+                        }
+                    )
                     .unwrap()
                     .is_none()
             );
@@ -657,7 +719,7 @@ mod tests {
                     ..Controls::default()
                 };
                 let deadline = state
-                    .update(controls, now, |batch| {
+                    .update(input(controls), now, |batch| {
                         events.extend(batch.iter().map(|event| (event.code(), event.value())));
                         Ok(())
                     })
@@ -693,7 +755,7 @@ mod tests {
                 left_stick: joyshockrust_core::Stick { x, y },
                 ..Controls::default()
             };
-            state.update(controls, now, |_| Ok(())).unwrap();
+            state.update(input(controls), now, |_| Ok(())).unwrap();
             assert_eq!(directions.map(|key| state.held.contains(key)), expected);
             assert_eq!(state.held.contains(KeyCode::KEY_LEFTSHIFT), running);
         }
@@ -732,10 +794,14 @@ mod tests {
                     ..Controls::default()
                 };
                 let deadline = state
-                    .update(controls, start + Duration::from_millis(ms), |batch| {
-                        events.extend(batch.iter().map(|event| (event.code(), event.value())));
-                        Ok(())
-                    })
+                    .update(
+                        input(controls),
+                        start + Duration::from_millis(ms),
+                        |batch| {
+                            events.extend(batch.iter().map(|event| (event.code(), event.value())));
+                            Ok(())
+                        },
+                    )
                     .unwrap();
                 assert_eq!(events, expected, "{ms} ms");
                 assert_eq!(deadline, next.map(|ms| start + Duration::from_millis(ms)));
@@ -786,17 +852,21 @@ mod tests {
                 };
                 let mut batches = 0;
                 let deadline = state
-                    .update(controls, start + Duration::from_millis(ms), |batch| {
-                        batches += 1;
-                        assert!(
-                            batch
-                                .iter()
-                                .map(|event| (event.code(), event.value()))
-                                .eq(expected.iter().copied()),
-                            "{ms} ms: {batch:?}"
-                        );
-                        Ok(())
-                    })
+                    .update(
+                        input(controls),
+                        start + Duration::from_millis(ms),
+                        |batch| {
+                            batches += 1;
+                            assert!(
+                                batch
+                                    .iter()
+                                    .map(|event| (event.code(), event.value()))
+                                    .eq(expected.iter().copied()),
+                                "{ms} ms: {batch:?}"
+                            );
+                            Ok(())
+                        },
+                    )
                     .unwrap();
                 assert_eq!(batches, usize::from(!expected.is_empty()));
                 assert_eq!(deadline, next.map(|ms| start + Duration::from_millis(ms)));
@@ -840,7 +910,7 @@ mod tests {
             }
             events.clear();
             state
-                .update(controls, now, |batch| {
+                .update(input(controls), now, |batch| {
                     events.extend(batch.iter().map(|event| (event.code(), event.value())));
                     Ok(())
                 })
@@ -927,7 +997,10 @@ mod tests {
             (0.25, [false, false]),
         ] {
             controls.left_trigger = travel;
-            assert_eq!(state.update(controls, now, |_| Ok(())).unwrap(), None);
+            assert_eq!(
+                state.update(input(controls), now, |_| Ok(())).unwrap(),
+                None
+            );
             assert_eq!(
                 [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
                 expected
@@ -986,13 +1059,85 @@ mod tests {
             }
             let mut actual = Vec::new();
             let next = state
-                .update(controls, start + Duration::from_millis(ms), |batch| {
-                    actual.extend(batch.iter().map(|event| (event.code(), event.value())));
-                    Ok(())
-                })
+                .update(
+                    input(controls),
+                    start + Duration::from_millis(ms),
+                    |batch| {
+                        actual.extend(batch.iter().map(|event| (event.code(), event.value())));
+                        Ok(())
+                    },
+                )
                 .unwrap();
             assert_eq!(actual, events);
             assert_eq!(next, deadline.map(|ms| start + Duration::from_millis(ms)));
+        }
+    }
+
+    #[test]
+    fn touchpad_gestures_track_contacts_and_latch_the_initial_click_region() {
+        use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+        let config = config(
+            r#"
+            [touchpad]
+            rows = 1
+            columns = 2
+            [[keyboard.bindings]]
+            button = "touch:1:1"
+            hold = "KEY_Q"
+            [[keyboard.bindings]]
+            button = "click:1:1"
+            hold = "KEY_E"
+            [[keyboard.bindings]]
+            button = "click:1:2"
+            hold = "BTN_LEFT"
+        "#,
+        );
+        let mut state = State::new(&config);
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[1..=4].fill(128);
+        frame[8] = 8;
+        let inactive = [0x80, 0, 0, 0];
+        let left = [1, 0xbf, 0x03, 0]; // x = 959
+        let right = [2, 0xc0, 0x03, 0]; // x = 960
+        let now = Instant::now();
+        for (first, second, click, expected) in [
+            (inactive, inactive, true, [false, false, false]),
+            (left, inactive, true, [true, false, false]),
+            (left, inactive, false, [true, false, false]),
+            (right, left, true, [true, false, true]),
+            (left, inactive, true, [true, false, true]),
+            (inactive, inactive, true, [false, false, true]),
+            (inactive, inactive, false, [false, false, false]),
+            (inactive, left, true, [true, true, false]),
+        ] {
+            frame[33..37].copy_from_slice(&first);
+            frame[37..41].copy_from_slice(&second);
+            frame[10] = if click { 2 } else { 0 };
+            let report =
+                parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap();
+            state.update(report.into(), now, |_| Ok(())).unwrap();
+            assert_eq!(
+                [KeyCode::KEY_Q, KeyCode::KEY_E, KeyCode::BTN_LEFT]
+                    .map(|key| state.held.contains(key)),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn touchpad_gestures_require_valid_grid_cells() {
+        let binding = "[[keyboard.bindings]]\nbutton = 'touch:1:2'\nhold = 'KEY_Q'\n";
+        assert!(crate::profile::parse(&format!("version = 1\n{binding}")).is_err());
+        let grid = "[touchpad]\nrows = 1\ncolumns = 2\n";
+        for invalid in [
+            binding.replace("touch:1:2", "click:2:2"),
+            binding.replace("touch:1:2", "touch:0:1"),
+            binding.replace("touch:1:2", "click:1:2:3"),
+            format!("{binding}{binding}"),
+        ] {
+            assert!(crate::profile::parse(&format!("version = 1\n{grid}{invalid}")).is_err());
         }
     }
 }

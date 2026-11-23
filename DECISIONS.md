@@ -366,4 +366,9 @@ Keyboard and trigger gestures can also target the five standard mouse
 buttons. Mouse button bindings use a dedicated virtual pointer so they
 work without gyro and can be reloaded without rebuilding gyro state.
 Each virtual device receives only its own event batch.
+
+Keyboard and mouse gestures can read touchpad grid cells directly. Touch
+reads both live contacts. A region click latches the first active
+contact on the mechanical press edge until release, matching gamepad
+region selection. Deadlines reuse the last report's contact state.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)

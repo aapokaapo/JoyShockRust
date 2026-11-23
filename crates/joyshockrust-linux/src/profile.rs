@@ -261,16 +261,17 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         .gyro
         .map(|gyro| gyro.resolve(touchpad.as_ref()))
         .transpose()?;
+    let keyboard = profile
+        .keyboard
+        .map(|keyboard| keyboard.resolve(touchpad.as_ref()))
+        .transpose()?;
     Ok(RuntimeOptions {
         bridge: profile.bridge,
         stick_curve,
         remaps,
         gyro,
         touchpad,
-        keyboard: profile
-            .keyboard
-            .map(keyboard::Settings::resolve)
-            .transpose()?,
+        keyboard,
     })
 }
 
@@ -285,16 +286,9 @@ impl Gyro {
             .transpose()?;
         let resolve_input = |name: &str| -> Result<DigitalInput, String> {
             if let Some(spec) = name.strip_prefix("touch:") {
-                let (row, column) = spec
-                    .split_once(':')
-                    .ok_or("expected touch:ROW:COLUMN for the gyro binding")?;
-                let row = row.parse().map_err(|_| "invalid gyro touch region row")?;
-                let column = column
-                    .parse()
-                    .map_err(|_| "invalid gyro touch region column")?;
                 let region = touchpad
                     .ok_or("gyro touch binding requires a [touchpad] grid")?
-                    .region(row, column)?;
+                    .parse_region(spec)?;
                 return Ok(DigitalInput::Touch(region));
             }
             gyro_gate::button_by_name(name)

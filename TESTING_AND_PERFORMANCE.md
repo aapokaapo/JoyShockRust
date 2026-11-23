@@ -647,6 +647,12 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
    enabled, move the pointer while holding R2 and check that a desktop
    drag works. Switch profiles or disconnect while R2 is held and
    confirm the mouse button releases.
+9. Add the [keyboard and mouse touchpad example](README.md#touchpad-regions-as-keyboard-and-mouse-inputs).
+   Touch the left half and confirm Tab follows the touch. Lift the finger,
+   press down on the right half and verify the left mouse button stays
+   held while the pressed finger slides across the grid.
+   Release the pad and confirm the mouse button releases. Repeat over
+   Bluetooth.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a
