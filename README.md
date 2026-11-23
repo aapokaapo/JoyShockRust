@@ -441,6 +441,35 @@ stick directions re-arms the next sprint, including on return to center.
 This mode also requires an exclusive sprint key. The default mode is
 `hold`.
 
+For a game that runs by default and holds Shift to walk, add an
+`inner` zone to the same `[[keyboard.sticks]]` table as the WASD
+bindings.
+
+```toml
+[[keyboard.sticks]]
+side = "left"
+deadzone = 0.2
+up = "KEY_W"
+left = "KEY_A"
+down = "KEY_S"
+right = "KEY_D"
+inner = { key = "KEY_LEFTSHIFT", threshold = 0.5, release = 0.6 }
+```
+
+When the stick leaves its deadzone, the inner zone engages at or below
+`threshold`. It stays engaged until the radius reaches `release` or
+movement returns to the deadzone. If omitted, `release` defaults to
+`threshold + 0.1`, capped at 1.0. These values must satisfy
+`deadzone < threshold < release <= 1`. WASD continues to follow the
+stick across the zone boundary, including diagonals.
+
+Use `mode = "toggle"` if Shift toggles walking. This pulses Shift on both
+entry and exit. Use `mode = "keep_sprint"` if one press should last until
+movement stops and the game resets the mode on its own. This pulses once
+per continuous movement. Pulse keys must be exclusive to their zones.
+An `inner` and an `outer` binding can coexist on the same stick. Each
+has its own thresholds and timing.
+
 Keyboard mappings can be reloaded. Changing the virtual gamepad setting
 requires a restart. If the game also detects the physical gamepad, use
 the applicable [per-game visibility settings](#per-game-sdl-controller-visibility).

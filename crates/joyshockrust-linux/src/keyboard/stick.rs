@@ -27,22 +27,23 @@ pub(super) struct Settings {
     right: Option<String>,
     down: Option<String>,
     left: Option<String>,
-    outer: Option<OuterSettings>,
+    outer: Option<ZoneSettings>,
+    inner: Option<ZoneSettings>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OuterSettings {
+struct ZoneSettings {
     key: String,
     threshold: f32,
     release: Option<f32>,
     #[serde(default)]
-    mode: OuterMode,
+    mode: ZoneMode,
 }
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum OuterMode {
+enum ZoneMode {
     #[default]
     Hold,
     Toggle,
@@ -57,15 +58,59 @@ pub(super) struct Binding {
     direction_enter_ratio: f32,
     direction_release_ratio: f32,
     directions: [Option<KeyCode>; 4],
-    outer: Option<Outer>,
+    zones: [Option<Zone>; 2],
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct Outer {
+struct Zone {
+    kind: ZoneKind,
     key: KeyCode,
-    mode: OuterMode,
+    mode: ZoneMode,
     threshold_squared: f32,
     release_squared: f32,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ZoneKind {
+    Outer,
+    Inner,
+}
+
+impl ZoneSettings {
+    fn resolve(self, kind: ZoneKind, deadzone: f32) -> Result<Zone, String> {
+        let threshold = self.threshold;
+        let release = match kind {
+            ZoneKind::Outer => {
+                let release = self
+                    .release
+                    .unwrap_or_else(|| (threshold - 0.1).max(deadzone));
+                if !(deadzone..threshold).contains(&release) || threshold > 1.0 {
+                    return Err(
+                        "keyboard stick outer zone requires deadzone <= release < threshold <= 1"
+                            .into(),
+                    );
+                }
+                release
+            }
+            ZoneKind::Inner => {
+                let release = self.release.unwrap_or((threshold + 0.1).min(1.0));
+                if !(deadzone < threshold && threshold < release && release <= 1.0) {
+                    return Err(
+                        "keyboard stick inner zone requires deadzone < threshold < release <= 1"
+                            .into(),
+                    );
+                }
+                release
+            }
+        };
+        Ok(Zone {
+            kind,
+            key: super::keyboard_key(&self.key)?,
+            mode: self.mode,
+            threshold_squared: threshold * threshold,
+            release_squared: release * release,
+        })
+    }
 }
 
 impl Settings {
@@ -110,31 +155,21 @@ impl Settings {
             parse_key(self.down)?,
             parse_key(self.left)?,
         ];
-        let outer = self
-            .outer
-            .map(|settings| {
-                let threshold = settings.threshold;
-                let release = settings
-                    .release
-                    .unwrap_or_else(|| (threshold - 0.1).max(deadzone));
-                if !(deadzone..threshold).contains(&release) || threshold > 1.0 {
-                    return Err(
-                        "keyboard stick outer zone requires deadzone <= release < threshold <= 1"
-                            .to_owned(),
-                    );
-                }
-                Ok(Outer {
-                    key: super::keyboard_key(&settings.key)?,
-                    mode: settings.mode,
-                    threshold_squared: threshold * threshold,
-                    release_squared: release * release,
-                })
-            })
-            .transpose()?;
-        if directions.iter().all(Option::is_none) && outer.is_none() {
+        let zones = [
+            self.outer
+                .map(|settings| settings.resolve(ZoneKind::Outer, deadzone))
+                .transpose()?,
+            self.inner
+                .map(|settings| settings.resolve(ZoneKind::Inner, deadzone))
+                .transpose()?,
+        ];
+        if directions.iter().all(Option::is_none) && zones.iter().all(Option::is_none) {
             return Err("keyboard stick binding needs at least one key".into());
         }
-        if outer.is_some_and(|outer| outer.mode == OuterMode::KeepSprint)
+        if zones
+            .iter()
+            .flatten()
+            .any(|zone| zone.mode == ZoneMode::KeepSprint)
             && directions.iter().all(Option::is_none)
         {
             return Err("keyboard stick keep_sprint needs a direction key".into());
@@ -146,7 +181,7 @@ impl Settings {
             direction_enter_ratio,
             direction_release_ratio,
             directions,
-            outer,
+            zones,
         })
     }
 }
@@ -156,19 +191,23 @@ impl Binding {
         self.directions
             .into_iter()
             .flatten()
-            .chain(self.outer.map(|outer| outer.key))
+            .chain(self.zones.into_iter().flatten().map(|zone| zone.key))
     }
 
-    pub(super) fn held_outer_key(self) -> Option<KeyCode> {
-        self.outer
-            .filter(|outer| outer.mode == OuterMode::Hold)
-            .map(|outer| outer.key)
+    pub(super) fn held_zone_keys(self) -> impl Iterator<Item = KeyCode> {
+        self.zones
+            .into_iter()
+            .flatten()
+            .filter(|zone| zone.mode == ZoneMode::Hold)
+            .map(|zone| zone.key)
     }
 
-    pub(super) fn pulsed_outer_key(self) -> Option<KeyCode> {
-        self.outer
-            .filter(|outer| outer.mode != OuterMode::Hold)
-            .map(|outer| outer.key)
+    pub(super) fn pulsed_zone_keys(self) -> impl Iterator<Item = KeyCode> {
+        self.zones
+            .into_iter()
+            .flatten()
+            .filter(|zone| zone.mode != ZoneMode::Hold)
+            .map(|zone| zone.key)
     }
 }
 
@@ -176,7 +215,12 @@ pub(super) struct State {
     binding: Binding,
     directions_active: bool,
     active_directions: [bool; 4],
-    outer_active: bool,
+    zones: [ZoneState; 2],
+}
+
+#[derive(Default)]
+struct ZoneState {
+    active: bool,
     sent_active: bool,
     pulse: PulsePhase,
 }
@@ -195,9 +239,7 @@ impl State {
             binding,
             directions_active: false,
             active_directions: [false; 4],
-            outer_active: false,
-            sent_active: false,
-            pulse: PulsePhase::Ready,
+            zones: std::array::from_fn(|_| ZoneState::default()),
         }
     }
 
@@ -241,27 +283,49 @@ impl State {
             self.active_directions = [false; 4];
         }
 
-        let outer = self.binding.outer?;
-        self.outer_active = if self.outer_active {
-            radius_squared > outer.release_squared
-        } else {
-            radius_squared >= outer.threshold_squared
-        };
-        let (pressed, deadline) = match outer.mode {
-            OuterMode::Hold => (self.outer_active, None),
-            OuterMode::Toggle => self.update_pulse(self.outer_active, now),
-            OuterMode::KeepSprint => {
-                if !moving {
-                    // Movement release ends sprint in the game and re-arms the next press.
-                    self.sent_active = false;
+        let mut deadline = None;
+        for (state, zone) in self.zones.iter_mut().zip(self.binding.zones) {
+            let Some(zone) = zone else { continue };
+            let active = match (zone.kind, state.active) {
+                (ZoneKind::Outer, false) => radius_squared >= zone.threshold_squared,
+                (ZoneKind::Outer, true) => radius_squared > zone.release_squared,
+                (ZoneKind::Inner, false) => {
+                    self.directions_active && radius_squared <= zone.threshold_squared
                 }
-                self.update_pulse(moving && (self.outer_active || self.sent_active), now)
+                (ZoneKind::Inner, true) => {
+                    self.directions_active && radius_squared < zone.release_squared
+                }
+            };
+            let (pressed, next_deadline) = state.update(zone.mode, active, moving, now);
+            if pressed {
+                held.insert(zone.key);
             }
-        };
-        if pressed {
-            held.insert(outer.key);
+            deadline = deadline.into_iter().chain(next_deadline).min();
         }
         deadline
+    }
+}
+
+impl ZoneState {
+    fn update(
+        &mut self,
+        mode: ZoneMode,
+        active: bool,
+        moving: bool,
+        now: Instant,
+    ) -> (bool, Option<Instant>) {
+        self.active = active;
+        match mode {
+            ZoneMode::Hold => (active, None),
+            ZoneMode::Toggle => self.update_pulse(active, now),
+            ZoneMode::KeepSprint => {
+                if !moving {
+                    // Releasing movement re-arms the next press.
+                    self.sent_active = false;
+                }
+                self.update_pulse(moving && (active || self.sent_active), now)
+            }
+        }
     }
 
     fn update_pulse(&mut self, active: bool, now: Instant) -> (bool, Option<Instant>) {

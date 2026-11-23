@@ -386,7 +386,7 @@ impl Settings {
         for key in config
             .sticks
             .iter()
-            .filter_map(|stick| stick.pulsed_outer_key())
+            .flat_map(|stick| stick.pulsed_zone_keys())
         {
             if config
                 .keys()
@@ -531,8 +531,8 @@ struct State {
     touch_tap: Option<(touch_motion::TapState, [Option<KeyCode>; 2])>,
     pulses: Vec<(KeyCode, Instant)>,
     mapped_keys: AttributeSet<KeyCode>,
-    outer_keys: AttributeSet<KeyCode>,
-    pulsed_outer_keys: AttributeSet<KeyCode>,
+    held_zone_keys: AttributeSet<KeyCode>,
+    pulsed_zone_keys: AttributeSet<KeyCode>,
     held: AttributeSet<KeyCode>,
     next_held: AttributeSet<KeyCode>,
     events: Vec<InputEvent>,
@@ -574,15 +574,15 @@ impl State {
             // At most one pulse deadline per mapped key.
             pulses: Vec::with_capacity(key_count),
             mapped_keys,
-            outer_keys: config
+            held_zone_keys: config
                 .sticks
                 .iter()
-                .filter_map(|binding| binding.held_outer_key())
+                .flat_map(|binding| binding.held_zone_keys())
                 .collect(),
-            pulsed_outer_keys: config
+            pulsed_zone_keys: config
                 .sticks
                 .iter()
-                .filter_map(|binding| binding.pulsed_outer_key())
+                .flat_map(|binding| binding.pulsed_zone_keys())
                 .collect(),
             held: AttributeSet::new(),
             next_held: AttributeSet::new(),
@@ -669,7 +669,7 @@ impl State {
                 .filter(|&key| !held.contains(key))
                 .map(|key| key_event(key, 0)),
         );
-        sort_releases(&mut self.events, &self.outer_keys);
+        sort_releases(&mut self.events, &self.held_zone_keys);
         let releases = self.events.len();
         self.events.extend(
             held.iter()
@@ -679,9 +679,9 @@ impl State {
         // Shortcut modifiers precede other keys. Sprint pulses follow movement.
         self.events[releases..].sort_unstable_by_key(|event| {
             let key = KeyCode(event.code());
-            let order = if self.outer_keys.contains(key) {
+            let order = if self.held_zone_keys.contains(key) {
                 0
-            } else if self.pulsed_outer_keys.contains(key) {
+            } else if self.pulsed_zone_keys.contains(key) {
                 3
             } else if is_modifier(key) {
                 1
@@ -726,10 +726,10 @@ fn schedule_pulse(pulses: &mut Vec<(KeyCode, Instant)>, key: KeyCode, until: Ins
     }
 }
 
-fn sort_releases(events: &mut [InputEvent], outer_keys: &AttributeSet<KeyCode>) {
+fn sort_releases(events: &mut [InputEvent], held_zone_keys: &AttributeSet<KeyCode>) {
     events.sort_unstable_by_key(|event| {
         let key = KeyCode(event.code());
-        (outer_keys.contains(key), is_modifier(key), key.0)
+        (held_zone_keys.contains(key), is_modifier(key), key.0)
     });
 }
 
@@ -884,7 +884,7 @@ impl<'a> Keyboard<'a> {
         let events = &mut self.state.events;
         events.clear();
         events.extend(self.state.held.iter().map(|key| key_event(key, 0)));
-        sort_releases(events, &self.state.outer_keys);
+        sort_releases(events, &self.state.held_zone_keys);
         if !events.is_empty() {
             self.outputs.emit(events)?;
         }
@@ -1565,6 +1565,125 @@ mod tests {
             }
         });
         assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn inner_walk_zone_holds_shift_through_diagonal_movement_and_releases_at_its_limits() {
+        let config = config(
+            r#"
+            [[keyboard.sticks]]
+            side = "left"
+            deadzone = 0.2
+            deadzone_release = 0.15
+            up = "KEY_W"
+            left = "KEY_A"
+            inner = { key = "KEY_LEFTSHIFT", threshold = 0.5, release = 0.6 }
+            outer = { key = "KEY_LEFTCTRL", threshold = 0.8, release = 0.7 }
+            "#,
+        );
+        let mut state = State::new(&config);
+        let shift = KeyCode::KEY_LEFTSHIFT.0;
+        let ctrl = KeyCode::KEY_LEFTCTRL.0;
+        let w = KeyCode::KEY_W.0;
+        let a = KeyCode::KEY_A.0;
+        let now = Instant::now();
+        let mut events = Vec::with_capacity(3);
+        let allocations = allocation_counter::measure(|| {
+            for (x, y, expected) in [
+                (0.0, 0.0, &[][..]),
+                (-0.1, -0.1, &[][..]),
+                (-0.2, -0.2, &[(shift, 1), (w, 1), (a, 1)][..]),
+                (-0.4, -0.4, &[][..]), // Between inner engage and release radii.
+                (-0.5, -0.5, &[(shift, 0)][..]),
+                (-0.7, -0.7, &[(ctrl, 1)][..]),
+                (-0.4, -0.4, &[(ctrl, 0)][..]), // Above inner engage radius on return.
+                (-0.2, -0.2, &[(shift, 1)][..]),
+                (-0.12, -0.12, &[][..]), // Retain motion down to deadzone_release.
+                (0.0, 0.0, &[(w, 0), (a, 0), (shift, 0)][..]),
+            ] {
+                let controls = Controls {
+                    left_stick: joyshockrust_core::Stick { x, y },
+                    ..Controls::default()
+                };
+                events.clear();
+                let deadline = state
+                    .update(input(controls), now, |batch| {
+                        events.extend(batch.iter().map(|event| (event.code(), event.value())));
+                        Ok(())
+                    })
+                    .unwrap();
+                assert_eq!(deadline, None);
+                assert_eq!(events, expected, "{x}, {y}");
+            }
+        });
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn inner_walk_zone_supports_toggle_and_one_press_per_movement() {
+        for (mode, toggles_off) in [("toggle", true), ("keep_sprint", false)] {
+            let config = config(&format!(
+                r#"
+                [[keyboard.sticks]]
+                side = "left"
+                up = "KEY_W"
+                inner = {{ key = "KEY_LEFTSHIFT", mode = "{mode}", threshold = 0.5 }}
+            "#
+            ));
+            let mut state = State::new(&config);
+            let start = Instant::now();
+            let shift = KeyCode::KEY_LEFTSHIFT.0;
+            let w = KeyCode::KEY_W.0;
+            let mut events = Vec::new();
+            for (ms, y) in [
+                (0, -0.4),
+                (30, -0.4),
+                (80, -0.8),
+                (110, -0.8),
+                (160, 0.0),
+                (200, -0.4),
+                (230, -0.4),
+            ] {
+                let controls = Controls {
+                    left_stick: joyshockrust_core::Stick { x: 0.0, y },
+                    ..Controls::default()
+                };
+                state
+                    .update(
+                        input(controls),
+                        start + Duration::from_millis(ms),
+                        |batch| {
+                            events.extend(
+                                batch.iter().map(|event| (ms, event.code(), event.value())),
+                            );
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+            }
+            let mut expected = vec![(0, w, 1), (0, shift, 1), (30, shift, 0)];
+            if toggles_off {
+                expected.extend([(80, shift, 1), (110, shift, 0)]);
+            }
+            expected.extend([(160, w, 0), (200, w, 1), (200, shift, 1), (230, shift, 0)]);
+            assert_eq!(events, expected, "{mode}");
+        }
+    }
+
+    #[test]
+    fn inner_zone_requires_ordered_limits_and_an_exclusive_pulse_key() {
+        for zone in [
+            "key = 'KEY_LEFTSHIFT', threshold = 0.2",
+            "key = 'KEY_LEFTSHIFT', threshold = 0.5, release = 0.4",
+            "key = 'KEY_LEFTSHIFT', threshold = 0.5, release = 1.01",
+            "key = 'KEY_LEFTSHIFT', threshold = nan",
+            "key = 'KEY_W', threshold = 0.5, mode = 'toggle'",
+        ] {
+            let source = format!(
+                "version = 1\n[[keyboard.sticks]]\nside = 'left'\nup = 'KEY_W'\ninner = {{ {zone} }}"
+            );
+            assert!(crate::profile::parse(&source).is_err(), "{zone}");
+        }
     }
 
     #[test]

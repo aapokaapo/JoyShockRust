@@ -372,16 +372,18 @@ keyboard and mouse output.
 [systemd keyboard classification](https://github.com/systemd/systemd/blob/781d9d0789379d1ea1f2ecefb804d41e9c8b6c38/src/udev/udev-builtin-input_id.c#L366-L371)
 
 Updated 2026-11-23. Keyboard stick mappings use radial boundaries and
-eight directional sectors. The outer key can be combined with the
-direction keys and uses hysteresis. A shared key stays held until all
-of its sources release. Held outer keys are pressed before direction keys
+eight directional sectors. Inner and outer zones each use hysteresis
+and can be combined with direction keys. The inner zone follows the
+stick's radial deadzone state and engages below its entry radius.
+A shared key stays held until all of its sources release.
+Held zone keys are pressed before direction keys
 when both change on the same report. Toggle mode requests a key pulse on
 entry and exit and keeps a release interval between pulses. If the zone
 changes again before the next pulse can start, the latest zone determines
 whether another press is needed. Keep-sprint mode pulses once and
 re-arms when the stick has released all of its mapped direction keys.
-Pulsed outer keys have a single binding. Changes from one input report
-are emitted together, with sprint pulses following movement presses.
+Pulsed zone keys have a single binding. Changes from one input report
+are emitted together, with zone pulses following movement presses.
 Direction keys can also use a smaller release radius near center. This
 preserves continuous movement in `keep_sprint` mode through minor stick
 motion near the deadzone boundary.
