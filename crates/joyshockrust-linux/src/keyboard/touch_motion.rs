@@ -1,11 +1,14 @@
-use std::{num::NonZeroU16, time::Instant};
+use std::{
+    num::{NonZeroU16, NonZeroU32},
+    time::{Duration, Instant},
+};
 
 use joyshockrust_input::{DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH, TouchContact};
 use serde::Deserialize;
 
 use super::HOLD_TIME;
 
-const TAP_TRAVEL_SQUARED: i64 = 40 * 40;
+const DEFAULT_TAP_MAX_TRAVEL: u16 = 40;
 
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -114,6 +117,8 @@ pub(super) struct PointerSettings {
     pub(super) tap_to_click: bool,
     #[serde(default)]
     pub(super) two_finger_tap_to_click: bool,
+    tap_window_ms: Option<NonZeroU32>,
+    tap_max_travel: Option<u16>,
 }
 
 impl PointerSettings {
@@ -142,8 +147,11 @@ pub(super) struct PointerState {
     sensitivity: [f64; 2],
 }
 
-#[derive(Default)]
-pub(super) struct TapState(TapPhase);
+pub(super) struct TapState {
+    phase: TapPhase,
+    window: Duration,
+    max_travel_squared: i64,
+}
 
 #[derive(Default)]
 enum TapPhase {
@@ -169,6 +177,17 @@ pub(super) enum TapCount {
 }
 
 impl TapState {
+    pub(super) fn new(settings: PointerSettings) -> Self {
+        let travel = i64::from(settings.tap_max_travel.unwrap_or(DEFAULT_TAP_MAX_TRAVEL));
+        Self {
+            phase: TapPhase::Idle,
+            window: settings
+                .tap_window_ms
+                .map_or(HOLD_TIME, |ms| Duration::from_millis(u64::from(ms.get()))),
+            max_travel_squared: travel * travel,
+        }
+    }
+
     pub(super) fn advance(
         &mut self,
         contacts: [Option<TouchContact>; 2],
@@ -177,9 +196,9 @@ impl TapState {
     ) -> Option<TapCount> {
         let (first, second) = match contacts {
             [None, None] => {
-                return match std::mem::take(&mut self.0) {
+                return match std::mem::take(&mut self.phase) {
                     TapPhase::Candidate { start, contacts }
-                        if !cancelled && now.duration_since(start) < HOLD_TIME =>
+                        if !cancelled && now.duration_since(start) < self.window =>
                     {
                         Some(match contacts {
                             TapContacts::One(_) => TapCount::One,
@@ -194,21 +213,23 @@ impl TapState {
                 (first, Some(second))
             }
             _ => {
-                self.0 = TapPhase::Blocked;
+                self.phase = TapPhase::Blocked;
                 return None;
             }
         };
-        self.0 = match self.0 {
+        self.phase = match self.phase {
             TapPhase::Idle => TapPhase::Candidate {
                 start: now,
                 contacts: second.map_or(TapContacts::One(first), |second| {
                     TapContacts::Two(first, second)
                 }),
             },
-            TapPhase::Candidate { start, contacts } => match contacts.observe(first, second) {
-                Some(contacts) => TapPhase::Candidate { start, contacts },
-                None => TapPhase::Blocked,
-            },
+            TapPhase::Candidate { start, contacts } => {
+                match contacts.observe(first, second, self.max_travel_squared) {
+                    Some(contacts) => TapPhase::Candidate { start, contacts },
+                    None => TapPhase::Blocked,
+                }
+            }
             TapPhase::Blocked => TapPhase::Blocked,
         };
         None
@@ -216,7 +237,17 @@ impl TapState {
 }
 
 impl TapContacts {
-    fn observe(self, first: TouchContact, second: Option<TouchContact>) -> Option<Self> {
+    fn observe(
+        self,
+        first: TouchContact,
+        second: Option<TouchContact>,
+        max_travel_squared: i64,
+    ) -> Option<Self> {
+        let near = |origin: TouchContact, contact: TouchContact| {
+            let dx = i64::from(contact.x) - i64::from(origin.x);
+            let dy = i64::from(contact.y) - i64::from(origin.y);
+            contact.id == origin.id && dx * dx + dy * dy <= max_travel_squared
+        };
         match (self, second) {
             (Self::One(origin) | Self::Remaining(origin), None) if near(origin, first) => {
                 Some(self)
@@ -239,12 +270,6 @@ impl TapContacts {
             _ => None,
         }
     }
-}
-
-fn near(origin: TouchContact, contact: TouchContact) -> bool {
-    let dx = i64::from(contact.x) - i64::from(origin.x);
-    let dy = i64::from(contact.y) - i64::from(origin.y);
-    contact.id == origin.id && dx * dx + dy * dy <= TAP_TRAVEL_SQUARED
 }
 
 impl PointerState {

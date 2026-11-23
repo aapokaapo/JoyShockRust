@@ -573,10 +573,10 @@ impl State {
                 .collect(),
             touch_scroll: config.touch_scroll.map(touch_motion::ScrollState::new),
             touch_pointer: config.touch_pointer.map(touch_motion::PointerState::new),
-            touch_tap: tap_buttons
-                .iter()
-                .any(Option::is_some)
-                .then(|| (touch_motion::TapState::default(), tap_buttons)),
+            touch_tap: config
+                .touch_pointer
+                .filter(|_| tap_buttons.iter().any(Option::is_some))
+                .map(|settings| (touch_motion::TapState::new(settings), tap_buttons)),
             // At most one pulse deadline per mapped key.
             pulses: Vec::with_capacity(key_count),
             mapped_keys,
@@ -2234,13 +2234,16 @@ mod tests {
     }
 
     #[test]
-    fn touch_pointer_profile_validates_both_sensitivities() {
+    fn touch_pointer_profile_validates_sensitivities_and_tap_limits() {
         let settings = "version = 1\n[keyboard.touch_pointer]\n";
         assert!(crate::profile::parse(settings).is_ok());
         for invalid in [
             "sensitivity_x = -1",
             "sensitivity_y = nan",
             "sensitivity_y = 101",
+            "tap_window_ms = 0",
+            "tap_window_ms = -1",
+            "tap_max_travel = -1",
         ] {
             assert!(
                 crate::profile::parse(&format!("{settings}{invalid}\n")).is_err(),
@@ -2400,6 +2403,66 @@ mod tests {
             }
         });
         assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn touch_taps_use_the_profile_time_and_radial_travel_limits() {
+        let config = config(
+            r#"
+            [keyboard.touch_pointer]
+            sensitivity_x = 0.0
+            sensitivity_y = 0.0
+            tap_to_click = true
+            two_finger_tap_to_click = true
+            tap_window_ms = 250
+            tap_max_travel = 5
+            "#,
+        );
+        let mut state = State::new(&config);
+        let start = Instant::now();
+        let contact = |id, x, y| Some(TouchContact { id, x, y });
+        let first = contact(1, 100, 100);
+        let second = contact(2, 200, 200);
+        let left = KeyCode::BTN_LEFT.0;
+        let right = KeyCode::BTN_RIGHT.0;
+        for (ms, contacts, expected) in [
+            (0, [first, None], None),
+            (100, [contact(1, 103, 104), None], None),
+            (249, [None; 2], Some((left, 1))),
+            (279, [None; 2], Some((left, 0))),
+            (300, [first, None], None),
+            (550, [None; 2], None),
+            (560, [first, None], None),
+            (570, [contact(1, 104, 104), None], None),
+            (580, [None; 2], None),
+            (600, [first, second], None),
+            (610, [first, contact(2, 204, 204)], None),
+            (620, [None; 2], None),
+            (700, [first, None], None),
+            (720, [first, second], None),
+            (900, [None, second], None),
+            (949, [None; 2], Some((right, 1))),
+            (979, [None; 2], Some((right, 0))),
+        ] {
+            let mut observed = None;
+            state
+                .update(
+                    Input {
+                        contacts,
+                        ..Input::default()
+                    },
+                    start + Duration::from_millis(ms),
+                    |events| {
+                        assert_eq!(events.len(), 1, "{ms}");
+                        let event = events[0];
+                        assert_eq!(event.event_type(), EventType::KEY);
+                        assert_eq!(observed.replace((event.code(), event.value())), None);
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            assert_eq!(observed, expected, "{ms}");
+        }
     }
 
     #[test]

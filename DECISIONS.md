@@ -447,6 +447,8 @@ position across report slot swaps and staggered lifts. Excess travel,
 contact replacement, a wheel step from touch scrolling or a mechanical
 press cancels the candidate until all contacts lift. Clicks share the
 pulse deadline used by other mapped buttons.
+Both tap counts use the profile's time window and per-finger radial
+travel limit. They default to 200 ms and 40 touchpad units.
 
 Updated 2026-11-23. The opt-in native touchpad grab is scoped to an evdev
 node under the active hidraw device's HID parent. The opened node must

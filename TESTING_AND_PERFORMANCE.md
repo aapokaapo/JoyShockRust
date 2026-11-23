@@ -776,6 +776,11 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     configured. Start a vertical swipe and turn it horizontally without
     lifting. Check that only vertical steps appear. End the swipe and
     start horizontally. Check that horizontal steps now appear.
+27. In `[keyboard.touch_pointer]`, enable both tap actions and set
+    `tap_window_ms = 500` and `tap_max_travel = 10`. Try brief stationary
+    taps with one and two fingers, then try holding for over half a second
+    or moving either finger before lifting. Confirm only the taps within
+    the configured time and travel limits produce clicks.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a
