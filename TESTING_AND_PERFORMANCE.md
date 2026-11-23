@@ -757,6 +757,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     `[keyboard].grab_touchpad = true` and confirm both touchpad grab fields
     in `--status` become true. Unload the profile and confirm both clear,
     native touchpad events resume, and the same controller stays active.
+23. Set `tap_to_click = true` under `[keyboard.touch_pointer]`. Verify a
+    brief touch produces one left click when the finger lifts. Swipe,
+    hold the finger still, add a second finger, and press the physical
+    pad in separate attempts. None should produce the virtual tap click.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

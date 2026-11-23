@@ -1,7 +1,11 @@
-use std::num::NonZeroU16;
+use std::{num::NonZeroU16, time::Instant};
 
 use joyshockrust_input::{DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH, TouchContact};
 use serde::Deserialize;
+
+use super::HOLD_TIME;
+
+const TAP_TRAVEL_SQUARED: i32 = 40 * 40;
 
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -84,6 +88,8 @@ impl ScrollState {
 pub(super) struct PointerSettings {
     sensitivity_x: Option<f64>,
     sensitivity_y: Option<f64>,
+    #[serde(default)]
+    pub(super) tap_to_click: bool,
 }
 
 impl PointerSettings {
@@ -110,6 +116,57 @@ pub(super) struct PointerState {
     tracker: Tracker,
     remainder: [f64; 2],
     sensitivity: [f64; 2],
+}
+
+#[derive(Default)]
+pub(super) enum TapState {
+    #[default]
+    Idle,
+    Candidate {
+        start: Instant,
+        origin: TouchContact,
+    },
+    Blocked,
+}
+
+impl TapState {
+    pub(super) fn advance(
+        &mut self,
+        contacts: [Option<TouchContact>; 2],
+        clicked: bool,
+        now: Instant,
+    ) -> bool {
+        let contact = match contacts {
+            [None, None] => {
+                let tap = !clicked
+                    && matches!(*self, Self::Candidate { start, .. } if now.duration_since(start) < HOLD_TIME);
+                *self = Self::Idle;
+                return tap;
+            }
+            [Some(contact), None] | [None, Some(contact)] if !clicked => contact,
+            _ => {
+                *self = Self::Blocked;
+                return false;
+            }
+        };
+        match *self {
+            Self::Idle => {
+                *self = Self::Candidate {
+                    start: now,
+                    origin: contact,
+                }
+            }
+            Self::Candidate { origin, .. } => {
+                let dx = i32::from(contact.x) - i32::from(origin.x);
+                let dy = i32::from(contact.y) - i32::from(origin.y);
+                if contact.id != origin.id || dx * dx + dy * dy > TAP_TRAVEL_SQUARED {
+                    *self = Self::Blocked;
+                }
+            }
+            Self::Blocked => {}
+        }
+        false
+    }
 }
 
 impl PointerState {

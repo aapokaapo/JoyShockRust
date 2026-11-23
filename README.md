@@ -314,7 +314,12 @@ the pointer with one finger and scroll with two.
 [keyboard.touch_pointer]
 sensitivity_x = 0.5
 sensitivity_y = 0.5
+tap_to_click = true
 ```
+
+`tap_to_click` is off by default. When enabled, a single touch shorter
+than 200 ms clicks on release if it stayed within 40 touchpad units of
+its starting point. A second contact or mechanical click cancels it.
 
 If the desktop also uses the physical controller touchpad, set
 `grab_touchpad = true` under `[keyboard]` in the profile. Loading or

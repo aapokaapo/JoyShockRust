@@ -207,6 +207,7 @@ One- or two-finger touchpad swipes can emit wheel steps at independent axis
 distances.
 One-finger swipes can also drive relative pointer motion with separate axis
 sensitivity, yielding to two-finger scrolling.
+The pointer profile can also map short stationary touches to left clicks.
 An opt-in session grab can suppress native evdev touchpad events from the
 active controller while HID mappings continue. The grab can follow the
 active profile or be requested at startup. Hardware validation is pending.

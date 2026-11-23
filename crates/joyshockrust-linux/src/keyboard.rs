@@ -116,6 +116,12 @@ impl Config {
             .flat_map(Binding::actions)
             .flat_map(|action| action.keys().iter().copied())
             .chain(self.sticks.iter().flat_map(|binding| binding.keys()))
+            .chain(self.has_touch_tap().then_some(KeyCode::BTN_LEFT))
+    }
+
+    fn has_touch_tap(&self) -> bool {
+        self.touch_pointer
+            .is_some_and(|settings| settings.tap_to_click)
     }
 
     fn has_scroll(&self) -> bool {
@@ -522,6 +528,7 @@ struct State {
     sticks: Vec<stick::State>,
     touch_scroll: Option<touch_motion::ScrollState>,
     touch_pointer: Option<touch_motion::PointerState>,
+    touch_tap: Option<touch_motion::TapState>,
     pulses: Vec<(KeyCode, Instant)>,
     mapped_keys: AttributeSet<KeyCode>,
     outer_keys: AttributeSet<KeyCode>,
@@ -559,6 +566,7 @@ impl State {
                 .collect(),
             touch_scroll: config.touch_scroll.map(touch_motion::ScrollState::new),
             touch_pointer: config.touch_pointer.map(touch_motion::PointerState::new),
+            touch_tap: config.has_touch_tap().then(touch_motion::TapState::default),
             // At most one pulse deadline per mapped key.
             pulses: Vec::with_capacity(key_count),
             mapped_keys,
@@ -606,16 +614,21 @@ impl State {
                 scroll.advance(input.contacts)
             });
         self.pulses.retain(|&(_, until)| until > now);
+        if self.touch_tap.as_mut().is_some_and(|tap| {
+            tap.advance(
+                input.contacts,
+                input.controls.buttons.contains(Button::TouchpadClick),
+                now,
+            )
+        }) {
+            schedule_pulse(&mut self.pulses, KeyCode::BTN_LEFT, now + TAP_KEY_TIME);
+        }
         for gesture in &mut self.gestures {
             match gesture.update(&input, self.click, now) {
                 Some(Action::Keys(keys)) => {
                     let until = now + TAP_KEY_TIME;
                     for &key in keys {
-                        if let Some(pulse) = self.pulses.iter_mut().find(|pulse| pulse.0 == key) {
-                            pulse.1 = until;
-                        } else {
-                            self.pulses.push((key, until));
-                        }
+                        schedule_pulse(&mut self.pulses, key, until);
                     }
                 }
                 Some(Action::Scroll(direction)) => direction.accumulate(&mut scroll),
@@ -696,6 +709,14 @@ impl State {
 
 fn key_event(key: KeyCode, value: i32) -> InputEvent {
     InputEvent::new(EventType::KEY.0, key.0, value)
+}
+
+fn schedule_pulse(pulses: &mut Vec<(KeyCode, Instant)>, key: KeyCode, until: Instant) {
+    if let Some(pulse) = pulses.iter_mut().find(|pulse| pulse.0 == key) {
+        pulse.1 = until;
+    } else {
+        pulses.push((key, until));
+    }
 }
 
 fn sort_releases(events: &mut [InputEvent], outer_keys: &AttributeSet<KeyCode>) {
@@ -2088,6 +2109,74 @@ mod tests {
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn touch_pointer_tap_clicks_only_for_short_stationary_single_contacts() {
+        let config = config(
+            r#"
+            [keyboard.touch_pointer]
+            sensitivity_x = 0.0
+            sensitivity_y = 0.0
+            tap_to_click = true
+        "#,
+        );
+        assert!(config.keys().any(|key| key == KeyCode::BTN_LEFT));
+        let mut state = State::new(&config);
+        let start = Instant::now();
+        let contact = |id, x, y| Some(TouchContact { id, x, y });
+        let a = contact(1, 100, 100);
+        let b = contact(2, 200, 200);
+        let mut values = Vec::with_capacity(2);
+        let frames = [
+            (0, [a, None], false, None),
+            (30, [None, contact(1, 110, 115)], false, None),
+            (60, [None, None], false, Some(90)),
+            (90, [None, None], false, None),
+            (100, [a, None], false, None),
+            (110, [contact(1, 130, 130), None], false, None), // Diagonal exceeds the allowed travel.
+            (120, [a, None], false, None), // Returning does not restore a tap candidate.
+            (130, [None, None], false, None),
+            (150, [a, None], false, None),
+            (160, [a, b], false, None),
+            (170, [None, b], false, None),
+            (180, [None, None], false, None),
+            (200, [a, None], false, None),
+            (400, [None, None], false, None), // At the time limit, the contact is not a tap.
+            (420, [a, None], false, None),
+            (430, [b, None], false, None), // ID change without lift cancels the tap.
+            (440, [None, None], false, None),
+            (460, [a, None], false, None),
+            (470, [a, None], true, None),
+            (480, [None, None], false, None),
+        ];
+        let allocations = allocation_counter::measure(|| {
+            for (ms, contacts, clicked, expected_deadline) in frames {
+                let mut input = Input {
+                    contacts,
+                    ..Input::default()
+                };
+                if clicked {
+                    input.controls.buttons.insert(Button::TouchpadClick);
+                }
+                let deadline = state
+                    .update(input, start + Duration::from_millis(ms), |events| {
+                        for event in events {
+                            assert_eq!(event.event_type(), EventType::KEY);
+                            assert_eq!(event.code(), KeyCode::BTN_LEFT.0);
+                            values.push((ms, event.value()));
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                assert_eq!(
+                    deadline,
+                    expected_deadline.map(|ms| start + Duration::from_millis(ms))
+                );
+            }
+        });
+        assert_eq!(values, [(60, 1), (90, 0)]);
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
     }
 
     #[test]
