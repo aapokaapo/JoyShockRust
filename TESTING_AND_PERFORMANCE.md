@@ -979,8 +979,10 @@ cargo test --locked -p joyshockrust-editor calibration_window_completes_and_canc
 ```
 
 Choose **Calibrate Controller Gyro** with a controller connected. Place
-the controller on a stable surface, run the measurement and cancel at the
-confirmation step. Check that the earlier correction is preserved and
+the controller on a stable surface and start measurement. Check that
+confirmation appears after five continuous seconds of steady readings.
+Move the controller just before the window completes and verify it
+needs a fresh five-second interval. Cancel at the confirmation step. Check that the earlier correction is preserved and
 that virtual outputs resume. Repeat and save, then open a gyro-enabled
 profile and compare stationary drift and deliberate slow aim. Verify that
 the same correction is used after reconnect and that a second controller

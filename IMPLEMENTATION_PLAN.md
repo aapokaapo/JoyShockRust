@@ -293,7 +293,7 @@ The tray can also guide stationary gyro calibration and retain the
 correction per controller across restarts. Synthetic tests cover saving,
 cancellation and application of the correction.
 
-Profiles can bind stationary calibration to a physical button hold.
+Profiles can bind the shared five-second stationary calibration to a physical button hold.
 USB actuator feedback marks calibration boundaries and RWC sweep steps.
 A standalone CLI test plays the USB cues and counts detents from a physical
 right-stick sweep through the existing PCM path.

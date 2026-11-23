@@ -240,7 +240,10 @@ impl Calibration {
                 if line != "ready" {
                     return false;
                 }
-                status.set_text("Waiting for one second of steady readings.");
+                status.set_text(&format!(
+                    "Waiting for {} seconds of steady readings.",
+                    joyshockrust_motion::StationaryCalibration::SAMPLE_DURATION.as_secs(),
+                ));
                 true
             },
             move |reply| match reply.and_then(parse_bias) {

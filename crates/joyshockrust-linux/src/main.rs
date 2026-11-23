@@ -853,7 +853,10 @@ fn open_mouse(
         .map_err(|err| std::io::Error::other(format!("could not start gyro mouse: {err}")))?;
     eprintln!("JoyShockRust Gyro Mouse ready");
     if options.calibrate {
-        eprintln!("Set the controller down and keep it still for gyro calibration");
+        eprintln!(
+            "Set the controller down and keep it still for {} seconds to calibrate the gyroscope",
+            joyshockrust_motion::StationaryCalibration::SAMPLE_DURATION.as_secs(),
+        );
     }
     Ok(Some(mouse))
 }

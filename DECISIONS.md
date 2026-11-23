@@ -527,7 +527,8 @@ normal outputs.
 
 The tray also offers controller gyro calibration. A dedicated measurement
 reads the selected controller without creating a virtual pointer, using
-factory calibration and the same stationary estimator as gyro startup.
+factory calibration and the same five-second stationary window as gyro
+startup and the controller shortcut.
 Saving is explicit and stores the residual bias by stable controller ID.
 The bridge reads that correction when opening gyro output. A saved
 correction takes precedence over optional session-start estimation.

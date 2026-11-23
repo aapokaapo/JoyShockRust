@@ -238,7 +238,8 @@ impl GyroMouse {
                     haptics.send(Cue::CalibrationStart);
                 }
                 eprintln!(
-                    "Gyro calibration requested. Release the button and keep the controller still."
+                    "Gyro calibration requested. Release the button and keep the controller still for {} seconds.",
+                    StationaryCalibration::SAMPLE_DURATION.as_secs(),
                 );
             }
             if let Some(shortcut) = &mut self.shortcut {
@@ -680,15 +681,17 @@ mod tests {
             ..sample(0)
         };
 
-        for ms in (0..=1000).step_by(10) {
+        for ms in (0..5000).step_by(10) {
             assert_eq!(aim.advance(rest(ms), true), [0; 2]);
         }
+        assert!(aim.calibration.is_some());
+        assert_eq!(aim.advance(rest(5000), true), [0; 2]);
         assert!(aim.calibration.is_none());
-        for ms in (1010..=1500).step_by(10) {
+        for ms in (5010..=5500).step_by(10) {
             assert_eq!(aim.advance(rest(ms), true), [0; 2]);
         }
         let mut horizontal = 0;
-        for ms in (1510..=3000).step_by(10) {
+        for ms in (5510..=7000).step_by(10) {
             let mut sample = rest(ms);
             sample.gyro_counts[1] = 12;
             horizontal += aim.advance(sample, true)[0];

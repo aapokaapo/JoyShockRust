@@ -987,7 +987,7 @@ Supported button names are `cross`, `circle`, `square`, `triangle`,
 
 With a controller connected, choose **Calibrate Controller Gyro** from the
 tray. Put the controller on a flat, stable surface and select **Start Gyro
-Calibration**. Keep it still until the measurement finishes, then select
+Calibration**. Keep it still for five uninterrupted seconds, then select
 **Save Gyro Calibration** and **Done**. The bridge resumes and uses the
 correction whenever it opens gyro output for that controller. Calibration
 is stored by controller ID in `$XDG_CONFIG_HOME/joyshockrust/gyro-calibration/`
