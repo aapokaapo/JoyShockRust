@@ -165,3 +165,66 @@ fn invalid_settings_are_rejected() {
         Err(MotionError::InvalidCalibration)
     ));
 }
+
+#[test]
+fn gyro_and_fused_aim_use_different_yaw_axes_when_the_controller_is_flat() {
+    let mut gyro = MotionEngine::new(MotionConfig::default(), Calibration::default()).unwrap();
+    let mut fused = MotionEngine::new(MotionConfig::default(), Calibration::default()).unwrap();
+    let spin_about_world_up = [0.0, 0.0, 100.0];
+    assert_eq!(
+        gyro.process_gyro_aim(0, spin_about_world_up).unwrap(),
+        [0.0; 2]
+    );
+    assert_eq!(
+        fused
+            .process_fused_aim(sample(0, spin_about_world_up, REST))
+            .unwrap(),
+        [0.0; 2]
+    );
+    assert_eq!(
+        gyro.process_gyro_aim(10_000_000, spin_about_world_up)
+            .unwrap(),
+        [0.0; 2]
+    );
+    assert_eq!(
+        fused
+            .process_fused_aim(sample(10, spin_about_world_up, REST))
+            .unwrap(),
+        [1.0, 0.0]
+    );
+}
+
+#[test]
+fn fused_aim_rejects_accel_as_motion_and_reacquires_after_reset() {
+    let mut motion = MotionEngine::new(MotionConfig::default(), Calibration::default()).unwrap();
+    for (ms, accel) in [
+        (0, [0.0; 3]),
+        (10, REST),
+        (20, [0.1, 0.0, 0.99]),
+        (30, [0.0, 0.0, 4.5]),
+        (40, [f32::NAN; 3]),
+    ] {
+        assert_eq!(
+            motion
+                .process_fused_aim(sample(ms, [0.0; 3], accel))
+                .unwrap(),
+            [0.0; 2]
+        );
+    }
+    assert!(
+        motion
+            .process_fused_aim(sample(50, [0.0, 0.0, 100.0], [f32::NAN; 3]))
+            .unwrap()[0]
+            > 0.4
+    );
+    motion.reset_segment();
+    let yaw = [0.0, 100.0, 0.0];
+    assert_eq!(
+        motion.process_fused_aim(sample(0, yaw, [0.0; 3])).unwrap(),
+        [0.0; 2]
+    );
+    assert_eq!(
+        motion.process_fused_aim(sample(10, yaw, [0.0; 3])).unwrap(),
+        [1.0, 0.0]
+    );
+}

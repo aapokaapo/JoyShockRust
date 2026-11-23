@@ -652,6 +652,31 @@ pub(crate) mod tests {
             assert!(doc.to_string().contains("sensitivity_x = 4.0 # retain"));
         };
 
+        let aim_mode = descendants::<adw::ComboRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Aim mode")
+            .unwrap();
+        assert_eq!(aim_mode.selected(), 0);
+        pick("Aim mode", "Sensor fusion aim");
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["aim_mode"].as_str(),
+            Some("sensor-fusion")
+        );
+        let rebuilt = sensitivity::gyro_page(&ctx);
+        assert_eq!(
+            descendants::<adw::ComboRow>(&rebuilt)
+                .into_iter()
+                .find(|row| row.title() == "Aim mode")
+                .unwrap()
+                .selected(),
+            1,
+        );
+        pick("Aim mode", "Gyro aim");
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["aim_mode"].as_str(),
+            Some("gyro")
+        );
+
         pick("Activation mode", "Disable while held");
         assert_binding(Some(("disable-while-held", "l2")));
         pick("Activation mode", "Toggle on double tap");

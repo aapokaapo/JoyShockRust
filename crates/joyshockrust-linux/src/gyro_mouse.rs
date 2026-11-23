@@ -13,7 +13,7 @@ use joyshockrust_input::{
     FactoryCalibration, InputReport, RawImuSample, Timebase, TimestampUpdate, Transport,
 };
 use joyshockrust_motion::{
-    Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
+    AimMode, Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
     aim_response::{
         DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse,
     },
@@ -41,6 +41,7 @@ pub struct GyroMouse {
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Options {
     pub calibrate: bool,
+    pub aim_mode: AimMode,
     pub calibration_hold: Option<HoldBinding>,
     pub binding: Binding,
     pub flick_stick: Option<f64>,
@@ -194,7 +195,8 @@ impl GyroMouse {
         }
         Ok(Self {
             aim: GyroAim::new(factory, options.calibrate, options.gyro_scale(), stored)
-                .with_response(options.response),
+                .with_response(options.response)
+                .with_mode(options.aim_mode),
             output,
             hold: options.calibration_hold.map(HoldDetector::new),
             shortcut: None,
@@ -219,6 +221,7 @@ impl GyroMouse {
     }
 
     pub fn set_scaling(&mut self, options: Options) {
+        self.aim.set_mode(options.aim_mode);
         self.aim.set_sensitivity(options.gyro_scale());
         if self.aim.response != options.response {
             self.aim.set_response(options.response);
@@ -318,6 +321,7 @@ struct GyroAim {
     factory: FactoryCalibration,
     timebase: Timebase,
     motion: MotionEngine,
+    mode: AimMode,
     calibration: Option<StationaryCalibration>,
     completed_bias: Option<Calibration>,
     remainder: [f64; 2],
@@ -341,12 +345,26 @@ impl GyroAim {
             timebase: Timebase::new(max_gap_ticks).expect("valid default sensor gap limit"),
             motion: MotionEngine::new(config, stored.unwrap_or_default())
                 .expect("valid gyro mouse defaults"),
+            mode: AimMode::default(),
             calibration: (calibrate && stored.is_none()).then(StationaryCalibration::default),
             completed_bias: None,
             remainder: [0.0; 2],
             sensitivity,
             response: GyroResponse::default(),
             was_enabled: false,
+        }
+    }
+
+    fn with_mode(mut self, mode: AimMode) -> Self {
+        self.set_mode(mode);
+        self
+    }
+
+    fn set_mode(&mut self, mode: AimMode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.reset_motion();
+            self.was_enabled = false;
         }
     }
 
@@ -399,14 +417,17 @@ impl GyroAim {
             }
             TimestampUpdate::Repeated { .. } | TimestampUpdate::OutOfOrder { .. } => return [0; 2],
         };
-        let calibrated = self.factory.convert(sample);
-        let sample = ImuSample {
-            timestamp_ns: elapsed.as_nanos() as u64,
-            gyro_dps: calibrated.gyro_dps,
-            accel_g: calibrated.accel_g,
+        let timestamp_ns = elapsed.as_nanos() as u64;
+        let calibrated_sample = || {
+            let calibrated = self.factory.convert(sample);
+            ImuSample {
+                timestamp_ns,
+                gyro_dps: calibrated.gyro_dps,
+                accel_g: calibrated.accel_g,
+            }
         };
         if let Some(calibration) = &mut self.calibration {
-            if let Some(bias) = calibration.observe(sample) {
+            if let Some(bias) = calibration.observe(calibrated_sample()) {
                 self.motion = MotionEngine::new(Self::config(), bias)
                     .expect("stationary calibration returns a bounded finite bias");
                 self.calibration = None;
@@ -414,7 +435,13 @@ impl GyroAim {
             }
             return [0; 2];
         }
-        let Ok(output) = self.motion.process(sample) else {
+        let aim_delta = match self.mode {
+            AimMode::Gyro => self
+                .motion
+                .process_gyro_aim(timestamp_ns, self.factory.convert_gyro(sample.gyro_counts)),
+            AimMode::SensorFusion => self.motion.process_fused_aim(calibrated_sample()),
+        };
+        let Ok(aim_delta) = aim_delta else {
             self.reset_motion();
             return [0; 2];
         };
@@ -424,7 +451,7 @@ impl GyroAim {
         }
 
         // Match the speed used for the gain to the interval being integrated.
-        let gain = self.response.interval_gain(output.aim_delta, interval);
+        let gain = self.response.interval_gain(aim_delta, interval);
         if gain == 0.0 {
             self.remainder = [0.0; 2];
             return [0; 2];
@@ -433,8 +460,8 @@ impl GyroAim {
         // Retain fractional movement so repeated sub-count deltas still move
         // the pointer. Clear these fractions on discontinuities.
         std::array::from_fn(|axis| {
-            let total = self.remainder[axis]
-                + f64::from(output.aim_delta[axis]) * self.sensitivity[axis] * gain;
+            let total =
+                self.remainder[axis] + f64::from(aim_delta[axis]) * self.sensitivity[axis] * gain;
             let whole = total as i32;
             self.remainder[axis] = total - f64::from(whole);
             whole
@@ -612,6 +639,34 @@ mod tests {
             }
         }
         assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn aim_mode_changes_pointer_axis_and_rebaselines_with_saved_bias() {
+        let rest = RawImuSample {
+            gyro_counts: [0, 0, 8],
+            ..sample(0)
+        };
+        let gyro_bias_dps = aim(false).factory.convert(rest).gyro_dps;
+        let mut aim = aim_with_bias(false, Some(Calibration { gyro_bias_dps }));
+        let turn = |ms: u32, yaw| RawImuSample {
+            gyro_counts: [0, 0, yaw],
+            device_ticks: ms * 3000,
+            ..rest
+        };
+
+        assert_eq!(aim.advance(turn(0, 1608), true), [0; 2]);
+        assert_eq!(aim.advance(turn(10, 1608), true), [0; 2]);
+        aim.set_mode(AimMode::SensorFusion);
+        assert_eq!(aim.advance(turn(20, 1608), true), [0; 2]);
+        assert_eq!(aim.advance(turn(30, 1608), true), [-4, 0]);
+        aim.advance(turn(40, 8), true);
+        for ms in (50..=2050).step_by(10) {
+            assert_eq!(aim.advance(turn(ms, 8), true), [0; 2]);
+        }
+        aim.set_mode(AimMode::Gyro);
+        assert_eq!(aim.advance(turn(2060, 1608), true), [0; 2]);
+        assert_eq!(aim.advance(turn(2070, 1608), true), [0; 2]);
     }
 
     #[test]

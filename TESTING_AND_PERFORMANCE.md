@@ -911,6 +911,12 @@ at full pull** for L2 and save. Verify Q stays held when E engages, then
 ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
 
+In **Gyro → Aim input**, switch between **Gyro aim** and **Sensor fusion
+aim** using **Save & Apply**. Hold the controller approximately flat and
+rotate about vertical to compare horizontal aim. Move the controller in
+a straight line without rotating it and check the cursor stays still.
+Switch modes again while the controller rests and check for a jump.
+
 In **Gyro → Gyro activation**, select **Disable while held** and L2,
 apply the profile, then check that holding and releasing L2 stops and
 resumes aim. Configure a touch region, a chord and an analog trigger in

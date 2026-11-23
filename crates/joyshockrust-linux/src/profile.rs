@@ -47,6 +47,7 @@ struct Profile {
 struct Gyro {
     #[serde(default)]
     calibrate: bool,
+    aim_mode: Option<String>,
     calibration_hold: Option<CalibrationHold>,
     flick_stick: Option<f64>,
     flick_axial_threshold_deg: Option<f64>,
@@ -460,6 +461,12 @@ impl Gyro {
         }
         Ok(gyro_mouse::Options {
             calibrate: self.calibrate,
+            aim_mode: self
+                .aim_mode
+                .as_deref()
+                .map(str::parse)
+                .transpose()?
+                .unwrap_or_default(),
             calibration_hold: self
                 .calibration_hold
                 .map(CalibrationHold::resolve)
@@ -664,6 +671,18 @@ mod tests {
         );
         assert!(render_game_calibration("version = 1", 40.0, 2.0).is_ok());
         assert!(render_game_calibration(source, 0.0, 2.0).is_err());
+    }
+
+    #[test]
+    fn gyro_aim_mode_defaults_to_gyro_and_accepts_fusion() {
+        use joyshockrust_motion::AimMode;
+        assert_eq!(
+            parse("version = 1\n[gyro]").unwrap().gyro.unwrap().aim_mode,
+            AimMode::Gyro
+        );
+        let fused = parse("version = 1\n[gyro]\naim_mode = 'sensor-fusion'").unwrap();
+        assert_eq!(fused.gyro.unwrap().aim_mode, AimMode::SensorFusion);
+        assert!(parse("version = 1\n[gyro]\naim_mode = 'unknown'").is_err());
     }
 
     #[test]

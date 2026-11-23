@@ -124,12 +124,15 @@ impl FactoryCalibration {
         Ok(Self { gyro, accel })
     }
 
+    /// Convert only the gyro channels to degrees per second in device axis order.
+    pub fn convert_gyro(&self, counts: [i16; 3]) -> [f32; 3] {
+        core::array::from_fn(|axis| self.gyro[axis].convert(counts[axis]))
+    }
+
     /// Convert raw counts to physical units in device axis order.
     pub fn convert(&self, sample: RawImuSample) -> CalibratedImu {
         CalibratedImu {
-            gyro_dps: core::array::from_fn(|axis| {
-                self.gyro[axis].convert(sample.gyro_counts[axis])
-            }),
+            gyro_dps: self.convert_gyro(sample.gyro_counts),
             accel_g: core::array::from_fn(|axis| {
                 self.accel[axis].convert(sample.accel_counts[axis])
             }),

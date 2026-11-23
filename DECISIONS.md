@@ -602,6 +602,11 @@ partial tap actions if the same pull reaches the full stage by default.
 The per-trigger `keyboard.keep_partial` setting keeps the lower gate
 active through full travel when enabled.
 
+The Gyro tab sets the aim reference frame per profile. Device-axis
+gyro aim is the default. Fusion uses an estimate of gravity to project
+the bias-corrected gyro rates before pointer scaling. Live changes reset
+the reference frame and timing without reopening the virtual mouse.
+
 The Gyro tab edits the profile’s single activation binding. Its button,
 touch, chord and trigger choices use the bridge’s existing profile schema.
 The touchpad’s cell editor edits the same binding for single touch inputs.

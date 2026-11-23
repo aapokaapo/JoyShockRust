@@ -1126,6 +1126,7 @@ fn serve_session(
                     if let (Some(mouse), Some(current), Some(next)) =
                         (&mut mouse, active_gyro, next_gyro)
                         && (gyro_mouse::Options {
+                            aim_mode: next.aim_mode,
                             sensitivity: next.sensitivity,
                             response: next.response,
                             flick_axial_threshold_deg: next.flick_axial_threshold_deg,

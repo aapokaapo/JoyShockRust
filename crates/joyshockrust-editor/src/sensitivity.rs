@@ -4,6 +4,7 @@ use std::{
 };
 
 use adw::{gtk, prelude::*};
+use joyshockrust_motion::AimMode;
 use joyshockrust_motion::aim_response::{
     DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse,
     MAX_FLICK_AXIAL_THRESHOLD_DEG, MAX_GYRO_ACCEL_MULTIPLIER, MAX_GYRO_RATE_DPS,
@@ -93,6 +94,7 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
         return ui::advanced_required("Edit this gyro configuration in Advanced TOML.");
     };
     let page = adw::PreferencesPage::new();
+    page.add(&aim_mode_group(ctx, gyro));
     page.add(&crate::gyro_activation::group(ctx, &doc));
     page.add(&gyro_sensitivity_group(ctx, gyro));
     page.add(&gyro_response_group(ctx, gyro));
@@ -189,6 +191,44 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     });
     page.add(&calibration);
     page.upcast()
+}
+
+fn aim_mode_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("Aim input")
+        .description(
+            "Gyro aim uses the controller axes. Sensor fusion aim uses gravity as its reference.",
+        )
+        .build();
+    let current = gyro
+        .and_then(|table| table.get("aim_mode"))
+        .and_then(Item::as_str)
+        .unwrap_or(AimMode::default().as_str());
+    let ctx = ctx.clone();
+    let row = controller::required_dropdown(
+        "Aim mode",
+        current,
+        [
+            (AimMode::Gyro, "Gyro aim"),
+            (AimMode::SensorFusion, "Sensor fusion aim"),
+        ]
+        .into_iter()
+        .map(|(mode, name)| (mode.as_str().into(), name.into())),
+        move |mode| {
+            ctx.edit(|doc| {
+                let gyro = gyro_table_mut(doc)?;
+                let value = Value::from(mode);
+                if let Some(previous) = gyro.get_mut("aim_mode").and_then(Item::as_value_mut) {
+                    replace_value(previous, value);
+                } else {
+                    gyro.insert("aim_mode", Item::Value(value));
+                }
+                Ok(())
+            });
+        },
+    );
+    group.add(&row);
+    group
 }
 
 fn gyro_response_values(gyro: Option<&dyn TableLike>) -> [f64; 4] {

@@ -101,7 +101,8 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/dualsense-edge.ex
 ```
 
 Profiles require `version = 1`. The optional `[gyro]` table enables the gyro
-mouse. The optional `[gyro.binding]` table takes `mode` and `input`. Modes are
+mouse. Use `aim_mode = "gyro"` or `aim_mode = "sensor-fusion"` in that
+table. The optional `[gyro.binding]` table takes `mode` and `input`. Modes are
 `hold`, `disable-while-held`, `toggle`, `tap-hold`, `double-tap`, `chord`
 and `trigger`. Input names a digital button, a touch region, a chord, or an
 analog trigger, depending on the mode. The [gyro-except-L2 profile](profiles/gyro-except-l2.toml)
@@ -730,6 +731,12 @@ sprint**. Set the engage radius as a fraction of full deflection and
 leave the release radius empty to use the bridge default. Select
 **Update Mapping** to validate the settings and return to the profile,
 then **Save & Apply** to load them into the running bridge.
+
+Under **Gyro → Aim input → Aim mode**, choose **Gyro aim** for
+controller-axis aiming or **Sensor fusion aim** for gravity-referenced
+aiming. Gyro aim is the default. Fusion estimates up from gyro and
+accelerometer readings while aim movement comes from gyro rotation.
+Use **Save & Apply** to switch modes in the running bridge.
 
 In **Gyro → Gyro activation**, choose **Always active** or select a
 physical button, touch region, two-input chord, or analog trigger. The
