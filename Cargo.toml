@@ -1,5 +1,12 @@
 [workspace]
-members = ["crates/joyshockrust-core", "crates/joyshockrust-input", "crates/joyshockrust-linux"]
+members = [
+    "crates/joyshockrust-core",
+    "crates/joyshockrust-input",
+    "crates/joyshockrust-linux",
+    "crates/joyshockrust-motion",
+    "crates/joyshockrust-tray",
+    "crates/joyshockrust-editor",
+]
 resolver = "3"
 
 [workspace.package]

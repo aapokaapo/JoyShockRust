@@ -1,0 +1,731 @@
+use std::{
+    env, fs,
+    io::{self, Read},
+    os::unix::net::UnixStream,
+    path::{Path, PathBuf},
+    process::{Child, Command},
+    sync::mpsc,
+    time::{Duration, Instant},
+};
+
+use ksni::{
+    MenuItem,
+    blocking::TrayMethods,
+    menu::{CheckmarkItem, StandardItem, SubMenu},
+};
+
+const BRIDGE_SERVICE: &str = "joyshockrust.service";
+const DESKTOP_ID: &str = "io.github.aapokaapo.JoyShockRust.desktop";
+const DESKTOP_ENTRY: &str =
+    include_str!("../../../dist/desktop/io.github.aapokaapo.JoyShockRust.desktop");
+const REFRESH: Duration = Duration::from_secs(1);
+const INVENTORY_REFRESH: Duration = Duration::from_secs(4);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Controller {
+    node: String,
+    id: String,
+    model: &'static str,
+    transport: &'static str,
+}
+
+impl Controller {
+    fn from_inventory(line: &str) -> Option<Self> {
+        let (node, description) = line.split_once(": ")?;
+        let (description, id) = description.split_once(", controller_id=")?;
+        let suffix = node.strip_prefix("/dev/hidraw")?;
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        if id == "unavailable" {
+            return None;
+        }
+        let (controller, _) = description.split_once(", ")?;
+        let (transport, model) = controller.split_once(' ')?;
+        let (transport, model) = (
+            match transport {
+                "wired" => "usb",
+                "Bluetooth" => "bluetooth",
+                _ => return None,
+            },
+            match model {
+                "DualSense" => "dualsense",
+                "DualSense Edge" => "dualsense-edge",
+                _ => return None,
+            },
+        );
+        Some(Self {
+            node: node.into(),
+            id: id.into(),
+            model,
+            transport,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Status {
+    controller: String,
+    rate: String,
+    battery: String,
+    active_node: Option<String>,
+    profile: String,
+    outputs_paused: bool,
+}
+
+impl Status {
+    fn parse(reply: &str) -> Option<Self> {
+        let raw_field = |key| {
+            reply
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .find_map(|(name, value)| (name == key).then_some(value))
+        };
+        let field = |key| raw_field(key).filter(|&value| value != "none");
+        if field("version") != Some("1") {
+            return None;
+        }
+        let connected = match field("controller")? {
+            "connected" => true,
+            "waiting" => false,
+            _ => return None,
+        };
+        let model = match field("model") {
+            Some("dualsense") => "DualSense",
+            Some("dualsense_edge") => "DualSense Edge",
+            _ => "Controller",
+        };
+        let transport = match field("transport") {
+            Some("usb") => "USB",
+            Some("bluetooth") => "Bluetooth",
+            _ => "Unknown connection",
+        };
+        let controller = if connected {
+            format!("{model} · {transport}")
+        } else {
+            "Waiting for a controller".into()
+        };
+        let rate = field("report_rate_hz")
+            .filter(|_| connected)
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .map_or_else(|| "—".into(), |rate| format!("{rate:.1} Hz"));
+        let battery = match field("battery_state").filter(|_| connected) {
+            Some("discharging") => field("battery_percent")
+                .and_then(|value| value.parse::<u8>().ok())
+                .filter(|&value| value <= 100)
+                .map_or_else(
+                    || "Discharging".into(),
+                    |value| format!("Discharging · {value}%"),
+                ),
+            Some("charging") => "Charging".into(),
+            Some("full") => "Full".into(),
+            Some("not_charging") => "Not charging".into(),
+            _ => "—".into(),
+        };
+        let fallback_profile = match field("profile_source") {
+            Some("loaded") => "Loaded profile",
+            Some("startup") => "Startup profile",
+            Some("command_line") => "Command-line mappings",
+            _ => "Default mappings",
+        };
+        let profile = raw_field("profile_name")
+            .filter(|name| !name.is_empty())
+            .unwrap_or(fallback_profile);
+        Some(Self {
+            controller,
+            rate,
+            battery,
+            active_node: field("active_hidraw")
+                .filter(|_| connected)
+                .map(str::to_owned),
+            profile: profile.into(),
+            outputs_paused: field("outputs_paused") == Some("true"),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+enum Action {
+    Select(Controller),
+    AutoSelect,
+    Load(PathBuf),
+    Edit(Option<PathBuf>),
+    Calibrate(PathBuf),
+    Unload,
+    ResumeOutputs,
+    Start,
+    Autostart(bool),
+    Quit,
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+struct TrayState {
+    status: Option<Status>,
+    inventory: Vec<Controller>,
+    profiles: Vec<PathBuf>,
+    autostart: bool,
+    calibrating: bool,
+    editor_open: bool,
+    error: Option<String>,
+}
+
+struct Tray {
+    actions: mpsc::Sender<Action>,
+    state: TrayState,
+}
+
+fn item(label: impl Into<String>, action: Action) -> MenuItem<Tray> {
+    StandardItem {
+        label: label.into().replace('_', "__"),
+        activate: Box::new(move |tray: &mut Tray| {
+            let _ = tray.actions.send(action.clone());
+        }),
+        ..Default::default()
+    }
+    .into()
+}
+
+fn label(text: impl Into<String>) -> MenuItem<Tray> {
+    StandardItem {
+        label: text.into().replace('_', "__"),
+        enabled: false,
+        ..Default::default()
+    }
+    .into()
+}
+
+impl ksni::Tray for Tray {
+    const MENU_ON_ACTIVATE: bool = true;
+
+    fn id(&self) -> String {
+        "joyshockrust".into()
+    }
+    fn title(&self) -> String {
+        "JoyShockRust".into()
+    }
+    fn icon_name(&self) -> String {
+        "input-gaming".into()
+    }
+
+    fn menu(&self) -> Vec<MenuItem<Self>> {
+        let state = &self.state;
+        let mut menu = if let Some(status) = &state.status {
+            vec![
+                label(&status.controller),
+                label(format!("Report rate: {}", status.rate)),
+                label(format!("Battery: {}", status.battery)),
+                label(format!("Profile: {}", status.profile)),
+            ]
+        } else {
+            vec![
+                label("Bridge unavailable"),
+                item("Start bridge", Action::Start),
+            ]
+        };
+        if let Some(error) = &state.error {
+            menu.push(label(error));
+        }
+        if state.calibrating {
+            menu.push(label("Calibrating game sensitivity"));
+            return menu;
+        }
+        if state
+            .status
+            .as_ref()
+            .is_some_and(|status| status.outputs_paused)
+        {
+            menu.push(item("Resume virtual outputs", Action::ResumeOutputs));
+        }
+        let mut controllers = vec![item("Automatic", Action::AutoSelect)];
+        for controller in &state.inventory {
+            let active = state
+                .status
+                .as_ref()
+                .and_then(|status| status.active_node.as_deref())
+                == Some(controller.node.as_str());
+            let prefix = if active { "✓ " } else { "" };
+            let model = if controller.model == "dualsense-edge" {
+                "DualSense Edge"
+            } else {
+                "DualSense"
+            };
+            let transport = if controller.transport == "usb" {
+                "USB"
+            } else {
+                "Bluetooth"
+            };
+            controllers.push(item(
+                format!("{prefix}{model} · {transport} ({})", controller.node),
+                Action::Select(controller.clone()),
+            ));
+        }
+        menu.push(
+            SubMenu {
+                label: "Active controller".into(),
+                enabled: state.status.is_some(),
+                submenu: controllers,
+                ..Default::default()
+            }
+            .into(),
+        );
+        if state
+            .status
+            .as_ref()
+            .is_some_and(|status| status.active_node.is_some())
+            && !state.profiles.is_empty()
+        {
+            menu.push(
+                SubMenu {
+                    label: "Calibrate game sensitivity (RWC)".into(),
+                    submenu: state
+                        .profiles
+                        .iter()
+                        .filter_map(|path| {
+                            Some(item(
+                                path.file_stem()?.to_string_lossy(),
+                                Action::Calibrate(path.clone()),
+                            ))
+                        })
+                        .collect(),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+
+        let mut profiles = vec![item("Default mappings", Action::Unload)];
+        for path in &state.profiles {
+            if let Some(name) = path.file_stem() {
+                profiles.push(item(name.to_string_lossy(), Action::Load(path.clone())));
+            }
+        }
+        menu.push(
+            SubMenu {
+                label: "Profiles".into(),
+                enabled: state.status.is_some(),
+                submenu: profiles,
+                ..Default::default()
+            }
+            .into(),
+        );
+        let mut editors = vec![item("New profile", Action::Edit(None))];
+        for path in &state.profiles {
+            if let Some(name) = path.file_stem() {
+                editors.push(item(
+                    name.to_string_lossy(),
+                    Action::Edit(Some(path.clone())),
+                ));
+            }
+        }
+        menu.push(
+            SubMenu {
+                label: "Profile editor".into(),
+                enabled: !state.editor_open,
+                submenu: editors,
+                ..Default::default()
+            }
+            .into(),
+        );
+        menu.push(MenuItem::Separator);
+        menu.push(
+            CheckmarkItem {
+                label: "Start when I log in".into(),
+                checked: state.autostart,
+                activate: Box::new(|tray: &mut Tray| {
+                    let _ = tray.actions.send(Action::Autostart(!tray.state.autostart));
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+        if state.editor_open {
+            menu.push(label("Close the profile editor before quitting"));
+        } else {
+            menu.push(item("Quit JoyShockRust", Action::Quit));
+        }
+        menu
+    }
+}
+
+struct Desktop {
+    bridge: PathBuf,
+    config: PathBuf,
+    status_socket: PathBuf,
+}
+
+impl Desktop {
+    fn autostart_file(&self) -> PathBuf {
+        self.config.join("autostart").join(DESKTOP_ID)
+    }
+
+    fn profile_paths(&self) -> Vec<PathBuf> {
+        let root = self.config.join("joyshockrust");
+        let mut paths: Vec<_> = fs::read_dir(root.join("profiles"))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "toml") && path.is_file())
+            .collect();
+        paths.sort();
+        let startup = root.join("profile.toml");
+        if startup.is_file() {
+            paths.insert(0, startup);
+        }
+        paths
+    }
+
+    fn command(&self, args: &[&str]) -> io::Result<String> {
+        output(Command::new(&self.bridge).args(args))
+    }
+
+    fn status(&self) -> io::Result<Option<Status>> {
+        let stream = UnixStream::connect(&self.status_socket)?;
+        stream.set_read_timeout(Some(REFRESH))?;
+        let mut reply = String::new();
+        stream.take(64 * 1024).read_to_string(&mut reply)?;
+        Ok(Status::parse(&reply))
+    }
+
+    fn set_outputs_paused(&self, paused: bool) -> io::Result<()> {
+        self.command(&["--set-outputs", if paused { "pause" } else { "resume" }])
+            .map(|_| ())
+    }
+
+    fn calibrate(&self, profile: &Path, status: &Status) -> io::Result<Child> {
+        let node = status
+            .active_node
+            .as_deref()
+            .filter(|node| {
+                node.strip_prefix("/dev/hidraw").is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            })
+            .ok_or_else(|| io::Error::other("connect a controller to calibrate"))?;
+        output(
+            Command::new(&self.bridge)
+                .arg("--check-profile")
+                .arg(profile),
+        )?;
+        let mut dialog = Command::new(self.bridge.with_file_name("joyshockrust-editor"));
+        dialog.args(["--calibrate-game"]).arg(profile).arg(node);
+        self.set_outputs_paused(true)?;
+        match dialog.spawn() {
+            Ok(child) => Ok(child),
+            Err(error) => {
+                if let Err(resume) = self.set_outputs_paused(false) {
+                    return Err(io::Error::other(format!(
+                        "{error}; could not resume outputs: {resume}"
+                    )));
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn run(&self, action: &Action) -> io::Result<()> {
+        match action {
+            Action::Select(controller) => {
+                let transport = if controller.transport == "usb" {
+                    "--usb"
+                } else {
+                    "--bluetooth"
+                };
+                self.command(&[
+                    "--select-controller",
+                    &controller.id,
+                    "--controller-model",
+                    controller.model,
+                    transport,
+                ])?;
+            }
+            Action::AutoSelect => {
+                self.command(&[
+                    "--select-controller",
+                    "any",
+                    "--controller-model",
+                    "any",
+                    "--auto-transport",
+                ])?;
+            }
+            Action::Load(path) => {
+                output(Command::new(&self.bridge).arg("--load-profile").arg(path))?;
+            }
+            Action::Edit(_) => unreachable!("the editor is handled by the tray loop"),
+            Action::Unload => {
+                self.command(&["--unload-profile"])?;
+            }
+            Action::Calibrate(_) => unreachable!("calibration is handled by the tray loop"),
+            Action::ResumeOutputs => self.set_outputs_paused(false)?,
+            Action::Start => {
+                bridge_service("start")?;
+            }
+            Action::Autostart(enabled) => {
+                let directory = self.config.join("autostart");
+                let path = self.autostart_file();
+                if *enabled {
+                    fs::create_dir_all(directory)?;
+                    fs::write(path, DESKTOP_ENTRY)?;
+                } else if let Err(error) = fs::remove_file(path)
+                    && error.kind() != io::ErrorKind::NotFound
+                {
+                    return Err(error);
+                }
+            }
+            Action::Quit => {
+                bridge_service("stop")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn output(command: &mut Command) -> io::Result<String> {
+    let output = command.output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = stderr.trim();
+        Err(io::Error::other(if message.is_empty() {
+            format!(
+                "{}: {}",
+                command.get_program().to_string_lossy(),
+                output.status
+            )
+        } else {
+            message.into()
+        }))
+    }
+}
+
+fn bridge_service(action: &str) -> io::Result<()> {
+    output(Command::new("systemctl").args(["--user", action, BRIDGE_SERVICE])).map(|_| ())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or("HOME must be an absolute path")?;
+    let desktop = Desktop {
+        bridge: env::current_exe()?.with_file_name("joyshockrust-linux"),
+        config: env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(|| home.join(".config")),
+        status_socket: env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .ok_or("XDG_RUNTIME_DIR must be an absolute path")?
+            .join("joyshockrust/status.sock"),
+    };
+    let (sender, receiver) = mpsc::channel();
+    let tray = Tray {
+        actions: sender,
+        state: TrayState::default(),
+    }
+    .spawn()?;
+    let mut state = TrayState {
+        error: desktop
+            .run(&Action::Start)
+            .err()
+            .map(|error| format!("Start failed: {error}")),
+        ..TrayState::default()
+    };
+    let mut published = TrayState::default();
+    let mut last_inventory = None;
+    let mut calibration: Option<Child> = None;
+    let mut editor: Option<Child> = None;
+    while !tray.is_closed() || calibration.is_some() {
+        match editor.as_mut().map(Child::try_wait) {
+            Some(Ok(Some(status))) => {
+                editor = None;
+                if !status.success() {
+                    state.error = Some(format!("Profile editor exited with {status}"));
+                }
+            }
+            Some(Err(error)) => {
+                editor = None;
+                state.error = Some(format!("Could not wait for the profile editor: {error}"));
+            }
+            _ => {}
+        }
+        state.editor_open = editor.is_some();
+        let finished = match calibration.as_mut().map(Child::try_wait) {
+            Some(Ok(Some(result))) => Some(if result.success() {
+                None
+            } else {
+                Some("Calibration cancelled or failed".to_owned())
+            }),
+            Some(Err(error)) => Some(Some(format!("Could not wait for calibration: {error}"))),
+            _ => None,
+        };
+        if let Some(outcome) = finished {
+            calibration = None;
+            state.calibrating = false;
+            state.error = match desktop.set_outputs_paused(false) {
+                Ok(()) => outcome,
+                Err(error) => Some(format!("Could not resume virtual outputs: {error}")),
+            };
+        }
+        state.status = desktop.status().ok().flatten();
+        if last_inventory.is_none_or(|last: Instant| last.elapsed() >= INVENTORY_REFRESH) {
+            state.inventory = desktop
+                .command(&[
+                    "--list-controllers",
+                    "--show-controller-id",
+                    "--auto-transport",
+                    "--controller-model",
+                    "any",
+                ])
+                .map_or_else(
+                    |_| Vec::new(),
+                    |reply| {
+                        reply
+                            .lines()
+                            .filter_map(Controller::from_inventory)
+                            .collect()
+                    },
+                );
+            state.profiles = desktop.profile_paths();
+            last_inventory = Some(Instant::now());
+        }
+        state.autostart = desktop.autostart_file().is_file();
+        if published != state {
+            published.clone_from(&state);
+            tray.update(|tray| tray.state.clone_from(&state));
+        }
+        match receiver.recv_timeout(REFRESH) {
+            Ok(_) if calibration.is_some() => {}
+            Ok(Action::Edit(path)) if editor.is_none() => {
+                match Command::new(desktop.bridge.with_file_name("joyshockrust-editor"))
+                    .args(path)
+                    .spawn()
+                {
+                    Ok(child) => {
+                        editor = Some(child);
+                        state.error = None;
+                    }
+                    Err(error) => {
+                        state.error = Some(format!("Could not open the profile editor: {error}"))
+                    }
+                }
+            }
+            Ok(Action::Edit(_) | Action::Quit) if editor.is_some() => {}
+            Ok(Action::Calibrate(path)) => {
+                let result = state
+                    .status
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("bridge unavailable"))
+                    .and_then(|status| desktop.calibrate(&path, status));
+                match result {
+                    Ok(child) => {
+                        calibration = Some(child);
+                        state.calibrating = true;
+                        state.error = None;
+                    }
+                    Err(error) => {
+                        state.error = Some(format!("Could not start calibration: {error}"))
+                    }
+                }
+            }
+            Ok(action) => match desktop.run(&action) {
+                Ok(()) if matches!(action, Action::Quit) => break,
+                Ok(()) => state.error = None,
+                Err(error) => state.error = Some(format!("Action failed: {error}")),
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) if calibration.is_some() => {
+                std::thread::sleep(REFRESH)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    tray.shutdown().wait();
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use ksni::Tray as _;
+
+    use super::*;
+
+    #[test]
+    fn status_formats_discharge_level_and_clears_disconnected_telemetry() {
+        let connected = "version=1\ncontroller=connected\nmodel=dualsense_edge\ntransport=bluetooth\nreport_rate_hz=249.4\nbattery_state=discharging\nbattery_percent=95\nprofile_source=loaded\nactive_hidraw=/dev/hidraw6";
+        let status = Status::parse(connected).unwrap();
+        assert_eq!(status.controller, "DualSense Edge · Bluetooth");
+        assert_eq!(status.rate, "249.4 Hz");
+        assert_eq!(status.battery, "Discharging · 95%");
+        assert_eq!(status.active_node.as_deref(), Some("/dev/hidraw6"));
+        assert_eq!(status.profile, "Loaded profile");
+        assert_eq!(
+            Status::parse(&format!("{connected}\nprofile_name=gyro_profile.toml"))
+                .unwrap()
+                .profile,
+            "gyro_profile.toml"
+        );
+        assert_eq!(
+            Status::parse(&connected.replace("discharging", "charging"))
+                .unwrap()
+                .battery,
+            "Charging"
+        );
+        let waiting = Status::parse(&connected.replace("connected", "waiting")).unwrap();
+        assert_eq!(waiting.controller, "Waiting for a controller");
+        assert_eq!(waiting.active_node, None);
+        assert_eq!(waiting.rate, "—");
+        assert_eq!(waiting.battery, "—");
+        assert!(Status::parse(&connected.replace("version=1", "version=2")).is_none());
+    }
+
+    #[test]
+    fn controller_and_profile_menu_actions_are_independent() {
+        let controller = Controller::from_inventory(
+            "/dev/hidraw6: wired DualSense Edge, readable, controller_id=01:02:03:04:05:06",
+        )
+        .unwrap();
+        assert!(
+            Controller::from_inventory(
+                "/dev/hidraw8: Bluetooth DualSense, readable, controller_id=unavailable"
+            )
+            .is_none()
+        );
+        let profile = PathBuf::from("/tmp/gyro profile.toml");
+        let (actions, receiver) = mpsc::channel();
+        let mut tray = Tray {
+            actions,
+            state: TrayState {
+                status: Status::parse(
+                    "version=1\ncontroller=connected\nactive_hidraw=/dev/hidraw6",
+                ),
+                inventory: vec![controller.clone()],
+                profiles: vec![profile.clone()],
+                ..TrayState::default()
+            },
+        };
+        let menu = tray.menu();
+        for entry in menu {
+            if let MenuItem::SubMenu(menu) = entry
+                && let Some(MenuItem::Standard(option)) = menu.submenu.last()
+            {
+                (option.activate)(&mut tray);
+            }
+        }
+        assert!(
+            matches!(receiver.try_recv().unwrap(), Action::Select(selected) if selected == controller)
+        );
+        assert!(
+            matches!(receiver.try_recv().unwrap(), Action::Calibrate(selected) if selected == profile)
+        );
+        assert!(
+            matches!(receiver.try_recv().unwrap(), Action::Load(selected) if selected == profile)
+        );
+        assert!(
+            matches!(receiver.try_recv().unwrap(), Action::Edit(Some(selected)) if selected == profile)
+        );
+    }
+}

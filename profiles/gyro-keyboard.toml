@@ -1,0 +1,25 @@
+version = 1
+
+[bridge]
+virtual_gamepad = false
+
+[gyro]
+flick_stick = 1.0
+# Example game values. Calibrate a copy of this profile for your game.
+real_world_calibration = 40.0
+in_game_sens = 1.0
+
+[[keyboard.sticks]]
+side = "left"
+deadzone = 0.2
+up = "KEY_W"
+left = "KEY_A"
+down = "KEY_S"
+right = "KEY_D"
+outer = { key = "KEY_LEFTSHIFT", threshold = 0.8, release = 0.7 }
+
+[[keyboard.bindings]]
+button = "cross"
+tap = "KEY_SPACE"
+hold = "KEY_LEFTSHIFT"
+double_tap = "KEY_R"

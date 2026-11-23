@@ -6,9 +6,17 @@ publish.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = "0.13.2"
-nix = { version = "0.29", features = ["ioctl", "poll"] }
+nix = { version = "0.29", features = ["ioctl", "poll", "resource", "signal"] }
+udev = "0.9.3"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+toml_edit = { version = "0.24", default-features = false, features = ["parse", "display"] }
 joyshockrust-core = { path = "../joyshockrust-core" }
 joyshockrust-input = { path = "../joyshockrust-input" }
+joyshockrust-motion = { path = "../joyshockrust-motion" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+allocation-counter = "0.8.1"
 
 [lints.rust]
 unsafe_code = "deny"

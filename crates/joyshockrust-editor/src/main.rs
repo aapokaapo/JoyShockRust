@@ -1,0 +1,214 @@
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use adw::{gtk, prelude::*};
+
+mod bindings;
+mod calibration;
+mod controller;
+mod sensitivity;
+mod stick_keys;
+mod touchpad;
+mod ui;
+
+const NEW_PROFILE: &str = "version = 1\n";
+
+fn profile_filename(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.starts_with('.')
+        || name.contains(['/', '\\'])
+        || name.chars().any(char::is_control)
+    {
+        return Err("Enter a profile name without path separators or control characters.".into());
+    }
+    Ok(if name.ends_with(".toml") {
+        name.to_owned()
+    } else {
+        format!("{name}.toml")
+    })
+}
+
+fn run_bridge(bridge: &Path, args: &[&Path]) -> Result<(), String> {
+    let output = Command::new(bridge)
+        .args(args)
+        .output()
+        .map_err(|error| format!("{}: {error}", bridge.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let message = String::from_utf8_lossy(&output.stderr);
+    if message.trim().is_empty() {
+        Err(format!("JoyShockRust exited with {}.", output.status))
+    } else {
+        Err(message.trim().into())
+    }
+}
+
+fn stage(directory: Option<&Path>, text: &str) -> io::Result<tempfile::NamedTempFile> {
+    let mut file = if let Some(directory) = directory {
+        fs::create_dir_all(directory)?;
+        tempfile::NamedTempFile::new_in(directory)?
+    } else {
+        tempfile::NamedTempFile::new()?
+    };
+    file.write_all(text.as_bytes())?;
+    file.as_file().sync_all()?;
+    Ok(file)
+}
+
+struct Editor {
+    bridge: PathBuf,
+    directory: PathBuf,
+    path: Option<PathBuf>,
+    original: String,
+    text: String,
+    name: String,
+    selected: &'static str,
+    calibration: sensitivity::CalibrationDraft,
+}
+
+impl Editor {
+    fn open(bridge: PathBuf, directory: PathBuf, path: Option<PathBuf>) -> io::Result<Self> {
+        let original = path
+            .as_ref()
+            .map_or_else(|| Ok(NEW_PROFILE.to_owned()), fs::read_to_string)?;
+        Ok(Self {
+            bridge,
+            directory,
+            path,
+            text: original.clone(),
+            original,
+            name: String::new(),
+            selected: "cross",
+            calibration: sensitivity::CalibrationDraft::default(),
+        })
+    }
+
+    fn validate(&self) -> Result<String, String> {
+        if let Some(error) = self.calibration.error {
+            return Err(error.into());
+        }
+        self.validate_profile_text(&self.text)?;
+        Ok("Profile is valid.".into())
+    }
+
+    fn validate_profile_text(&self, text: &str) -> Result<(), String> {
+        let staged = stage(None, text).map_err(|error| error.to_string())?;
+        run_bridge(&self.bridge, &[Path::new("--check-profile"), staged.path()])
+    }
+
+    fn save(&mut self) -> Result<PathBuf, String> {
+        if let Some(error) = self.calibration.error {
+            return Err(error.into());
+        }
+        if let Some(path) = &self.path {
+            let current =
+                fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+            if current != self.original {
+                return Err("The profile changed on disk. Reopen it before editing again.".into());
+            }
+            let staged = stage(None, &self.text).map_err(|error| error.to_string())?;
+            run_bridge(
+                &self.bridge,
+                &[Path::new("--install-profile"), staged.path(), path],
+            )?;
+            self.original.clone_from(&self.text);
+            return Ok(path.clone());
+        }
+        let path = self.directory.join(profile_filename(&self.name)?);
+        let staged = stage(Some(&self.directory), &self.text).map_err(|error| error.to_string())?;
+        run_bridge(&self.bridge, &[Path::new("--check-profile"), staged.path()])?;
+        staged
+            .persist_noclobber(&path)
+            .map_err(|error| format!("{}: {}", path.display(), error.error))?;
+        self.path = Some(path.clone());
+        self.original.clone_from(&self.text);
+        Ok(path)
+    }
+
+    fn save_and_apply(&mut self, apply: bool) -> Result<String, String> {
+        let path = self.save()?;
+        if apply {
+            run_bridge(&self.bridge, &[Path::new("--load-profile"), &path])
+                .map_err(|error| format!("Profile saved. Could not apply it: {error}"))?;
+            return Ok("Profile saved and applied.".into());
+        }
+        Ok("Profile saved.".into())
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = env::args_os().skip(1).peekable();
+    let bridge = env::current_exe()?.with_file_name("joyshockrust-linux");
+    if args.next_if(|arg| arg == "--calibrate-game").is_some() {
+        let [Some(profile), Some(node), None] = [args.next(), args.next(), args.next()] else {
+            return Err("usage: joyshockrust-editor --calibrate-game PROFILE HIDRAW".into());
+        };
+        return calibration::run(bridge, profile.into(), node.into());
+    }
+    let path = args.next().map(PathBuf::from);
+    if args.next().is_some() {
+        return Err("usage: joyshockrust-editor [PROFILE]".into());
+    }
+    let directory = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|home| home.join(".config"))
+        })
+        .ok_or("expected an absolute XDG_CONFIG_HOME or HOME")?
+        .join("joyshockrust/profiles");
+    let editor = std::rc::Rc::new(std::cell::RefCell::new(Editor::open(
+        bridge, directory, path,
+    )?));
+    gtk::gdk::set_allowed_backends("wayland");
+    let app = adw::Application::builder()
+        .application_id("io.github.aapokaapo.JoyShockRust.Editor")
+        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+    app.connect_activate(move |app| ui::open_window(app, editor.clone()));
+    if app.run_with_args(&["joyshockrust-editor"]) != adw::glib::ExitCode::SUCCESS {
+        return Err("Could not start the profile editor in a Wayland session".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_keep_new_profiles_in_the_profile_directory() {
+        assert_eq!(profile_filename("  My Game  ").unwrap(), "My Game.toml");
+        assert_eq!(profile_filename("Game.toml").unwrap(), "Game.toml");
+        for name in ["", "../test", "/tmp/escape", "a\\b", ".hidden", "a\nb"] {
+            assert!(profile_filename(name).is_err(), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn a_profile_changed_outside_the_editor_is_not_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("game.toml");
+        fs::write(&path, NEW_PROFILE).unwrap();
+        let mut editor = Editor::open(
+            directory.path().join("unused-bridge"),
+            directory.path().into(),
+            Some(path.clone()),
+        )
+        .unwrap();
+        editor.text.push_str("# Editor change\n");
+        let external = "version = 1\n# External change\n";
+        fs::write(&path, external).unwrap();
+        assert!(editor.save().unwrap_err().contains("changed on disk"));
+        assert_eq!(fs::read_to_string(path).unwrap(), external);
+    }
+}

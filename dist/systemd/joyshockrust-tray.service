@@ -1,0 +1,12 @@
+[Unit]
+Description=JoyShockRust desktop tray
+PartOf=graphical-session.target
+PropagatesStopTo=joyshockrust.service
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+[Service]
+Type=exec
+ExecStart=%h/.local/bin/joyshockrust-tray
+Restart=on-failure
+RestartSec=3s

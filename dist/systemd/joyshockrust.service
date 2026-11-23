@@ -1,0 +1,16 @@
+[Unit]
+Description=JoyShockRust USB controller bridge
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=%h/.local/bin/joyshockrust-linux --profile-if-present %E/joyshockrust/profile.toml --status-socket %t/joyshockrust/status.sock --reload-socket %t/joyshockrust/reload.sock
+RuntimeDirectory=joyshockrust
+RuntimeDirectoryMode=0700
+ExecReload=%h/.local/bin/joyshockrust-linux --reload-profile %t/joyshockrust/reload.sock
+Restart=on-failure
+RestartPreventExitStatus=78
+RestartSec=2s
+
+[Install]
+WantedBy=default.target

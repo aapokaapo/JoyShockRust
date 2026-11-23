@@ -4,7 +4,7 @@ use std::{fs, path::Path};
 use joyshockrust_core::{Button, Buttons, Controls, DPad, Stick};
 use joyshockrust_input::{
     DUALSENSE_EDGE_USB_REPORT_LEN, DeviceModel, InputReport, ParseError, RawImuSample, Timebase,
-    TimestampUpdate, Transport, parse_report,
+    TimestampUpdate, TouchContact, Transport, parse_report,
 };
 
 // Generated from the documented layout. These frames are synthetic fixtures.
@@ -13,6 +13,8 @@ fn neutral_frame() -> [u8; DUALSENSE_EDGE_USB_REPORT_LEN] {
     bytes[0] = 0x01;
     bytes[1..=4].fill(128);
     bytes[8] = 8;
+    bytes[33] = 0x80;
+    bytes[37] = 0x80;
     bytes
 }
 
@@ -36,6 +38,7 @@ fn replays_captured_dualsense_edge_usb() {
     let mut timebase = Timebase::new(6_000).unwrap();
     for (index, bytes) in frames.iter().enumerate() {
         let report = decode(bytes).unwrap_or_else(|err| panic!("frame {index}: {err}"));
+        assert_eq!(report.touch_contacts, [None, None]);
         let timestamp = timebase.observe(report.imu.device_ticks);
         match (index, timestamp) {
             (0, TimestampUpdate::FirstSample) => {}
@@ -90,7 +93,7 @@ fn replays_captured_dualsense_edge_usb() {
 fn validates_model_and_transport_before_decoding() {
     let edge = DeviceModel::from_vid_pid(0x054c, 0x0df2);
     assert_eq!(edge, DeviceModel::DualSenseEdge);
-    for (vendor_id, product_id) in [(0x054c, 0x0ce6), (0x0001, 0x0df2)] {
+    for (vendor_id, product_id) in [(0x054c, 0x05c4), (0x0001, 0x0df2)] {
         let other = DeviceModel::from_vid_pid(vendor_id, product_id);
         assert_eq!(
             other,
@@ -104,11 +107,37 @@ fn validates_model_and_transport_before_decoding() {
             Err(ParseError::UnsupportedDevice(other))
         );
     }
-    for transport in [Transport::Bluetooth, Transport::Other] {
-        assert_eq!(
-            parse_report(edge, transport, &neutral_frame(), None),
-            Err(ParseError::UnsupportedTransport(transport))
-        );
+    assert_eq!(
+        parse_report(edge, Transport::Other, &neutral_frame(), None),
+        Err(ParseError::UnsupportedTransport(Transport::Other))
+    );
+}
+
+#[test]
+fn model_specific_buttons_do_not_change_face_button_positions() {
+    let mut frame = neutral_frame();
+    frame[8] = 0x98;
+    frame[10] = 0xf7;
+    let standard = parse_report(DeviceModel::DualSense, Transport::Usb, &frame, None).unwrap();
+    let edge = parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap();
+    for button in [
+        Button::West,
+        Button::North,
+        Button::Home,
+        Button::TouchpadClick,
+        Button::MicrophoneMute,
+    ] {
+        assert!(standard.controls.buttons.contains(button));
+        assert!(edge.controls.buttons.contains(button));
+    }
+    for button in [
+        Button::LeftFunction,
+        Button::RightFunction,
+        Button::LeftPaddle,
+        Button::RightPaddle,
+    ] {
+        assert!(!standard.controls.buttons.contains(button));
+        assert!(edge.controls.buttons.contains(button));
     }
 }
 
@@ -245,13 +274,66 @@ fn preserves_signed_counts_timestamps_and_counter() {
 }
 
 #[test]
+fn usb_decodes_battery_charge_and_error_states() {
+    use joyshockrust_input::{BatteryReading, BatteryState::*};
+
+    let mut frame = neutral_frame();
+    for (status, state, percent) in [
+        (0x06, Discharging, Some(65)),
+        (0x1a, Charging, Some(100)),
+        (0x29, Full, Some(100)),
+        (0xa7, NotCharging, None),
+        (0xb7, NotCharging, None),
+        (0xf7, Unknown, None),
+        (0x39, Unknown, None),
+    ] {
+        frame[53] = status;
+        assert_eq!(
+            decode(&frame).unwrap().battery,
+            BatteryReading { state, percent }
+        );
+    }
+}
+
+#[test]
 fn ignores_reserved_bits_and_tail() {
     let mut frame = neutral_frame();
     let expected = decode(&frame).unwrap();
     frame[10] |= 0x08;
     frame[11..16].fill(0xff);
-    frame[32..].fill(0xff);
+    frame[32] = 0xff;
+    frame[41..53].fill(0xff);
+    frame[54..].fill(0xff);
     assert_eq!(decode(&frame).unwrap(), expected);
+}
+
+#[test]
+fn decodes_two_touch_contacts_independently_of_the_click() {
+    let mut frame = neutral_frame();
+    frame[33..41].copy_from_slice(&[0x21, 0x45, 0x63, 0x12, 0x7f, 0x7f, 0x77, 0x43]);
+    let report = decode(&frame).unwrap();
+    assert!(!report.controls.buttons.contains(Button::TouchpadClick));
+    assert_eq!(
+        report.touch_contacts,
+        [
+            Some(TouchContact {
+                id: 0x21,
+                x: 0x345,
+                y: 0x126
+            }),
+            Some(TouchContact {
+                id: 0x7f,
+                x: 1919,
+                y: 1079
+            }),
+        ]
+    );
+    frame[10] |= 2;
+    frame[33] |= 0x80; // Stale coordinates in an inactive slot.
+    frame[38] += 1; // X = 1920, outside the touch surface.
+    let report = decode(&frame).unwrap();
+    assert!(report.controls.buttons.contains(Button::TouchpadClick));
+    assert_eq!(report.touch_contacts, [None, None]);
 }
 
 #[test]
