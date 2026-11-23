@@ -748,7 +748,9 @@ Under **Gyro response**, set a minimum aim speed and the start and end
 speeds for acceleration, in degrees per second. The acceleration
 multiplier ramps up between those speeds and caps at the selected value.
 Turn off **Gyro acceleration** to suspend the boost while retaining its
-settings. **Minimum speed** still applies independently.
+settings. **Minimum speed** still applies independently. Its default of
+0.2°/s filters small residual movement after calibration. Set it to 0 to
+use every measured movement.
 Under **Flick Stick**, **Axial threshold** snaps the initial flick to
 the nearest cardinal direction inside the chosen angle, with a smooth
 transition outside it. The default is 4°. While the stick is held,
@@ -1000,7 +1002,9 @@ correction whenever it opens gyro output for that controller. Calibration
 is stored by controller ID in `$XDG_CONFIG_HOME/joyshockrust/gyro-calibration/`
 or under `~/.config` if XDG_CONFIG_HOME is unset. Cancel before saving to
 discard the measurement. A saved correction takes precedence over the
-optional session-start stationary calibration.
+optional session-start stationary calibration. Look for
+`Applied saved controller gyro calibration` in the bridge log to verify
+the stored correction was loaded.
 
 In the profile editor, open **Gyro → Controller gyro calibration** and
 choose **PS button** under **Hold button**. Save and apply the profile.

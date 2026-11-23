@@ -91,7 +91,7 @@ pub struct GyroResponse {
 impl Default for GyroResponse {
     fn default() -> Self {
         Self {
-            min_speed: 0.0,
+            min_speed: 0.2,
             accel_start: 30.0,
             accel_end: 180.0,
             multiplier: 1.0,
@@ -204,7 +204,14 @@ mod tests {
         assert_eq!(disabled.gain([0.0, 120.0, 0.0]), 1.0);
         assert_eq!(disabled.values(), curve.values());
         assert_eq!(disabled.with_acceleration_enabled(true), curve);
-        assert_eq!(GyroResponse::default().gain([0.0; 3]), 1.0);
+        assert_eq!(GyroResponse::default().gain([0.0; 3]), 0.0);
+        assert_eq!(GyroResponse::default().gain([0.0, 0.25, 0.0]), 1.0);
+        assert_eq!(
+            GyroResponse::new(0.0, 30.0, 180.0, 1.0)
+                .unwrap()
+                .gain([0.0, 0.1, 0.0]),
+            1.0
+        );
         assert!(GyroResponse::new(0.0, 10.0, 10.0, 1.0).is_err());
         assert!(GyroResponse::new(0.0, 10.0, 100.0, f64::NAN).is_err());
     }

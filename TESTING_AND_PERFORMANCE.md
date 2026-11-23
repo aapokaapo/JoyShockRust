@@ -992,8 +992,10 @@ Move the controller just before the window completes and verify it
 needs a fresh five-second interval. Cancel at the confirmation step. Check that the earlier correction is preserved and
 that virtual outputs resume. Repeat and save, then open a gyro-enabled
 profile and compare stationary drift and deliberate slow aim. Verify that
-the same correction is used after reconnect and that a second controller
-keeps its own correction.
+the bridge logs the saved correction after reconnect and that a second
+controller keeps its own correction. With the default minimum speed,
+leave the controller on the surface and check the cursor stays still,
+then turn it slowly to confirm that deliberate aim still moves it.
 
 Bind **Gyro → Controller gyro calibration → Hold button** to PS. Verify
 a tap leaves calibration idle. Hold PS for 1.5 seconds, then release it

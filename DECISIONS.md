@@ -601,7 +601,9 @@ above 20 keeps the recorded sensitivity and caps only the slider position.
 Linking uses the horizontal value as the starting point and edits both
 TOML values together. The link switch is part of the editor session. The gyro acceleration
 switch is saved with the profile. Disabling it retains the configured
-curve and keeps applying the minimum-speed cutoff.
+curve and keeps applying the minimum-speed cutoff. The default cutoff
+of 0.2°/s suppresses small residual bias after calibration. An explicit
+zero retains unfiltered slow aim.
 
 The status reply includes a display filename and, when known, the
 active profile's absolute path as encoded bytes. RWC uses the exact path

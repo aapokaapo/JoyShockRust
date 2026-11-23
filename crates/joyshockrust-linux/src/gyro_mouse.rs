@@ -189,6 +189,9 @@ impl GyroMouse {
         } else {
             None
         };
+        if stored.is_some() {
+            eprintln!("Applied saved controller gyro calibration");
+        }
         Ok(Self {
             aim: GyroAim::new(factory, options.calibrate, options.gyro_scale(), stored)
                 .with_response(options.response),
@@ -669,6 +672,45 @@ mod tests {
             assert_eq!(corrected.advance(sample, true), [0; 2]);
             horizontal += uncorrected.advance(sample, true)[0];
         }
+        assert!(horizontal < 0);
+    }
+
+    #[test]
+    fn small_residual_drift_after_saved_calibration_does_not_move_the_pointer() {
+        let rest = RawImuSample {
+            gyro_counts: [0, 8, 0],
+            ..sample(0)
+        };
+        let gyro_bias_dps = aim(false).factory.convert(rest).gyro_dps;
+        let mut aim = aim_with_bias(false, Some(Calibration { gyro_bias_dps }));
+        aim.set_sensitivity([200.0, 200.0]);
+
+        for ms in (0..=5000).step_by(10) {
+            let drift = RawImuSample {
+                // 0.125 degrees per second above the saved bias.
+                gyro_counts: [0, 10, 0],
+                device_ticks: ms * 3000,
+                ..rest
+            };
+            assert_eq!(aim.advance(drift, true), [0; 2]);
+        }
+        let deliberate_turn = RawImuSample {
+            // 0.25 degrees per second above the saved bias.
+            gyro_counts: [0, 12, 0],
+            ..rest
+        };
+        let horizontal: i32 = (5010..=5100)
+            .step_by(10)
+            .map(|ms| {
+                aim.advance(
+                    RawImuSample {
+                        device_ticks: ms * 3000,
+                        ..deliberate_turn
+                    },
+                    true,
+                )[0]
+            })
+            .sum();
         assert!(horizontal < 0);
     }
 
