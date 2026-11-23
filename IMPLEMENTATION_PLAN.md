@@ -186,6 +186,7 @@ and double-tap keys. Analog trigger travel can drive the same gestures
 with independent press and release thresholds per binding. Gestures can
 also target mouse buttons through a dedicated virtual pointer. Touchpad
 grid contacts, region clicks, and two-input chords can feed these gestures.
+Each gesture can emit a shortcut with multiple keyboard keys.
 Deadline and output handling have synthetic coverage. The bridge supports
 keyboard and mouse profiles with the virtual gamepad disabled. Analog
 stick bindings support direction keys,

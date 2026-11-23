@@ -30,9 +30,16 @@ struct RawBinding {
     button: Option<String>,
     trigger: Option<String>,
     chord: Option<Vec<String>>,
-    tap: Option<String>,
-    hold: Option<String>,
-    double_tap: Option<String>,
+    tap: Option<RawOutput>,
+    hold: Option<RawOutput>,
+    double_tap: Option<RawOutput>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawOutput {
+    Single(String),
+    Shortcut(Vec<String>),
 }
 
 #[derive(PartialEq)]
@@ -46,9 +53,10 @@ impl Config {
         self.buttons
             .iter()
             .flat_map(|binding| {
-                [binding.tap, binding.hold, binding.double_tap]
+                [&*binding.tap, &*binding.hold, &*binding.double_tap]
                     .into_iter()
                     .flatten()
+                    .copied()
             })
             .chain(self.sticks.iter().flat_map(|binding| binding.keys()))
     }
@@ -77,17 +85,47 @@ fn is_mouse_button(key: KeyCode) -> bool {
     )
 }
 
-fn parse_gesture_key(name: Option<String>) -> Result<Option<KeyCode>, String> {
-    name.as_deref()
-        .map(|name| {
-            if let Ok(button) = name.parse::<KeyCode>()
-                && is_mouse_button(button)
-            {
-                return Ok(button);
+fn is_modifier(key: KeyCode) -> bool {
+    matches!(
+        key,
+        KeyCode::KEY_LEFTCTRL
+            | KeyCode::KEY_RIGHTCTRL
+            | KeyCode::KEY_LEFTSHIFT
+            | KeyCode::KEY_RIGHTSHIFT
+            | KeyCode::KEY_LEFTALT
+            | KeyCode::KEY_RIGHTALT
+            | KeyCode::KEY_LEFTMETA
+            | KeyCode::KEY_RIGHTMETA
+    )
+}
+
+impl RawOutput {
+    fn resolve(output: Option<Self>) -> Result<Box<[KeyCode]>, String> {
+        match output {
+            None => Ok(Box::default()),
+            Some(Self::Single(name)) => {
+                let key = match name.parse::<KeyCode>() {
+                    Ok(button) if is_mouse_button(button) => button,
+                    _ => keyboard_key(&name)?,
+                };
+                Ok(Box::new([key]))
             }
-            keyboard_key(name)
-        })
-        .transpose()
+            Some(Self::Shortcut(names)) => {
+                if names.is_empty() {
+                    return Err("keyboard shortcut needs at least one key".into());
+                }
+                let mut keys = names
+                    .iter()
+                    .map(|name| keyboard_key(name))
+                    .collect::<Result<Vec<_>, _>>()?;
+                keys.sort_unstable_by_key(|key| key.0);
+                if keys.windows(2).any(|pair| pair[0] == pair[1]) {
+                    return Err("keyboard shortcut keys must be distinct".into());
+                }
+                Ok(keys.into_boxed_slice())
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -99,12 +137,12 @@ enum Source {
     TouchClick(TouchRegion),
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 struct Binding {
     source: BindingSource,
-    tap: Option<KeyCode>,
-    hold: Option<KeyCode>,
-    double_tap: Option<KeyCode>,
+    tap: Box<[KeyCode]>,
+    hold: Box<[KeyCode]>,
+    double_tap: Box<[KeyCode]>,
 }
 
 #[derive(Clone, Copy)]
@@ -219,11 +257,11 @@ impl Settings {
             }
             let binding = Binding {
                 source,
-                tap: parse_gesture_key(raw.tap)?,
-                hold: parse_gesture_key(raw.hold)?,
-                double_tap: parse_gesture_key(raw.double_tap)?,
+                tap: RawOutput::resolve(raw.tap)?,
+                hold: RawOutput::resolve(raw.hold)?,
+                double_tap: RawOutput::resolve(raw.double_tap)?,
             };
-            if binding.tap.is_none() && binding.hold.is_none() && binding.double_tap.is_none() {
+            if binding.tap.is_empty() && binding.hold.is_empty() && binding.double_tap.is_empty() {
                 return Err(format!(
                     "keyboard binding for {name} needs at least one key"
                 ));
@@ -270,12 +308,7 @@ struct Gesture {
 }
 
 impl Gesture {
-    fn update(
-        &mut self,
-        input: &Input,
-        click: Option<TouchContact>,
-        now: Instant,
-    ) -> Option<KeyCode> {
+    fn update(&mut self, input: &Input, click: Option<TouchContact>, now: Instant) -> &[KeyCode] {
         let pressed = match self.binding.source {
             BindingSource::Single(source) => {
                 self.source_pressed[0] = source.pressed(input, click, self.source_pressed[0]);
@@ -291,14 +324,14 @@ impl Gesture {
                 self.source_pressed[0] && self.source_pressed[1]
             }
         };
-        let mut pulse = None;
+        let mut pulse: &[KeyCode] = &[];
         if self.pending_tap.is_some_and(|deadline| deadline <= now) {
             self.pending_tap = None;
-            pulse = self.binding.tap;
+            pulse = &self.binding.tap;
         }
         match self.press {
             Press::Up
-                if pressed && self.binding.tap.is_none() && self.binding.double_tap.is_none() =>
+                if pressed && self.binding.tap.is_empty() && self.binding.double_tap.is_empty() =>
             {
                 self.press = Press::Held;
             }
@@ -306,18 +339,18 @@ impl Gesture {
             Press::Down(start) if !pressed => {
                 self.press = Press::Up;
                 if now.duration_since(start) < HOLD_TIME {
-                    if let Some(double_tap) = self.binding.double_tap {
+                    if !self.binding.double_tap.is_empty() {
                         if self.pending_tap.take().is_some() {
-                            pulse = Some(double_tap);
+                            pulse = &self.binding.double_tap;
                         } else {
                             self.pending_tap = Some(now + DOUBLE_TAP_WINDOW);
                         }
                     } else {
-                        pulse = self.binding.tap;
+                        pulse = &self.binding.tap;
                     }
                 }
             }
-            Press::Down(start) if self.binding.hold.is_some() && now >= start + HOLD_TIME => {
+            Press::Down(start) if !self.binding.hold.is_empty() && now >= start + HOLD_TIME => {
                 self.press = Press::Held;
             }
             Press::Held if !pressed => self.press = Press::Up,
@@ -328,7 +361,7 @@ impl Gesture {
 
     fn deadline(&self) -> Option<Instant> {
         let hold = match self.press {
-            Press::Down(start) if self.binding.hold.is_some() => Some(start + HOLD_TIME),
+            Press::Down(start) if !self.binding.hold.is_empty() => Some(start + HOLD_TIME),
             _ => None,
         };
         hold.into_iter().chain(self.pending_tap).min()
@@ -369,7 +402,8 @@ impl State {
         let gestures = config
             .buttons
             .iter()
-            .map(|&binding| Gesture {
+            .cloned()
+            .map(|binding| Gesture {
                 binding,
                 source_pressed: [false; 2],
                 press: Press::Up,
@@ -377,7 +411,7 @@ impl State {
             })
             .collect();
         let mapped_keys: AttributeSet<KeyCode> = config.keys().collect();
-        let events = Vec::with_capacity(mapped_keys.iter().count());
+        let key_count = mapped_keys.iter().count();
         Self {
             gestures,
             sticks: config
@@ -386,8 +420,8 @@ impl State {
                 .copied()
                 .map(stick::State::new)
                 .collect(),
-            // Each binding has at most two distinct pulse targets.
-            pulses: Vec::with_capacity(config.buttons.len() * 2),
+            // At most one pulse deadline per mapped key.
+            pulses: Vec::with_capacity(key_count),
             mapped_keys,
             outer_keys: config
                 .sticks
@@ -401,7 +435,7 @@ impl State {
                 .collect(),
             held: AttributeSet::new(),
             next_held: AttributeSet::new(),
-            events,
+            events: Vec::with_capacity(key_count),
             input: Input::default(),
             click: None,
         }
@@ -428,7 +462,7 @@ impl State {
         let mut deadline = None;
         self.pulses.retain(|&(_, until)| until > now);
         for gesture in &mut self.gestures {
-            if let Some(key) = gesture.update(&input, self.click, now) {
+            for &key in gesture.update(&input, self.click, now) {
                 let until = now + TAP_KEY_TIME;
                 if let Some(pulse) = self.pulses.iter_mut().find(|pulse| pulse.0 == key) {
                     pulse.1 = until;
@@ -436,10 +470,10 @@ impl State {
                     self.pulses.push((key, until));
                 }
             }
-            if matches!(gesture.press, Press::Held)
-                && let Some(key) = gesture.binding.hold
-            {
-                held.insert(key);
+            if matches!(gesture.press, Press::Held) {
+                for &key in &gesture.binding.hold {
+                    held.insert(key);
+                }
             }
             deadline = deadline.into_iter().chain(gesture.deadline()).min();
         }
@@ -454,25 +488,33 @@ impl State {
                 .min();
         }
         self.events.clear();
-        // Held outer modifiers wrap movement. Sprint pulses start after movement.
-        for outer in [false, true] {
-            for key in self
-                .held
+        self.events.extend(
+            self.held
                 .iter()
-                .filter(|&key| !held.contains(key) && self.outer_keys.contains(key) == outer)
-            {
-                self.events.push(key_event(key, 0));
-            }
-        }
-        for (outer, pulsed) in [(true, false), (false, false), (false, true)] {
-            for key in held.iter().filter(|&key| {
-                !self.held.contains(key)
-                    && self.outer_keys.contains(key) == outer
-                    && self.pulsed_outer_keys.contains(key) == pulsed
-            }) {
-                self.events.push(key_event(key, 1));
-            }
-        }
+                .filter(|&key| !held.contains(key))
+                .map(|key| key_event(key, 0)),
+        );
+        sort_releases(&mut self.events, &self.outer_keys);
+        let releases = self.events.len();
+        self.events.extend(
+            held.iter()
+                .filter(|&key| !self.held.contains(key))
+                .map(|key| key_event(key, 1)),
+        );
+        // Shortcut modifiers precede other keys. Sprint pulses follow movement.
+        self.events[releases..].sort_unstable_by_key(|event| {
+            let key = KeyCode(event.code());
+            let order = if self.outer_keys.contains(key) {
+                0
+            } else if self.pulsed_outer_keys.contains(key) {
+                3
+            } else if is_modifier(key) {
+                1
+            } else {
+                2
+            };
+            (order, key.0)
+        });
         if !self.events.is_empty() {
             emit(&self.events)?;
         }
@@ -483,6 +525,13 @@ impl State {
 
 fn key_event(key: KeyCode, value: i32) -> InputEvent {
     InputEvent::new(EventType::KEY.0, key.0, value)
+}
+
+fn sort_releases(events: &mut [InputEvent], outer_keys: &AttributeSet<KeyCode>) {
+    events.sort_unstable_by_key(|event| {
+        let key = KeyCode(event.code());
+        (outer_keys.contains(key), is_modifier(key), key.0)
+    });
 }
 
 pub struct Keyboard {
@@ -586,6 +635,7 @@ impl Keyboard {
         let events = &mut self.state.events;
         events.clear();
         events.extend(self.state.held.iter().map(|key| key_event(key, 0)));
+        sort_releases(events, &self.state.outer_keys);
         if !events.is_empty() {
             self.outputs.emit(events)?;
         }
@@ -1254,6 +1304,85 @@ mod tests {
                 crate::profile::parse(&format!("version = 1\n{invalid}")).is_err(),
                 "{invalid}"
             );
+        }
+    }
+
+    #[test]
+    fn keyboard_shortcuts_order_modifiers_and_preserve_shared_keys() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            button = "cross"
+            tap = ["KEY_TAB", "KEY_LEFTCTRL", "KEY_LEFTSHIFT"]
+            [[keyboard.bindings]]
+            button = "l1"
+            hold = "KEY_LEFTCTRL"
+        "#,
+        );
+        let mut state = State::new(&config);
+        let start = Instant::now();
+        let ctrl = KeyCode::KEY_LEFTCTRL.0;
+        let shift = KeyCode::KEY_LEFTSHIFT.0;
+        let tab = KeyCode::KEY_TAB.0;
+        let mut events = Vec::with_capacity(3);
+        let allocations = allocation_counter::measure(|| {
+            for (ms, cross, shoulder, expected, end) in [
+                (0, true, false, &[][..], None),
+                (
+                    10,
+                    false,
+                    false,
+                    &[(ctrl, 1), (shift, 1), (tab, 1)][..],
+                    Some(40),
+                ),
+                (
+                    40,
+                    false,
+                    false,
+                    &[(tab, 0), (ctrl, 0), (shift, 0)][..],
+                    None,
+                ),
+                (50, true, true, &[(ctrl, 1)][..], None),
+                (60, false, true, &[(shift, 1), (tab, 1)][..], Some(90)),
+                (90, false, true, &[(tab, 0), (shift, 0)][..], None),
+                (100, false, false, &[(ctrl, 0)][..], None),
+            ] {
+                let mut controls = Controls::default();
+                if cross {
+                    controls.buttons.insert(Button::South);
+                }
+                if shoulder {
+                    controls.buttons.insert(Button::LeftShoulder);
+                }
+                events.clear();
+                let deadline = state
+                    .update(
+                        input(controls),
+                        start + Duration::from_millis(ms),
+                        |batch| {
+                            events.extend(batch.iter().map(|event| (event.code(), event.value())));
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(events, expected);
+                assert_eq!(deadline, end.map(|ms| start + Duration::from_millis(ms)));
+            }
+        });
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn keyboard_shortcuts_reject_empty_duplicate_and_non_keyboard_keys() {
+        for value in [
+            "[]",
+            "['KEY_TAB', 'KEY_TAB']",
+            "['KEY_LEFTCTRL', 'KEY_MISSING']",
+            "['KEY_LEFTCTRL', 'BTN_LEFT']",
+        ] {
+            let profile =
+                format!("version = 1\n[[keyboard.bindings]]\nbutton = 'cross'\nhold = {value}\n");
+            assert!(crate::profile::parse(&profile).is_err(), "{value}");
         }
     }
 }

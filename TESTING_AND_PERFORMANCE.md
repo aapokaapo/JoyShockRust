@@ -657,6 +657,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     in a keyboard binding. Press L1 and R2 in both orders. Confirm the
     right mouse button is held only when both are active, including when
     R2 starts above 0.6 and backs off slightly before L1 is pressed.
+11. Add a binding with `button = "create"` and
+    `tap = ["KEY_LEFTCTRL", "KEY_TAB"]`. Tap Create with a browser
+    focused and check that it switches tabs once. In a key-event viewer,
+    check that Ctrl presses before Tab and releases after Tab.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

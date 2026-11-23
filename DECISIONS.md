@@ -375,4 +375,9 @@ region selection. Deadlines reuse the last report's contact state.
 Keyboard and mouse chords are symmetric pairs of physical inputs. Each
 member retains its own trigger hysteresis. Both must be active for the
 chord's gesture, and standalone bindings remain independent.
+
+Keyboard gesture outputs accept either a single target or a set of
+keyboard keys. A gesture activates its set together and shares key
+ownership with other bindings. Ctrl, Shift, Alt and Meta precede regular
+key presses and follow regular key releases.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)

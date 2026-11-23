@@ -212,6 +212,17 @@ less than 300 ms apart trigger the double-tap key. A single tap waits
 for that window when a double-tap binding is configured. Tap outputs
 hold the virtual key briefly so games can observe the press.
 
+Give `tap`, `hold`, or `double_tap` an array of distinct `KEY_*` names
+to send a keyboard shortcut. Ctrl, Shift, Alt and Meta are pressed
+before the other keys and released after them. A key that another
+active binding still holds stays down.
+
+```toml
+[[keyboard.bindings]]
+button = "create"
+tap = ["KEY_LEFTCTRL", "KEY_TAB"]
+```
+
 Use `trigger` in place of `button` for an analog L2 or R2 binding.
 The optional suffix sets the engagement and release thresholds on a
 scale from 0 to 1. The defaults are 0.45 and 0.35. Bindings at different
