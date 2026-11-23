@@ -260,11 +260,12 @@ response previews and editable game calibration values. The GTK 4 editor
 uses libadwaita navigation and follows the system appearance. The tray shows the active profile's
 filename for startup profiles and successful live loads.
 
-The Touchpad page edits grid dimensions and per-cell gamepad mappings
-for contact and click independently. Resizing checks cell references
-in gamepad, gyro and keyboard bindings.
+The Touchpad page edits grid dimensions and per-cell gamepad, keyboard
+and mouse actions for contact and click independently. It also lets a
+cell serve as the gyro input. Resizing checks cell references in gamepad,
+gyro and keyboard bindings.
 
-Next, add structured editing for touchpad keyboard and gyro bindings.
+Next, extend structured editing to keyboard stick directions and zones.
 A dedicated calibration dialog can eventually replace the terminal prompts.
 
 ## Change control

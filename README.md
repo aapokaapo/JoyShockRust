@@ -673,6 +673,14 @@ In **Touchpad**, set the number of rows and columns, select a grid
 cell, and assign separate virtual gamepad buttons to **Touch** and
 **Click**. Choose **No action** to clear a mapping. Clear or update the
 bindings in any cells you want to remove before shrinking the grid.
+The **Keyboard and mouse** groups assign tap, hold and double-tap actions
+separately for touch and click.
+
+In **Gyro activation**, choose **Enable while touching** or another mode
+to use the selected cell as the profile's gyro input. Choosing a mode in
+another cell moves the touch binding. Clearing the binding leaves
+configured gyro aim always on. Physical button, analog trigger and chord
+gyro bindings can be edited in **Advanced**.
 
 The **Sticks** page previews each virtual stick's response curve. Each
 exponent ranges from 0.25 to 4.00 in 0.05 increments. An exponent of 1.00

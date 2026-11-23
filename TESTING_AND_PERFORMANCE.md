@@ -862,8 +862,15 @@ In **Touchpad**, set a grid with one row and two columns. Select the
 right cell and assign **Touch** to Cross and **Click** to Square. Try
 reducing the grid to one column and confirm the editor rejects the change.
 Save and apply the two-column grid, reopen it, and check the two actions
-on the virtual gamepad while touching and clicking the right half. The
-widget test runs without a controller in a Wayland session.
+on the virtual gamepad while touching and clicking the right half.
+Under **Keyboard and mouse · Touch**, set **Tap** to **Space**. Under
+**Keyboard and mouse · Click**, set **Hold** to **Left mouse**. Under
+**Gyro activation**, choose **Enable while touching**. Save and apply.
+Tap the right half and check for a Space press. Hold a click there and
+check for a held mouse button. Move the controller while touching each
+half and verify gyro aim only activates on the right. Reopen the
+profile and verify all three settings. The widget test runs without a
+controller in a Wayland session.
 
 ```sh
 cargo test --locked -p joyshockrust-editor touchpad_widgets_edit_the_selected_cell -- --ignored

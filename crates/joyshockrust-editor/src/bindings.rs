@@ -43,11 +43,25 @@ fn keyboard_bindings(doc: &DocumentMut) -> Result<Option<&ArrayOfTables>, &'stat
         .transpose()
 }
 
+pub(crate) fn region_input(input: &str) -> Option<(&str, i64, i64)> {
+    let (kind, location) = input.split_once(':')?;
+    if !matches!(kind, "touch" | "click") {
+        return None;
+    }
+    let (row, column) = location.split_once(':')?;
+    Some((kind, row.parse().ok()?, column.parse().ok()?))
+}
+
 fn binding_index(bindings: &ArrayOfTables, button: &str) -> Result<Option<usize>, &'static str> {
-    let mut matching = bindings
-        .iter()
-        .enumerate()
-        .filter(|(_, table)| table.get("button").and_then(Item::as_str) == Some(button));
+    let cell = region_input(button);
+    let mut matching = bindings.iter().enumerate().filter(|(_, table)| {
+        table
+            .get("button")
+            .and_then(Item::as_str)
+            .is_some_and(|name| {
+                name == button || cell.is_some_and(|cell| region_input(name) == Some(cell))
+            })
+    });
     let Some((index, binding)) = matching.next() else {
         return Ok(None);
     };

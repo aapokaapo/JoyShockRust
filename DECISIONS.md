@@ -519,8 +519,11 @@ curve plots use custom drawing. The toolkit handles system appearance.
 
 The editor’s Touchpad page updates the existing grid and region TOML.
 Resizing rejects a dimension change if it would invalidate a cell
-referenced by gamepad, keyboard or gyro bindings. Saving uses the
-bridge’s existing validation.
+referenced by gamepad, keyboard or gyro bindings. Touch and click reuse
+the keyboard gesture editor. Gyro uses the profile's single activation
+binding. Moving a simple touch binding keeps the existing sensitivity
+and calibration settings. Button, trigger and chord bindings remain
+editable in Advanced TOML. Saving uses the bridge's existing validation.
 
 The status reply includes the filename of the last applied profile,
 without its directory. Named live loads carry the filename with the

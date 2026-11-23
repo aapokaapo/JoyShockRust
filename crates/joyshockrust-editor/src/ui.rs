@@ -312,6 +312,20 @@ mod tests {
             .find(|row| row.title() == "Click")
             .unwrap()
             .set_selected(3);
+        let groups = descendants::<adw::PreferencesGroup>(&page);
+        let keyboard = groups
+            .iter()
+            .find(|group| group.title() == "Keyboard and mouse · Touch")
+            .unwrap();
+        descendants::<adw::ComboRow>(keyboard.upcast_ref())
+            .into_iter()
+            .find(|row| row.title() == "Tap")
+            .unwrap()
+            .set_selected(1);
+        rows.iter()
+            .find(|row| row.title() == "Touch activation")
+            .unwrap()
+            .set_selected(1);
         let doc = ctx.document().unwrap();
         assert_eq!(doc["touchpad"]["columns"].as_integer(), Some(3));
         let regions = doc["touchpad"]["regions"].as_array_of_tables().unwrap();
@@ -319,5 +333,11 @@ mod tests {
         assert_eq!(region["column"].as_integer(), Some(3));
         assert_eq!(region["touch"].as_str(), Some("cross"));
         assert_eq!(region["click"].as_str(), Some("square"));
+        let keyboard = crate::bindings::keyboard_binding(&doc, "touch:1:3")
+            .unwrap()
+            .unwrap();
+        assert_eq!(keyboard["tap"].as_str(), Some("KEY_SPACE"));
+        assert_eq!(doc["gyro"]["binding"]["input"].as_str(), Some("touch:1:3"));
+        assert_eq!(doc["gyro"]["binding"]["mode"].as_str(), Some("hold"));
     }
 }

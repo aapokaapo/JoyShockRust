@@ -257,34 +257,14 @@ fn show_bindings(
         .description("Keyboard and mouse actions")
         .build();
     inspector.append(&keyboard);
-    match bindings::keyboard_binding(&doc, selected) {
-        Ok(binding) => {
-            for gesture in Gesture::ALL {
-                let value = binding.and_then(|binding| bindings::gesture_output(binding, gesture));
-                if value.is_some_and(|value| value.as_str().is_none()) {
-                    unavailable(
-                        &keyboard,
-                        gesture.label(),
-                        "Edit this custom action in Advanced TOML.",
-                    );
-                    continue;
-                }
-                let ctx = ctx.clone();
-                let button = button.clone();
-                keyboard.add(&dropdown(
-                    gesture.label(),
-                    value.and_then(|value| value.as_str()),
-                    "No action",
-                    key_choices(),
-                    move |next| {
-                        edit_binding(&ctx, &button, selected, |doc| {
-                            bindings::set_key(doc, selected, gesture, next)
-                        })
-                    },
-                ));
-            }
-        }
-        Err(error) => unavailable(&keyboard, "Keyboard bindings", error),
+    let key_ctx = ctx.clone();
+    let key_button = button.clone();
+    for row in keyboard_rows(&doc, selected, move |gesture, output| {
+        edit_binding(&key_ctx, &key_button, selected, |doc| {
+            bindings::set_key(doc, selected, gesture, output)
+        });
+    }) {
+        keyboard.add(&row);
     }
     if !selected.starts_with("dpad-") {
         let gamepad = adw::PreferencesGroup::builder()
@@ -313,6 +293,36 @@ fn show_bindings(
     }
 }
 
+pub(crate) fn keyboard_rows(
+    doc: &DocumentMut,
+    input: &str,
+    changed: impl Fn(Gesture, Option<&str>) + Clone + 'static,
+) -> Vec<adw::PreferencesRow> {
+    let binding = match bindings::keyboard_binding(doc, input) {
+        Ok(binding) => binding,
+        Err(error) => return vec![message_row("Keyboard bindings", error).upcast()],
+    };
+    Gesture::ALL
+        .into_iter()
+        .map(|gesture| {
+            let value = binding.and_then(|binding| bindings::gesture_output(binding, gesture));
+            if value.is_some_and(|value| value.as_str().is_none()) {
+                return message_row(gesture.label(), "Edit this custom action in Advanced TOML.")
+                    .upcast();
+            }
+            let changed = changed.clone();
+            dropdown(
+                gesture.label(),
+                value.and_then(|item| item.as_str()),
+                "No action",
+                key_choices(),
+                move |output| changed(gesture, output),
+            )
+            .upcast()
+        })
+        .collect()
+}
+
 fn edit_binding(
     ctx: &Context,
     button: &glib::WeakRef<gtk::ToggleButton>,
@@ -337,12 +347,14 @@ fn mark_assigned(button: &gtk::ToggleButton, doc: &DocumentMut, id: &str) {
 }
 
 fn unavailable(group: &adw::PreferencesGroup, title: &str, detail: &str) {
-    group.add(
-        &adw::ActionRow::builder()
-            .title(title)
-            .subtitle(detail)
-            .build(),
-    );
+    group.add(&message_row(title, detail));
+}
+
+pub(crate) fn message_row(title: &str, detail: &str) -> adw::ActionRow {
+    adw::ActionRow::builder()
+        .title(title)
+        .subtitle(detail)
+        .build()
 }
 
 fn key_choices() -> impl Iterator<Item = (String, String)> {

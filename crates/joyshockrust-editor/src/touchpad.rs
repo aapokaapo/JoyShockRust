@@ -2,7 +2,7 @@ use adw::{gtk, prelude::*};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike, Value, value};
 
 use crate::{
-    bindings::replace_value,
+    bindings::{self, Gesture, region_input, replace_value},
     controller,
     ui::{self, Context},
 };
@@ -29,16 +29,13 @@ impl Cell {
         (1..=size.row).contains(&self.row) && (1..=size.column).contains(&self.column)
     }
 
+    fn input(self, kind: &str) -> String {
+        format!("{kind}:{}:{}", self.row, self.column)
+    }
+
     fn from_input(input: &str) -> Option<Self> {
-        let (kind, location) = input.trim().split_once(':')?;
-        if !matches!(kind, "touch" | "click") {
-            return None;
-        }
-        let (row, column) = location.split_once(':')?;
-        Some(Self {
-            row: row.parse().ok()?,
-            column: column.parse().ok()?,
-        })
+        let (_, row, column) = region_input(input)?;
+        Some(Self { row, column })
     }
 }
 
@@ -219,6 +216,92 @@ fn set_output(
     Ok(())
 }
 
+const GYRO_MODES: [(&str, &str); 5] = [
+    ("hold", "Enable while touching"),
+    ("disable-while-held", "Disable while touching"),
+    ("toggle", "Toggle on contact"),
+    ("tap-hold", "Toggle on tap, enable while held"),
+    ("double-tap", "Toggle on double tap"),
+];
+const ADVANCED_GYRO: &str = "Edit the existing gyro binding in Advanced TOML.";
+
+fn gyro_binding(doc: &DocumentMut) -> Result<Option<(Cell, &str)>, &'static str> {
+    let Some(gyro) = doc.get("gyro") else {
+        return Ok(None);
+    };
+    let gyro = gyro.as_table_like().ok_or(ADVANCED_GYRO)?;
+    let Some(binding) = gyro.get("binding") else {
+        return Ok(None);
+    };
+    let binding = binding.as_table_like().ok_or(ADVANCED_GYRO)?;
+    let mode = binding
+        .get("mode")
+        .and_then(Item::as_str)
+        .ok_or(ADVANCED_GYRO)?;
+    let input = binding
+        .get("input")
+        .and_then(Item::as_str)
+        .ok_or(ADVANCED_GYRO)?;
+    let (kind, row, column) = region_input(input).ok_or(ADVANCED_GYRO)?;
+    if kind != "touch" || !GYRO_MODES.iter().any(|(key, _)| *key == mode) {
+        return Err(ADVANCED_GYRO);
+    }
+    Ok(Some((Cell { row, column }, mode)))
+}
+
+fn set_gyro_binding(
+    doc: &mut DocumentMut,
+    cell: Cell,
+    mode: Option<&str>,
+) -> Result<(), &'static str> {
+    let current = gyro_binding(doc)?;
+    if let Some(mode) = mode {
+        let size = grid(doc)?;
+        if !cell.in_grid(size) {
+            return Err(ADVANCED);
+        }
+        resize(doc, size)?;
+        let gyro = doc
+            .entry("gyro")
+            .or_insert_with(|| Item::Table(Table::new()))
+            .as_table_like_mut()
+            .ok_or(ADVANCED_GYRO)?;
+        let binding = gyro
+            .entry("binding")
+            .or_insert_with(|| Item::Table(Table::new()))
+            .as_table_like_mut()
+            .ok_or(ADVANCED_GYRO)?;
+        for (key, text) in [("mode", mode), ("input", &cell.input("touch"))] {
+            if let Some(old) = binding.get_mut(key).and_then(Item::as_value_mut) {
+                if old.as_str() != Some(text) {
+                    replace_value(old, Value::from(text));
+                }
+            } else {
+                binding.insert(key, value(text));
+            }
+        }
+    } else if current.is_some_and(|(configured, _)| configured == cell) {
+        doc["gyro"]
+            .as_table_like_mut()
+            .ok_or(ADVANCED_GYRO)?
+            .remove("binding");
+    }
+    Ok(())
+}
+
+fn set_keyboard_action(
+    doc: &mut DocumentMut,
+    input: &str,
+    gesture: Gesture,
+    output: Option<&str>,
+) -> Result<(), &'static str> {
+    let size = grid(doc)?;
+    if output.is_some() {
+        resize(doc, size)?;
+    }
+    bindings::set_key(doc, input, gesture, output)
+}
+
 pub fn page(ctx: &Context) -> gtk::Widget {
     let Ok(doc) = ctx.document() else {
         return ui::advanced_required(
@@ -362,6 +445,69 @@ fn show_actions(ctx: &Context, cell: Cell, actions: &gtk::Box) {
             },
         ));
     }
+
+    for (kind, title) in [
+        ("touch", "Keyboard and mouse · Touch"),
+        ("click", "Keyboard and mouse · Click"),
+    ] {
+        let group = adw::PreferencesGroup::builder()
+            .title(title)
+            .margin_top(18)
+            .build();
+        let input = cell.input(kind);
+        let edit_input = input.clone();
+        let ctx = ctx.clone();
+        for row in controller::keyboard_rows(&doc, &input, move |gesture, output| {
+            ctx.edit(|doc| set_keyboard_action(doc, &edit_input, gesture, output));
+        }) {
+            group.add(&row);
+        }
+        actions.append(&group);
+    }
+
+    let gyro = adw::PreferencesGroup::builder()
+        .title("Gyro activation")
+        .margin_top(18)
+        .build();
+    match gyro_binding(&doc) {
+        Ok(binding) => {
+            let current = binding
+                .filter(|(configured, _)| *configured == cell)
+                .map(|(_, mode)| mode);
+            gyro.set_description(Some(&gyro_description(cell, binding)));
+            let ctx = ctx.clone();
+            let group = gyro.downgrade();
+            gyro.add(&controller::dropdown(
+                "Touch activation",
+                current,
+                "No binding for this cell",
+                GYRO_MODES
+                    .into_iter()
+                    .map(|(key, label)| (key.into(), label.into())),
+                move |mode| {
+                    if ctx.edit(|doc| set_gyro_binding(doc, cell, mode))
+                        && let Some(group) = group.upgrade()
+                        && let Ok(doc) = ctx.document()
+                        && let Ok(binding) = gyro_binding(&doc)
+                    {
+                        group.set_description(Some(&gyro_description(cell, binding)));
+                    }
+                },
+            ));
+        }
+        Err(error) => gyro.add(&controller::message_row("Gyro binding", error)),
+    }
+    actions.append(&gyro);
+}
+
+fn gyro_description(cell: Cell, binding: Option<(Cell, &str)>) -> String {
+    match binding {
+        Some((configured, _)) if configured != cell => format!(
+            "Gyro is bound to row {}, column {}. Choosing a mode here moves the binding.",
+            configured.row, configured.column,
+        ),
+        _ => "Clearing the touch binding leaves the configured gyro always active.".into(),
+    }
 }
 
 #[cfg(test)]
@@ -394,6 +540,61 @@ mod tests {
         let doc = doc.to_string().parse().unwrap();
         assert_eq!(regions(&doc).unwrap().count(), 0);
         assert_eq!(grid(&doc), Ok(DEFAULT_SIZE));
+    }
+
+    #[test]
+    fn keyboard_actions_share_the_grid_and_preserve_other_gestures() {
+        let input = RIGHT.input("click");
+        let mut doc = "version = 1\n".parse::<DocumentMut>().unwrap();
+        set_keyboard_action(&mut doc, &input, Gesture::Hold, Some("BTN_LEFT")).unwrap();
+        assert!(doc.contains_key("touchpad"));
+        let saved = doc.to_string().replace("click:1:2", "click:01:02");
+        let mut doc = saved.parse::<DocumentMut>().unwrap();
+        set_keyboard_action(&mut doc, &input, Gesture::Tap, Some("KEY_SPACE")).unwrap();
+        let binding = bindings::keyboard_binding(&doc, &input).unwrap().unwrap();
+        assert_eq!(binding["hold"].as_str(), Some("BTN_LEFT"));
+        assert_eq!(binding["tap"].as_str(), Some("KEY_SPACE"));
+        set_keyboard_action(&mut doc, &input, Gesture::Tap, None).unwrap();
+        assert!(bindings::keyboard_binding(&doc, &input).unwrap().is_some());
+    }
+
+    #[test]
+    fn setting_gyro_moves_only_a_simple_touch_binding() {
+        let text = r#"version = 1
+[touchpad]
+rows = 1
+columns = 2
+[gyro]
+sensitivity_x = 2.0
+binding = { mode = "hold", input = "touch:1:1" }
+"#;
+        let mut doc = text.parse::<DocumentMut>().unwrap();
+        set_gyro_binding(&mut doc, RIGHT, Some("disable-while-held")).unwrap();
+        let mut doc = doc.to_string().parse::<DocumentMut>().unwrap();
+        assert_eq!(gyro_binding(&doc), Ok(Some((RIGHT, "disable-while-held"))));
+        set_gyro_binding(&mut doc, FIRST_CELL, None).unwrap();
+        assert!(gyro_binding(&doc).unwrap().is_some());
+        set_gyro_binding(&mut doc, RIGHT, None).unwrap();
+        assert_eq!(gyro_binding(&doc), Ok(None));
+        assert_eq!(doc["gyro"]["sensitivity_x"].as_float(), Some(2.0));
+
+        let mut inline = "version = 1\ngyro = { sensitivity_x = 2.0 }\n"
+            .parse::<DocumentMut>()
+            .unwrap();
+        set_gyro_binding(&mut inline, RIGHT, Some("hold")).unwrap();
+        let inline = inline.to_string().parse::<DocumentMut>().unwrap();
+        assert_eq!(gyro_binding(&inline), Ok(Some((RIGHT, "hold"))));
+        assert_eq!(inline["gyro"]["sensitivity_x"].as_float(), Some(2.0));
+
+        for input in ["l2", "l1,touch:1:1"] {
+            let mut doc = text
+                .replace("touch:1:1", input)
+                .parse::<DocumentMut>()
+                .unwrap();
+            let original = doc.to_string();
+            assert!(set_gyro_binding(&mut doc, RIGHT, Some("hold")).is_err());
+            assert_eq!(doc.to_string(), original);
+        }
     }
 
     #[test]
