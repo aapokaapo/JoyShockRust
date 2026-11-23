@@ -286,6 +286,7 @@ held while entering or leaving that zone.
 side = "left"
 deadzone = 0.2
 deadzone_release = 0.15
+direction_hysteresis_deg = 5.0
 up = "KEY_W"
 left = "KEY_A"
 down = "KEY_S"
@@ -297,7 +298,11 @@ outer = { key = "KEY_LEFTSHIFT", threshold = 0.8, release = 0.7 }
 with 1.0 representing full deflection along an axis. Direction keys engage
 above `deadzone` and release at or below `deadzone_release`. The release
 value can be anywhere from zero to `deadzone` and defaults to `deadzone`.
-Diagonals can hold two direction keys. The outer
+Diagonals can hold two direction keys. Set `direction_hysteresis_deg` to
+reduce switching near the straight-to-diagonal boundary. For example,
+5° adds the second key at 27.5° from a straight axis and holds it until
+the angle falls below 17.5°. The default is 0°. Valid values are below
+22.5°. The outer
 key engages at `threshold` and releases at `release`. The separate
 release threshold prevents flickering near the boundary. A profile can
 omit `outer` for direction keys alone.

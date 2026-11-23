@@ -385,6 +385,9 @@ are emitted together, with sprint pulses following movement presses.
 Direction keys can also use a smaller release radius near center. This
 preserves continuous movement in `keep_sprint` mode through minor stick
 motion near the deadzone boundary.
+An optional angular margin separates each direction's engagement and
+release boundaries. The ratios are computed at profile load and angular
+state resets when the stick reaches its radial release threshold.
 
 Keyboard trigger bindings use normalized travel and share the gyro
 trigger gate's threshold behavior. Each distinct threshold pair tracks

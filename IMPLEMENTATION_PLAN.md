@@ -206,7 +206,8 @@ both virtual devices and synthetic USB reports.
 Deadline and output handling have synthetic coverage. The bridge supports
 keyboard and mouse profiles with the virtual gamepad disabled. Analog
 stick bindings support direction keys,
-a radial deadzone with an optional release radius. The outer key has
+a radial deadzone with an optional release radius and optional angular
+hysteresis at direction boundaries. The outer key has
 separate engagement and release thresholds and supports hold, toggle, and
 keep-sprint profiles.
 Flick Stick calibration is covered by output

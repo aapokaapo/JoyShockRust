@@ -1008,6 +1008,55 @@ mod tests {
     }
 
     #[test]
+    fn direction_hysteresis_uses_separate_diagonal_boundaries_and_resets_at_center() {
+        let config = config(
+            r#"
+            [[keyboard.sticks]]
+            side = "left"
+            up = "KEY_W"
+            left = "KEY_A"
+            down = "KEY_S"
+            right = "KEY_D"
+            direction_hysteresis_deg = 5.0
+        "#,
+        );
+        let mut state = State::new(&config);
+        let now = Instant::now();
+        let w = KeyCode::KEY_W;
+        let a = KeyCode::KEY_A;
+        let s = KeyCode::KEY_S;
+        let d = KeyCode::KEY_D;
+        for (x, y, expected) in [
+            (-0.33, -0.8, &[w][..]),
+            (-0.5, -0.8, &[w, a][..]),
+            (-0.33, -0.8, &[w, a][..]),
+            (0.33, -0.8, &[w][..]), // A releases and D still needs to engage.
+            (0.5, -0.8, &[w, d][..]),
+            (0.33, -0.8, &[w, d][..]),
+            (0.24, -0.8, &[w][..]),
+            (0.8, -0.5, &[w, d][..]),
+            (0.8, -0.33, &[w, d][..]),
+            (0.8, -0.24, &[d][..]),
+            (0.8, 0.5, &[s, d][..]),
+            (0.0, 0.0, &[][..]),
+            (0.8, 0.33, &[d][..]), // The earlier S hold cannot survive centering.
+        ] {
+            let controls = Controls {
+                left_stick: joyshockrust_core::Stick { x, y },
+                ..Controls::default()
+            };
+            assert_eq!(
+                state.update(input(controls), now, |_| Ok(())).unwrap(),
+                None
+            );
+            assert!(
+                state.held.iter().eq(expected.iter().copied()),
+                "({x}, {y}): expected {expected:?}"
+            );
+        }
+    }
+
+    #[test]
     fn toggle_outer_zone_pulses_shift_while_preserving_diagonal_movement() {
         let profile = include_str!("../../../profiles/gyro-keyboard.toml")
             .replace("hold = \"KEY_LEFTSHIFT\"", "hold = \"KEY_LEFTCTRL\"")
@@ -1191,6 +1240,9 @@ mod tests {
             format!("{binding}deadzone_release = 0.3\n"),
             format!("{binding}deadzone_release = -0.1\n"),
             format!("{binding}deadzone_release = nan\n"),
+            format!("{binding}direction_hysteresis_deg = -0.1\n"),
+            format!("{binding}direction_hysteresis_deg = 22.5\n"),
+            format!("{binding}direction_hysteresis_deg = nan\n"),
             format!("{binding}{binding}"),
         ] {
             assert!(

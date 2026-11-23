@@ -7,6 +7,7 @@ use serde::Deserialize;
 use super::{TAP_KEY_TIME, parse_key};
 
 const DIAGONAL_RATIO: f32 = 0.414_213_56; // tan(22.5°)
+const DIRECTION_BOUNDARY_DEG: f32 = 22.5;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -21,6 +22,7 @@ pub(super) struct Settings {
     side: Side,
     deadzone: Option<f32>,
     deadzone_release: Option<f32>,
+    direction_hysteresis_deg: Option<f32>,
     up: Option<String>,
     right: Option<String>,
     down: Option<String>,
@@ -52,6 +54,8 @@ pub(super) struct Binding {
     side: Side,
     deadzone_squared: f32,
     deadzone_release_squared: f32,
+    direction_enter_ratio: f32,
+    direction_release_ratio: f32,
     directions: [Option<KeyCode>; 4],
     outer: Option<Outer>,
 }
@@ -88,6 +92,18 @@ impl Settings {
         if !(0.0..=deadzone).contains(&deadzone_release) {
             return Err("keyboard stick deadzone_release must be between 0 and deadzone".into());
         }
+        let margin = self.direction_hysteresis_deg.unwrap_or(0.0);
+        if !(0.0..DIRECTION_BOUNDARY_DEG).contains(&margin) {
+            return Err("keyboard stick direction_hysteresis_deg must be in [0, 22.5)".into());
+        }
+        let (direction_enter_ratio, direction_release_ratio) = if margin == 0.0 {
+            (DIAGONAL_RATIO, DIAGONAL_RATIO)
+        } else {
+            (
+                (DIRECTION_BOUNDARY_DEG + margin).to_radians().tan(),
+                (DIRECTION_BOUNDARY_DEG - margin).to_radians().tan(),
+            )
+        };
         let directions = [
             parse_key(self.up)?,
             parse_key(self.right)?,
@@ -127,6 +143,8 @@ impl Settings {
             side: self.side,
             deadzone_squared: deadzone * deadzone,
             deadzone_release_squared: deadzone_release * deadzone_release,
+            direction_enter_ratio,
+            direction_release_ratio,
             directions,
             outer,
         })
@@ -157,6 +175,7 @@ impl Binding {
 pub(super) struct State {
     binding: Binding,
     directions_active: bool,
+    active_directions: [bool; 4],
     outer_active: bool,
     sent_active: bool,
     pulse: PulsePhase,
@@ -175,6 +194,7 @@ impl State {
         Self {
             binding,
             directions_active: false,
+            active_directions: [false; 4],
             outer_active: false,
             sent_active: false,
             pulse: PulsePhase::Ready,
@@ -200,20 +220,25 @@ impl State {
         self.directions_active = radius_squared > direction_threshold;
         let mut moving = false;
         if self.directions_active {
-            let horizontal = x.abs() >= y.abs() * DIAGONAL_RATIO;
-            let vertical = y.abs() >= x.abs() * DIAGONAL_RATIO;
-            let directions = [
-                vertical && y < 0.0,
-                horizontal && x > 0.0,
-                vertical && y > 0.0,
-                horizontal && x < 0.0,
-            ];
-            for (active, key) in directions.into_iter().zip(self.binding.directions) {
-                if active && let Some(key) = key {
+            let directions = [(-y, x.abs()), (x, y.abs()), (y, x.abs()), (-x, y.abs())];
+            for (((component, perpendicular), active), key) in directions
+                .into_iter()
+                .zip(&mut self.active_directions)
+                .zip(self.binding.directions)
+            {
+                let ratio = if *active {
+                    self.binding.direction_release_ratio
+                } else {
+                    self.binding.direction_enter_ratio
+                };
+                *active = component > 0.0 && component >= perpendicular * ratio;
+                if *active && let Some(key) = key {
                     held.insert(key);
                     moving = true;
                 }
             }
+        } else {
+            self.active_directions = [false; 4];
         }
 
         let outer = self.binding.outer?;

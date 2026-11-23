@@ -722,6 +722,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     Start from center and tilt the stick just under 30% to check that no
     direction key activates. Push beyond 30%, then back off slowly. The
     direction keys should remain held until the radius reaches 20%.
+15. Set `direction_hysteresis_deg = 5.0` on the left stick. Tilt straight
+    up, then move gradually toward the upper-left diagonal. Observe W
+    alone until A engages. Back off toward straight up and verify that
+    A remains held through the same angle before releasing closer to up.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a
