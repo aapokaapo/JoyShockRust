@@ -835,11 +835,17 @@ Install the tray and bridge using the [desktop tray instructions](README.md#desk
 Run JoyShockRust from the applications menu in a Wayland session with a
 StatusNotifierItem host. Verify the menu with no controller connected,
 then connect a supported controller over USB and Bluetooth. Check the
-reported transport, decoded report rate and battery state against
-`joyshockrust-linux --status`. Select a controller and then a profile.
-Confirm the profile load keeps the selected controller active.
+connection icon, decoded report rate and battery indicator appear on
+one row and match `joyshockrust-linux --status`. Open the controller
+submenu and check its title updates after selection. Load another profile
+from the submenu titled with the active profile name and check that the
+title updates while the selected controller stays active.
 
-Under **Profile editor**, open **New profile** and name it. Switch the
+Click **Profile editor** and check it opens the active profile. Choose a
+different file in the editor's dropdown and check that the tray still
+shows the previous active profile. Edit a setting, choose **New profile**,
+then use **Keep Editing** and confirm the draft remains. Choose **New
+profile** again, discard the draft, and name the new profile. Switch the
 desktop between light and dark appearance and resize the editor to verify
 the page switcher moves between the header and bottom bar. Use Tab and
 the keyboard to select controls and change bindings. Edit a setting and

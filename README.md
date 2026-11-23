@@ -657,17 +657,18 @@ systemctl --user daemon-reload
 
 Open **JoyShockRust** from the application menu or run
 `systemctl --user start joyshockrust-tray.service`. The tray starts the
-bridge, shows its current controller, connection, decoded report rate,
-and battery state, and shows the charge percentage while discharging.
-Use **Active controller** to choose a connected controller with an HID ID,
-or select **Automatic**. Place named TOML profiles in
-`$config_dir/joyshockrust/profiles/` for the **Profiles** submenu.
-The tray shows the active profile's filename, including profiles loaded
-from the command line.
-**Default mappings** unloads the profile. **Quit JoyShockRust** stops the
-bridge and closes the tray.
+bridge and shows the connection icon, decoded report rate in Hz, and
+battery icon on one row. The row includes the charge percentage while
+discharging. Open the submenu named after the active controller to choose
+a connected controller with an HID ID or select **Automatic**.
+Open the submenu named after the active profile to load a different
+profile from `$config_dir/joyshockrust/profiles/` or choose **Default
+mappings** to unload it. **Quit JoyShockRust** stops the bridge and closes
+the tray.
 
-Use **Profile editor** to open a named profile or choose **New profile**.
+**Profile editor** opens the editor on the active file when available.
+Use the profile dropdown inside the editor to open a saved profile or
+choose **New profile**. Use **Save & Apply** to make a profile active.
 The editor follows the system’s light or dark appearance. The page
 switcher moves to the bottom when the window is narrow.
 Select a physical control on the DualSense diagram or choose a DualSense

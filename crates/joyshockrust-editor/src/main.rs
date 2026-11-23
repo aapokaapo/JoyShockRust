@@ -91,6 +91,44 @@ impl Editor {
         })
     }
 
+    fn has_unsaved_changes(&self) -> bool {
+        self.text != self.original
+            || (self.path.is_none() && !self.name.trim().is_empty())
+            || self.draft_error().is_some()
+    }
+
+    fn profile_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<_> = fs::read_dir(&self.directory)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "toml") && path.is_file())
+            .collect();
+        paths.sort();
+        if let Some(startup) = self
+            .directory
+            .parent()
+            .map(|root| root.join("profile.toml"))
+            && startup.is_file()
+        {
+            paths.insert(0, startup);
+        }
+        if let Some(path) = &self.path
+            && !paths.contains(path)
+        {
+            paths.insert(0, path.clone());
+        }
+        paths
+    }
+
+    fn switch_profile(&mut self, path: Option<PathBuf>) -> io::Result<()> {
+        if self.path != path || path.is_none() {
+            *self = Self::open(self.bridge.clone(), self.directory.clone(), path)?;
+        }
+        Ok(())
+    }
+
     fn draft_error(&self) -> Option<&'static str> {
         self.calibration.error.or_else(|| {
             self.invalid_gyro_sensitivity
@@ -195,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         return calibration::run(bridge, None, node.into());
     }
-    let path = args.next().map(PathBuf::from);
+    let path = args.next().map(std::path::absolute).transpose()?;
     if args.next().is_some() {
         return Err("usage: joyshockrust-editor [PROFILE]".into());
     }

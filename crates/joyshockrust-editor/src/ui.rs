@@ -1,5 +1,8 @@
 use std::{
     cell::{Cell, RefCell},
+    ffi::OsString,
+    os::unix::ffi::{OsStrExt, OsStringExt},
+    path::PathBuf,
     rc::Rc,
 };
 
@@ -100,17 +103,77 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     header.set_title_widget(Some(&switcher));
     toolbar.add_top_bar(&header);
 
+    let profile_controls = gtk::Box::builder()
+        .spacing(12)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_top(6)
+        .margin_bottom(6)
+        .build();
+    let profiles = gio::Menu::new();
+    let chooser = gtk::MenuButton::builder()
+        .tooltip_text("Choose a profile to edit")
+        .menu_model(&profiles)
+        .build();
     let profile_name = gtk::Entry::builder()
         .placeholder_text("Profile name")
         .width_chars(12)
-        .tooltip_text("Name of the profile")
+        .hexpand(true)
         .build();
     profile_name.update_property(&[gtk::accessible::Property::Label("Profile name")]);
-    set_profile_name(&profile_name, &ctx);
+    profile_controls.append(&chooser);
+    profile_controls.append(&profile_name);
+    toolbar.add_top_bar(&profile_controls);
+
+    sync_profiles(&ctx, &profiles, &chooser, &profile_name);
     let name_ctx = ctx.clone();
     profile_name
         .connect_changed(move |entry| name_ctx.editor.borrow_mut().name = entry.text().into());
-    header.pack_start(&profile_name);
+
+    let open = gio::SimpleAction::new("open-profile", Some(glib::VariantTy::BYTE_STRING));
+    let open_ctx = ctx.clone();
+    let open_profiles = profiles.clone();
+    let open_chooser = chooser.clone();
+    let open_name = profile_name.clone();
+    let open_stack = stack.downgrade();
+    open.connect_activate(move |_, value| {
+        let Some(bytes) = value.and_then(|value| value.get::<Vec<u8>>()) else {
+            return;
+        };
+        let path = (!bytes.is_empty()).then(|| PathBuf::from(OsString::from_vec(bytes)));
+        let editor = open_ctx.editor.borrow();
+        if path.is_some() && editor.path == path {
+            return;
+        }
+        let unsaved = editor.has_unsaved_changes();
+        drop(editor);
+        let switch = {
+            let ctx = open_ctx.clone();
+            let profiles = open_profiles.clone();
+            let chooser = open_chooser.clone();
+            let name = open_name.clone();
+            let stack = open_stack.clone();
+            move || {
+                let result = ctx.editor.borrow_mut().switch_profile(path.clone());
+                if let Err(error) = result {
+                    ctx.report(Err(format!("Could not open the profile: {error}")));
+                    return;
+                }
+                sync_profiles(&ctx, &profiles, &chooser, &name);
+                if let Some(stack) = stack.upgrade() {
+                    refresh_page(&stack, &ctx);
+                }
+            }
+        };
+        if unsaved {
+            if let Some(window) = open_ctx.window.upgrade() {
+                confirm_discard(&window).connect_response(Some("discard"), move |_, _| switch());
+            }
+        } else {
+            switch();
+        }
+    });
+    window.add_action(&open);
 
     for (action_name, apply, shortcut) in [
         ("save", false, "<Primary>s"),
@@ -118,12 +181,12 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     ] {
         let action = gio::SimpleAction::new(action_name, None);
         let save_ctx = ctx.clone();
-        let entry = profile_name.downgrade();
+        let profiles = profiles.clone();
+        let chooser = chooser.clone();
+        let entry = profile_name.clone();
         action.connect_activate(move |_, _| {
             let result = save_ctx.editor.borrow_mut().save_and_apply(apply);
-            if let Some(entry) = entry.upgrade() {
-                set_profile_name(&entry, &save_ctx);
-            }
+            sync_profiles(&save_ctx, &profiles, &chooser, &entry);
             save_ctx.report(result);
         });
         window.add_action(&action);
@@ -165,44 +228,68 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let close_ctx = ctx.clone();
     let confirmed = Rc::new(Cell::new(false));
     window.connect_close_request(move |window| {
-        let editor = close_ctx.editor.borrow();
-        if confirmed.get() || (editor.text == editor.original && editor.draft_error().is_none()) {
+        if confirmed.get() || !close_ctx.editor.borrow().has_unsaved_changes() {
             return glib::Propagation::Proceed;
         }
-        let dialog = adw::AlertDialog::new(
-            Some("Discard unsaved changes?"),
-            Some("Your edits to this profile will be lost."),
-        );
-        dialog.add_responses(&[("cancel", "Keep Editing"), ("discard", "Discard")]);
-        dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
-        dialog.set_default_response(Some("cancel"));
-        dialog.set_close_response("cancel");
         let window_ref = window.downgrade();
         let confirmed = confirmed.clone();
-        dialog.connect_response(Some("discard"), move |_, _| {
+        confirm_discard(window).connect_response(Some("discard"), move |_, _| {
             confirmed.set(true);
             if let Some(window) = window_ref.upgrade() {
                 window.close();
             }
         });
-        dialog.present(Some(window));
         glib::Propagation::Stop
     });
     window.present();
 }
 
-fn set_profile_name(entry: &gtk::Entry, ctx: &Context) {
-    let name = ctx
-        .editor
-        .borrow()
-        .path
-        .as_ref()
-        .and_then(|path| path.file_stem())
-        .map(|name| name.to_string_lossy().into_owned());
-    if let Some(name) = name {
-        entry.set_text(&name);
-        entry.set_editable(false);
+fn confirm_discard(window: &adw::ApplicationWindow) -> adw::AlertDialog {
+    let dialog = adw::AlertDialog::new(
+        Some("Discard unsaved changes?"),
+        Some("Your edits to this profile will be lost."),
+    );
+    dialog.add_responses(&[("cancel", "Keep Editing"), ("discard", "Discard")]);
+    dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    dialog.present(Some(window));
+    dialog
+}
+
+fn sync_profiles(ctx: &Context, menu: &gio::Menu, chooser: &gtk::MenuButton, entry: &gtk::Entry) {
+    let editor = ctx.editor.borrow();
+    let profile_name = editor.path.as_ref().and_then(|path| path.file_name());
+    let text = profile_name.map_or("New profile".into(), |name| name.to_string_lossy());
+    chooser.set_label(&text);
+    let is_new = editor.path.is_none();
+    let draft_name = editor.name.clone();
+    let paths = editor.profile_paths();
+    drop(editor);
+
+    entry.set_visible(is_new);
+    entry.set_text(if is_new { &draft_name } else { "" });
+    menu.remove_all();
+    for path in paths {
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
+        let item = gio::MenuItem::new(Some(&name.replace('_', "__")), None);
+        item.set_action_and_target_value(
+            Some("win.open-profile"),
+            Some(&path.as_os_str().as_bytes().to_variant()),
+        );
+        menu.append_item(&item);
     }
+    let create = gio::MenuItem::new(Some("New profile"), None);
+    create.set_action_and_target_value(
+        Some("win.open-profile"),
+        Some(&Vec::<u8>::new().to_variant()),
+    );
+    let section = gio::Menu::new();
+    section.append_item(&create);
+    menu.append_section(None, &section);
 }
 
 fn refresh_page(stack: &adw::ViewStack, ctx: &Context) {
@@ -274,6 +361,81 @@ pub(crate) mod tests {
             }
         }
         matches
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn profile_picker_switches_files_protects_drafts_and_lists_new_profiles() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let directory = config.path().join("profiles");
+        std::fs::create_dir(&directory).unwrap();
+        let startup = config.path().join("profile.toml");
+        let game = directory.join("game_one.toml");
+        std::fs::write(&startup, crate::NEW_PROFILE).unwrap();
+        std::fs::write(&game, "version = 1\n# Game profile\n").unwrap();
+        let editor = Rc::new(RefCell::new(
+            Editor::open("/bin/true".into(), directory.clone(), Some(startup.clone())).unwrap(),
+        ));
+        let app = adw::Application::builder()
+            .flags(gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        open_window(&app, editor.clone());
+        let window = app
+            .active_window()
+            .unwrap()
+            .downcast::<adw::ApplicationWindow>()
+            .unwrap();
+        let chooser = descendants::<gtk::MenuButton>(window.upcast_ref())
+            .into_iter()
+            .find(|button| button.tooltip_text().as_deref() == Some("Choose a profile to edit"))
+            .unwrap();
+        let menu = chooser.menu_model().unwrap();
+        let target = |index| menu.item_attribute_value(index, "target", None).unwrap();
+        assert_eq!(
+            target(0).get::<Vec<u8>>().unwrap(),
+            startup.as_os_str().as_bytes()
+        );
+        let open = window.lookup_action("open-profile").unwrap();
+        let game_target = target(1);
+        open.activate(Some(&game_target));
+        assert_eq!(editor.borrow().path.as_deref(), Some(game.as_path()));
+        assert!(editor.borrow().text.contains("# Game profile"));
+
+        let new_profile = menu.item_link(2, "section").unwrap();
+        let new_target = new_profile.item_attribute_value(0, "target", None).unwrap();
+        editor.borrow_mut().text.push_str("# Unsaved change\n");
+        let choose_draft_action = |label| {
+            open.activate(Some(&new_target));
+            let dialog = window.visible_dialog().unwrap();
+            let button = descendants::<gtk::Button>(dialog.upcast_ref())
+                .into_iter()
+                .find(|button| button.label().as_deref() == Some(label))
+                .unwrap();
+            button.emit_clicked();
+        };
+        choose_draft_action("Keep Editing");
+        assert!(editor.borrow().text.contains("# Unsaved change"));
+        choose_draft_action("Discard");
+        assert_eq!(editor.borrow().path, None);
+        assert_eq!(editor.borrow().text, crate::NEW_PROFILE);
+
+        let name = descendants::<gtk::Entry>(window.upcast_ref())
+            .into_iter()
+            .find(|entry| entry.placeholder_text().as_deref() == Some("Profile name"))
+            .unwrap();
+        name.set_text("New Game");
+        window.lookup_action("save").unwrap().activate(None);
+        let saved = directory.join("New Game.toml");
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), crate::NEW_PROFILE);
+        assert_eq!(
+            target(1).get::<Vec<u8>>().unwrap(),
+            saved.as_os_str().as_bytes()
+        );
+        assert!(!gtk::prelude::WidgetExt::is_visible(&name));
+        window.close();
     }
 
     #[test]

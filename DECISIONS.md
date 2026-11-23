@@ -476,6 +476,12 @@ Keyboard bindings can override hold and double-tap deadlines independently.
 Both timers use the existing monotonic report and readiness clock. The
 default timings and immediate behavior of hold-only bindings are retained.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)
+## Desktop profile selection
+
+The tray profile submenu controls the loaded profile. The editor's own
+picker controls the file being edited and asks before discarding a draft.
+Save & Apply remains the action that applies the draft to the bridge.
+
 ## Desktop process lifecycle
 
 2026-11-23. The input bridge stays supervised by systemd in the user
