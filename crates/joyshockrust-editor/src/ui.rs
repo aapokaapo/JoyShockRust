@@ -531,4 +531,56 @@ pub(crate) mod tests {
             Some(8.125)
         );
     }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn virtual_gamepad_type_and_trigger_stages_write_separate_bindings() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        editor.text.push_str("[bridge]\nrumble = true\n");
+        editor.selected = "l2";
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: glib::WeakRef::new(),
+            overlay: glib::WeakRef::new(),
+        };
+        let page = controller::page(&ctx);
+        let select = |row: &adw::ComboRow, label: &str| {
+            let model = row.model().unwrap().downcast::<gtk::StringList>().unwrap();
+            let index = (0..model.n_items())
+                .find(|&index| model.string(index).as_deref() == Some(label))
+                .unwrap();
+            row.set_selected(index);
+        };
+        let row = descendants::<adw::ComboRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Virtual gamepad type")
+            .unwrap();
+        select(&row, "Xbox Series X|S");
+        let groups = descendants::<adw::PreferencesGroup>(&page);
+        for (stage, key) in [("Partial pull", "Q"), ("Full pull", "E")] {
+            let group = groups.iter().find(|group| group.title() == stage).unwrap();
+            let row = descendants::<adw::ComboRow>(group.upcast_ref())
+                .into_iter()
+                .find(|row| row.title() == "Hold")
+                .unwrap();
+            select(&row, key);
+        }
+        let doc = ctx.document().unwrap();
+        assert_eq!(doc["bridge"]["gamepad"].as_str(), Some("xbox-series"));
+        assert_eq!(doc["bridge"]["rumble"].as_bool(), Some(true));
+        let bindings = doc["keyboard"]["bindings"].as_array_of_tables().unwrap();
+        let partial = bindings.get(0).unwrap();
+        let full = bindings.get(1).unwrap();
+        assert_eq!(partial["trigger"].as_str(), Some("l2:0.45:0.35:0.95:0.85"));
+        assert_eq!(full["trigger"].as_str(), Some("l2:0.95:0.85"));
+        assert_eq!(partial["hold"].as_str(), Some("KEY_Q"));
+        assert_eq!(full["hold"].as_str(), Some("KEY_E"));
+
+        select(&row, "Use bridge default");
+        let doc = ctx.document().unwrap();
+        assert!(doc["bridge"].get("gamepad").is_none());
+        assert_eq!(doc["bridge"]["rumble"].as_bool(), Some(true));
+    }
 }

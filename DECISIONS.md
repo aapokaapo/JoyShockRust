@@ -558,6 +558,12 @@ for enforcing radius ordering and the requirement for a movement key
 when a zone uses keep sprint. The dialog keeps existing deadzone and
 direction hysteresis settings.
 
+The profile editor can choose the virtual gamepad identity. A live
+change replaces the virtual gamepad and preserves the physical input
+session. Profiles without a type use the startup identity. Analog
+partial-only trigger gestures use two hysteresis gates and suppress
+partial tap actions if the same pull reaches the full stage.
+
 The gyro editor offers 0–20 sliders for fine adjustment and text fields
 for the full 0–100 profile range. Opening a profile or typing a value
 above 20 keeps the recorded sensitivity and caps only the slider position.

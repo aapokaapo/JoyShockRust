@@ -852,6 +852,13 @@ both choices remain visible. Choose a virtual gamepad target, then use
 the **Advanced** page, enter invalid TOML syntax and check that validation or
 saving displays an error while the saved profile remains usable.
 
+Choose **Xbox Series X|S** under **Virtual gamepad type**, save and apply,
+then check `virtual_gamepad_kind=xbox-series` and the replacement device
+in Steam. In the L2 inspector set **Partial pull → Hold** to Q and
+**Full pull → Hold** to E. Check that Q is held partway and E takes over
+at full travel. With partial **Tap** configured, check that a full pull
+and release does not emit that partial tap.
+
 In **Sticks**, move each response slider one step and verify its own
 preview updates. Save and check the two per-stick values in
 **Advanced**. In **Gyro**, move X and Y separately and check each slider
@@ -940,7 +947,10 @@ on the USB device. Verify that the selected PCM matches the controller
 and report which effects are perceptible. Run with `--pattern sweep`
 to compare the count of detected stick detents with the felt clicks.
 The automated CLI test checks the actuator-channel PCM and propagation
-of an ALSA playback failure using a simulated player.
+of an ALSA playback failure using a simulated player. On the reported
+Fedora setup, moving the system's audio output away from the controller
+freed the ALSA playback device. The test then completed PCM playback
+with both DualSense and DualSense Edge.
 
 Enable **Start when I log in**, log out and back in, and confirm the tray
 and bridge start. Clear the setting and repeat to confirm manual

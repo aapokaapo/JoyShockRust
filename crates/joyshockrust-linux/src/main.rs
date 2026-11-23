@@ -567,7 +567,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         model: controller_model.unwrap_or(controller_defaults.model),
         controller_id: controller_id.flatten(),
     };
-    let configured_bridge = runtime.bridge.unwrap_or_default();
+    let configured_bridge = runtime.bridge.unwrap_or_default().startup();
     let mut bridge = profile::BridgeOptions {
         gamepad: gamepad_kind.unwrap_or(configured_bridge.gamepad),
         rumble: rumble_enabled || configured_bridge.rumble,
@@ -577,7 +577,12 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         Some(reload::Reload::new(
             startup_profile,
             reload_path.as_deref(),
-            runtime.bridge.unwrap_or(bridge),
+            profile::BridgeOptions {
+                gamepad: bridge.gamepad,
+                ..runtime
+                    .bridge
+                    .map_or(bridge, profile::BridgeSettings::startup)
+            },
             path.is_none() && benchmark_target.is_none(),
         )?)
     } else {
@@ -587,6 +592,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     if let Some(status) = status {
         status.set_filter(filter);
         status.set_gamepad_enabled(bridge.virtual_gamepad);
+        status.set_gamepad_kind(bridge.gamepad);
     }
     if let Some(target) = benchmark_target {
         let (mut input, identity, path) = if let Some(path) = path {
@@ -675,9 +681,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 discovery::Event::Reload(reload, current_filter) => {
                     let selection = match reload.resolve(current_filter) {
                         Some(reload::Update::Profile(next)) => {
+                            bridge.gamepad = reload.profile_gamepad(&next);
                             runtime = *next;
                             if let Some(status) = status {
                                 status.update(None, runtime.gyro.is_some());
+                                status.set_gamepad_kind(bridge.gamepad);
                                 status.set_touchpad_policy(
                                     grab_touchpad || runtime.grab_touchpad,
                                     false,
@@ -925,6 +933,26 @@ fn serve_session(
                         }
                         None => return Ok(ControlFlow::Continue(())),
                     };
+                    let next_kind = reload.profile_gamepad(&next);
+                    let replacement_gamepad =
+                        if bridge.virtual_gamepad && bridge.gamepad != next_kind {
+                            let input = reload_input.as_ref().expect("reload descriptor");
+                            match open_gamepad(
+                                input,
+                                profile::BridgeOptions {
+                                    gamepad: next_kind,
+                                    ..*bridge
+                                },
+                            ) {
+                                Ok(gamepad) => Some(gamepad),
+                                Err(error) => {
+                                    reload.rejected(&error);
+                                    return Ok(ControlFlow::Continue(()));
+                                }
+                            }
+                        } else {
+                            None
+                        };
                     let replacement_keyboard = if runtime.keyboard != next.keyboard {
                         match keyboard::Keyboard::open(next.keyboard.as_ref(), status) {
                             Ok(device) => Some(device),
@@ -970,6 +998,30 @@ fn serve_session(
                         }
                         keyboard = replacement;
                         keyboard_deadline.set(None);
+                    }
+                    if let Some(replacement) = replacement_gamepad {
+                        feedback.take();
+                        if let Some(mut previous) = output.take()
+                            && let Err(error) = state
+                                .publish(joyshockrust_core::Controls::default(), |events| {
+                                    previous.emit(events)
+                                })
+                        {
+                            eprintln!("Could not release the previous virtual gamepad: {error}");
+                        }
+                        output = Some(replacement.device);
+                        rumble = replacement.rumble;
+                        feedback.replace(replacement.feedback);
+                        if let Some(status) = status {
+                            status.set_gamepad_device(output.as_mut());
+                        }
+                    }
+                    if bridge.gamepad != next_kind {
+                        state = gamepad::GamepadState::new(next_kind);
+                    }
+                    bridge.gamepad = next_kind;
+                    if let Some(status) = status {
+                        status.set_gamepad_kind(next_kind);
                     }
                     *runtime = *next;
                     let touchpad_requested = grab_touchpad || runtime.grab_touchpad;

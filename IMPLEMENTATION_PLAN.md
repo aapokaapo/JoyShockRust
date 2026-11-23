@@ -281,6 +281,10 @@ Profiles can bind stationary calibration to a physical button hold.
 USB actuator feedback marks calibration boundaries and RWC sweep steps.
 A standalone CLI test plays the USB cues and counts detents from a physical
 right-stick sweep through the existing PCM path.
+The editor exposes virtual gamepad identity and separate partial and full
+keyboard or mouse trigger actions. Live profile application replaces the
+virtual gamepad when its type changes.
+
 Next, verify the tactile cues, Bluetooth behavior and both desktop
 calibration workflows on hardware.
 

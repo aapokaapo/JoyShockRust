@@ -214,6 +214,14 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
             ),
             format!("native_touchpad_grab_requested={}", source == "startup"),
             "native_touchpad_grabbed=false".to_owned(),
+            format!(
+                "virtual_gamepad_kind={}",
+                if source == "loaded" {
+                    "xbox-series"
+                } else {
+                    "generic"
+                }
+            ),
             "controller_id_configured=true".to_owned(),
         ] {
             assert!(stdout.lines().any(|entry| entry == line), "{stdout}");
@@ -253,7 +261,14 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
     assert!(result.status.success(), "{result:?}");
     check("auto", "dualsense-edge", true, "startup");
 
-    fs::write(&preset, settings("bluetooth", "dualsense")).unwrap();
+    fs::write(
+        &preset,
+        format!(
+            "{}gamepad = 'xbox-series'\n",
+            settings("bluetooth", "dualsense")
+        ),
+    )
+    .unwrap();
     let load = || {
         Command::new(binary)
             .arg("--load-profile")

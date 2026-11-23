@@ -2,7 +2,7 @@ use adw::{glib, gtk, prelude::*};
 use toml_edit::DocumentMut;
 
 use crate::{
-    bindings::{self, Gesture},
+    bindings::{self, BindingInput, Gesture},
     ui::{self, Context},
 };
 
@@ -127,9 +127,31 @@ fn name(id: &str) -> &str {
         .unwrap_or(id)
 }
 
+fn trigger_stages(id: &str) -> [(&'static str, &'static str, String); 2] {
+    [
+        (
+            "Partial pull",
+            "Engages at 45%. Releases at 35% or when the full stage activates.",
+            format!("{id}:0.45:0.35:0.95:0.85"),
+        ),
+        (
+            "Full pull",
+            "Engages at 95%. Releases at 85%.",
+            format!("{id}:0.95:0.85"),
+        ),
+    ]
+}
+
 fn mapped(doc: &DocumentMut, id: &str) -> bool {
     matches!(bindings::keyboard_binding(doc, id), Ok(Some(_)))
         || matches!(bindings::gamepad_target(doc, id), Ok(Some(_)))
+        || (matches!(id, "l2" | "r2")
+            && trigger_stages(id).iter().any(|(_, _, spec)| {
+                matches!(
+                    bindings::binding(doc, BindingInput::Trigger(spec)),
+                    Ok(Some(_))
+                )
+            }))
 }
 
 pub fn page(ctx: &Context) -> gtk::Widget {
@@ -144,6 +166,10 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         .maximum_size(720)
         .child(&layout)
         .build();
+    let output = gamepad_type_row(ctx, &doc);
+    output.set_margin_start(24);
+    output.set_margin_end(24);
+    layout.append(&output);
     let diagram = gtk::Fixed::new();
     diagram.set_halign(gtk::Align::Center);
     let diagram_scroll = gtk::ScrolledWindow::builder()
@@ -250,6 +276,38 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         .upcast()
 }
 
+fn gamepad_type_row(ctx: &Context, doc: &DocumentMut) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::new();
+    let existing = doc.get("bridge");
+    if existing.is_some_and(|item| item.as_table_like().is_none()) {
+        group.add(&message_row(
+            "Virtual gamepad type",
+            "Edit the bridge table in Advanced TOML.",
+        ));
+        return group;
+    }
+    let current = existing
+        .and_then(|item| item.get("gamepad"))
+        .and_then(toml_edit::Item::as_str);
+    let ctx = ctx.clone();
+    group.add(&dropdown(
+        "Virtual gamepad type",
+        current,
+        "Use bridge default",
+        [
+            ("generic", "Generic"),
+            ("xbox-series", "Xbox Series X|S"),
+            ("xbox360", "Xbox 360"),
+        ]
+        .into_iter()
+        .map(|(key, label)| (key.into(), label.into())),
+        move |kind| {
+            ctx.edit(|doc| bindings::set_output_kind(doc, kind));
+        },
+    ));
+    group
+}
+
 fn show_bindings(
     inspector: &gtk::Box,
     ctx: &Context,
@@ -274,6 +332,26 @@ fn show_bindings(
         });
     }) {
         keyboard.add(&row);
+    }
+    if matches!(selected, "l2" | "r2") {
+        keyboard.set_description(Some("Actions for the controller's digital trigger button."));
+        for (title, description, spec) in trigger_stages(selected) {
+            let group = adw::PreferencesGroup::builder()
+                .title(title)
+                .description(description)
+                .build();
+            let key_ctx = ctx.clone();
+            let key_button = button.clone();
+            let binding = bindings::binding(&doc, BindingInput::Trigger(&spec));
+            for row in gesture_rows(binding, move |gesture, output| {
+                edit_binding(&key_ctx, &key_button, selected, |doc| {
+                    bindings::set_action(doc, BindingInput::Trigger(&spec), gesture, output)
+                });
+            }) {
+                group.add(&row);
+            }
+            inspector.append(&group);
+        }
     }
     if !selected.starts_with("dpad-") {
         let gamepad = adw::PreferencesGroup::builder()
@@ -307,7 +385,14 @@ pub(crate) fn keyboard_rows(
     input: &str,
     changed: impl Fn(Gesture, Option<&str>) + Clone + 'static,
 ) -> Vec<adw::PreferencesRow> {
-    let binding = match bindings::keyboard_binding(doc, input) {
+    gesture_rows(bindings::keyboard_binding(doc, input), changed)
+}
+
+fn gesture_rows(
+    binding: Result<Option<&toml_edit::Table>, &'static str>,
+    changed: impl Fn(Gesture, Option<&str>) + Clone + 'static,
+) -> Vec<adw::PreferencesRow> {
+    let binding = match binding {
         Ok(binding) => binding,
         Err(error) => return vec![message_row("Keyboard bindings", error).upcast()],
     };

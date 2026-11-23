@@ -123,21 +123,38 @@ struct BridgeFile {
 }
 
 impl BridgeFile {
-    fn outputs(self) -> Option<BridgeOptions> {
+    fn outputs(self) -> Option<BridgeSettings> {
         if self.gamepad.is_none() && self.rumble.is_none() && self.virtual_gamepad.is_none() {
             return None;
         }
-        Some(BridgeOptions {
+        Some(BridgeSettings {
+            gamepad: self.gamepad,
+            rumble: self.rumble,
+            virtual_gamepad: self.virtual_gamepad,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BridgeSettings {
+    pub gamepad: Option<OutputKind>,
+    pub rumble: Option<bool>,
+    pub virtual_gamepad: Option<bool>,
+}
+
+impl BridgeSettings {
+    pub fn startup(self) -> BridgeOptions {
+        BridgeOptions {
             gamepad: self.gamepad.unwrap_or_default(),
             rumble: self.rumble.unwrap_or_default(),
             virtual_gamepad: self.virtual_gamepad.unwrap_or(true),
-        })
+        }
     }
 }
 
 #[derive(Default)]
 pub struct RuntimeOptions {
-    pub bridge: Option<BridgeOptions>,
+    pub bridge: Option<BridgeSettings>,
     pub stick_curve: Option<StickCurve>,
     pub remaps: ButtonRemaps,
     pub gyro: Option<gyro_mouse::Options>,
@@ -506,7 +523,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            profile.bridge.unwrap(),
+            profile.bridge.unwrap().startup(),
             BridgeOptions {
                 gamepad: OutputKind::XboxSeries,
                 rumble: true,
@@ -517,7 +534,7 @@ mod tests {
             .unwrap()
             .bridge;
         assert_eq!(
-            partial.unwrap(),
+            partial.unwrap().startup(),
             BridgeOptions {
                 gamepad: OutputKind::Xbox360,
                 ..BridgeOptions::default()

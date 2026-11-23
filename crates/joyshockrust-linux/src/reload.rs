@@ -281,17 +281,15 @@ impl Request<'_> {
         };
         match profile {
             Ok(profile) => {
-                if profile.bridge.is_none() {
-                    return Some(profile);
-                }
                 let next = profile.bridge.unwrap_or_default();
                 let startup = self.reload.bridge_at_startup;
-                if next.gamepad != startup.gamepad
-                    || next.rumble != startup.rumble
-                    || next.virtual_gamepad != startup.virtual_gamepad
+                if next.rumble.is_some_and(|value| value != startup.rumble)
+                    || next
+                        .virtual_gamepad
+                        .is_some_and(|value| value != startup.virtual_gamepad)
                 {
                     self.rejected(
-                        "virtual gamepad and rumble changes require restarting JoyShockRust",
+                        "profile changes to rumble or gamepad enablement require restarting JoyShockRust",
                     );
                     return None;
                 }
@@ -302,6 +300,13 @@ impl Request<'_> {
                 None
             }
         }
+    }
+
+    pub fn profile_gamepad(&self, profile: &RuntimeOptions) -> crate::gamepad::OutputKind {
+        profile
+            .bridge
+            .and_then(|settings| settings.gamepad)
+            .unwrap_or(self.reload.bridge_at_startup.gamepad)
     }
 
     pub fn applied(self, status: Option<&StatusSocket>) {

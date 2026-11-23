@@ -153,7 +153,9 @@ rumble = true
 ```
 
 The gamepad options are `generic`, `xbox360` and `xbox-series`. The profile
-sets the startup identity, rumble and `virtual_gamepad` default. To switch
+sets the startup identity, rumble and `virtual_gamepad` default. A live
+profile can select a different gamepad identity. Loading a profile
+without a gamepad choice restores the startup identity. To switch
 virtual gamepad emulation for the current process, use
 `joyshockrust-linux --set-gamepad off` or `--set-gamepad on`. The command
 keeps the physical controller session, gyro and keyboard mappings active.
@@ -245,7 +247,11 @@ tap = ["KEY_LEFTSHIFT", "BTN_LEFT"]
 Use `trigger` in place of `button` for an analog L2 or R2 binding.
 The optional suffix sets the engagement and release thresholds on a
 scale from 0 to 1. The defaults are 0.45 and 0.35. Bindings at different
-thresholds can overlap, so a deeper pull can add a second key.
+thresholds can overlap, so a deeper pull can add a second key. For a
+partial-only binding, add a second pair of thresholds, for example
+`l2:0.45:0.35:0.95:0.85`. It uses the first pair for the lower edge and
+the second pair to switch to the full stage. A full pull suppresses the
+partial tap during that pull.
 
 ```toml
 [[keyboard.bindings]]
@@ -668,6 +674,12 @@ hold and double-tap keyboard or mouse actions, along with its base virtual
 gamepad remap when available. Choose **No action** to clear a gesture or
 **Same as controller** to remove the base remap. Use the **Advanced**
 page for TOML settings such as chords and layers.
+
+At the top of **Buttons**, choose the **Virtual gamepad type**. Selecting
+L2 or R2 shows **Partial pull** and **Full pull** keyboard and mouse
+actions in addition to the digital button. A partial pull engages at
+45%, and a full pull at 95%. The release thresholds are 35% and 85%.
+Choose **Save & Apply** to use the new settings.
 
 In **Touchpad**, set the number of rows and columns, select a grid
 cell, and assign separate virtual gamepad buttons to **Touch** and
