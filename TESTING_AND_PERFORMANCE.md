@@ -583,6 +583,11 @@ resume. The descriptor-based recovery is covered synthetically.
 
 ## Live controller selection acceptance
 
+Run `--list-controllers` with both controllers connected. Check their
+model, transport and node paths. Add `--show-controller-id` to check the
+IDs, and compare `active_hidraw` from `--status` with the list. Verify the
+field changes on selection and reads `none` while waiting.
+
 Use the discovery-mode user service and record its PID. Use
 `--select-controller ID` to select the second controller. Include
 `--controller-model MODEL` and a transport flag if needed. Verify the

@@ -14,27 +14,41 @@ const INVENTORY: ControllerFilter = ControllerFilter {
     controller_id: None,
 };
 
+pub fn list_controllers(
+    filter: ControllerFilter,
+    show_id: bool,
+    mut output: impl Write,
+) -> io::Result<()> {
+    writeln!(output, "Controller filter: {filter}")?;
+    let nodes = discovery::controller_nodes(INVENTORY)?;
+    if nodes.is_empty() {
+        return writeln!(output, "No supported controllers found.");
+    }
+    let mut matched = false;
+    for node in nodes {
+        if filter.accepts(node.identity) || show_id {
+            matched |= check_controller(&node.path, INVENTORY, filter, show_id, &mut output)?;
+        } else {
+            describe_controller(&node.path, node.identity, None, filter, false, &mut output)?;
+        }
+    }
+    if !matched {
+        writeln!(output, "No readable controller matches the filter.")?;
+    }
+    Ok(())
+}
+
 pub fn run(
     path: Option<&Path>,
     filter: ControllerFilter,
     show_id: bool,
     mut output: impl Write,
 ) -> io::Result<()> {
-    writeln!(output, "Controller filter: {filter}")?;
     if let Some(path) = path {
+        writeln!(output, "Controller filter: {filter}")?;
         check_controller(path, INVENTORY, filter, show_id, &mut output)?;
     } else {
-        let mut matched = false;
-        for node in discovery::controller_nodes(INVENTORY)? {
-            if filter.accepts(node.identity) || show_id {
-                matched |= check_controller(&node.path, INVENTORY, filter, show_id, &mut output)?;
-            } else {
-                describe_controller(&node.path, node.identity, None, filter, false, &mut output)?;
-            }
-        }
-        if !matched {
-            writeln!(output, "No readable controller matches the filter.")?;
-        }
+        list_controllers(filter, show_id, &mut output)?;
     }
     // Opening the builder checks the same permissions as startup. The
     // virtual device is created only if build() is called.

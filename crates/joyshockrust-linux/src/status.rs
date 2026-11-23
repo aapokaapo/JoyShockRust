@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     env,
     fmt::Display,
     io::{self, Read, Write},
@@ -22,6 +22,7 @@ pub struct StatusSocket {
     sessions: Cell<SessionCounts>,
     filter: Cell<ControllerFilter>,
     profile_source: Cell<ProfileSource>,
+    active_hidraw: RefCell<Option<String>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -89,6 +90,7 @@ impl StatusSocket {
             sessions: Cell::default(),
             filter: Cell::default(),
             profile_source: Cell::default(),
+            active_hidraw: RefCell::default(),
         })
     }
 
@@ -104,7 +106,16 @@ impl StatusSocket {
         self.profile_source.set(source);
     }
 
+    pub fn set_active_hidraw(&self, path: &Path) {
+        // Preserve a single key/value line even when a manual device path includes control characters.
+        self.active_hidraw
+            .replace(Some(path.to_string_lossy().escape_debug().to_string()));
+    }
+
     pub fn update(&self, identity: Option<Identity>, gyro_configured: bool) {
+        if identity.is_none() {
+            self.active_hidraw.take();
+        }
         let mut snapshot = self.snapshot.get();
         if snapshot.identity != identity {
             let mut sessions = self.sessions.get();
@@ -194,8 +205,10 @@ impl StatusSocket {
         let selected_transport = filter.transport.as_str();
         let selected_model = filter.model.as_str();
         let profile_source = self.profile_source.get().as_str();
+        let active_hidraw = self.active_hidraw.borrow();
+        let active_hidraw = active_hidraw.as_deref().unwrap_or("none");
         let response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\n",
+            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\nactive_hidraw={active_hidraw}\n",
             snapshot.gyro_configured,
             reports.decoded,
             reports.rejected,
@@ -233,7 +246,8 @@ impl StatusSocket {
 
 pub fn query(path: Option<&Path>, mut output: impl Write) -> io::Result<()> {
     let stream = connect(path, "status.sock")?;
-    io::copy(&mut stream.take(1024), &mut output)?;
+    // Allow a full escaped Linux path in the active_hidraw field.
+    io::copy(&mut stream.take(64 * 1024), &mut output)?;
     Ok(())
 }
 
@@ -288,12 +302,14 @@ mod tests {
             sessions: Cell::default(),
             filter: Cell::default(),
             profile_source: Cell::default(),
+            active_hidraw: RefCell::default(),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
             transport: Transport::Usb,
         };
         status.update(Some(identity), false);
+        status.set_active_hidraw(Path::new("/dev/hidraw6"));
 
         let (sender, receiver) = UnixDatagram::pair().unwrap();
         receiver.set_nonblocking(true).unwrap();
@@ -340,7 +356,7 @@ mod tests {
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         assert!(response.ends_with(
-            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=1\nuinput_mouse_button_batches=2\nprofile_source=defaults\n"
+            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=1\nuinput_mouse_button_batches=2\nprofile_source=defaults\nactive_hidraw=/dev/hidraw6\n"
         ));
         let reports = status.reports.get();
         let (start, initial_count) = reports.baseline.unwrap();
@@ -359,6 +375,7 @@ mod tests {
         assert_eq!(reports.mouse_button_batches, 2);
 
         status.update(None, true);
+        assert!(status.active_hidraw.borrow().is_none());
         status.update(Some(identity), true);
         let reports = status.reports.get();
         assert_eq!(reports.decoded, 0);
@@ -385,6 +402,7 @@ mod tests {
             sessions: Cell::default(),
             filter: Cell::default(),
             profile_source: Cell::default(),
+            active_hidraw: RefCell::default(),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
@@ -470,6 +488,7 @@ mod tests {
             sessions: Cell::default(),
             filter: Cell::default(),
             profile_source: Cell::default(),
+            active_hidraw: RefCell::default(),
         };
         let (_sender, input) = UnixStream::pair().unwrap();
 
@@ -548,7 +567,7 @@ mod tests {
             assert_eq!(
                 response,
                 format!(
-                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=0\nuinput_mouse_button_batches=0\nprofile_source=defaults\n"
+                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=0\nuinput_mouse_button_batches=0\nprofile_source=defaults\nactive_hidraw=none\n"
                 )
             );
         }

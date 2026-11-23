@@ -172,8 +172,10 @@ controller in discovery order. Without a match it stays running, reports
 `controller=waiting`, and connects when an eligible controller appears.
 Only one controller is active at a time.
 
-Run `joyshockrust-linux --diagnose --auto-transport --controller-model any --show-controller-id`
-to find a controller's HID ID. Use `--select-controller ID` to select it
+Run `joyshockrust-linux --list-controllers --show-controller-id` to list
+connected controllers and find their HID IDs. Compare the listed hidraw
+paths with `active_hidraw` in `--status` to identify the current device.
+Use `--select-controller ID` to select a device
 in a running discovery service or use `any` to clear the live ID filter.
 Add a model or transport flag to change those filters in the same command.
 
@@ -486,6 +488,8 @@ is configured, or `unavailable` when no path has been set. It reports
 The `profile_source` field shows which mappings are active. Its values
 are `defaults`, `command_line`, `startup` and `loaded`. A rejected load
 leaves the previously active source in effect.
+The `active_hidraw` field reports the device path for the active session
+and reads `none` while waiting for a controller.
 The status and reload sockets are under `$XDG_RUNTIME_DIR/joyshockrust/`
 and are removed when the service stops.
 

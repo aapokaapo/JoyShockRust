@@ -50,6 +50,29 @@ fn invalid_startup_profile_exits_with_config_status() {
 }
 
 #[test]
+fn controller_inventory_can_run_without_a_service_or_profile() {
+    let directory = TestDirectory::new("inventory");
+    let output = Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
+        .env("XDG_CONFIG_HOME", &directory.0)
+        .args([
+            "--list-controllers",
+            "--show-controller-id",
+            "--controller-model",
+            "dualsense-edge",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with("Controller filter: DualSense Edge over USB or Bluetooth\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("/dev/uinput:"), "{stdout}");
+    assert!(!directory.0.join("joyshockrust/controller.toml").exists());
+}
+
+#[test]
 fn diagnostics_loads_the_profile_and_allows_a_transport_override() {
     let profile =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml");

@@ -187,6 +187,8 @@ The CLI also supports unloading a profile to restore default mappings
 during the current session.
 Status identifies the active mapping source independently of the result of
 the last profile command.
+Controller inventory lists connected nodes independently of the service.
+Status exposes the active node for comparison with the inventory.
 
 Keyboard profiles map digital buttons and D-pad directions to tap, hold
 and double-tap keys. Analog trigger travel can drive the same gestures

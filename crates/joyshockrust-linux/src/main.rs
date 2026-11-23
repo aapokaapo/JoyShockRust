@@ -55,6 +55,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --check-profile PATH\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
         "       joyshockrust-linux --diagnose [--profile PATH] [--show-controller-id] [CONTROLLER_OPTIONS] [/dev/hidrawN]\n",
+        "       joyshockrust-linux --list-controllers [--show-controller-id] [CONTROLLER_OPTIONS]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
@@ -85,6 +86,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut path = None;
     let mut profile_path = None;
     let mut diagnose = false;
+    let mut list_controllers = false;
     let mut show_controller_id = false;
     let mut benchmark_target = None;
     let mut benchmark_timeout = None;
@@ -165,6 +167,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             };
         } else if arg == "--diagnose" && !diagnose {
             diagnose = true;
+        } else if arg == "--list-controllers" && !list_controllers {
+            list_controllers = true;
         } else if arg == "--show-controller-id" && !show_controller_id {
             show_controller_id = true;
         } else if arg == "--benchmark-reports" && benchmark_target.is_none() {
@@ -322,14 +326,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         + u8::from(load_profile_path.is_some())
         + u8::from(unload_profile)
         + u8::from(controller_selection.is_some());
-    if show_controller_id && !diagnose {
-        return Err("--show-controller-id requires --diagnose".into());
+    if show_controller_id && !diagnose && !list_controllers {
+        return Err("--show-controller-id requires --diagnose or --list-controllers".into());
     }
     if benchmark_timeout.is_some() && benchmark_target.is_none() {
         return Err("--benchmark-timeout requires --benchmark-reports".into());
     }
     if benchmark_target.is_some()
         && (diagnose
+            || list_controllers
             || socket_commands > 0
             || profile_path
                 .as_ref()
@@ -340,6 +345,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     if socket_commands > 0 {
         if socket_commands > 1
             || diagnose
+            || list_controllers
             || profile_path.is_some()
             || bridge_options
             || controller_id.is_some()
@@ -374,7 +380,19 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         }
         return Ok(ExitCode::SUCCESS);
     }
-    if diagnose {
+    if diagnose || list_controllers {
+        if list_controllers
+            && (diagnose
+                || profile_path.is_some()
+                || path.is_some()
+                || bridge_options
+                || mapping_options)
+        {
+            return Err(
+                "--list-controllers accepts controller selection options and --show-controller-id"
+                    .into(),
+            );
+        }
         if bridge_options
             || mapping_options
             || profile_path
@@ -400,6 +418,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         }
         if let Some(id) = controller_id {
             filter.controller_id = id;
+        }
+        if list_controllers {
+            diagnostics::list_controllers(filter, show_controller_id, std::io::stdout().lock())?;
+            return Ok(ExitCode::SUCCESS);
         }
         diagnostics::run(
             path.as_deref(),
@@ -506,11 +528,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         status.set_filter(filter);
     }
     if let Some(target) = benchmark_target {
-        let (mut input, identity) = if let Some(path) = path {
-            discovery::open_controller(&path, filter)
-                .map_err(|err| format!("could not use {}: {err}", path.display()))?
+        let (mut input, identity, path) = if let Some(path) = path {
+            let (input, identity) = discovery::open_controller(&path, filter)
+                .map_err(|err| format!("could not use {}: {err}", path.display()))?;
+            (input, identity, path)
         } else {
-            discovery::open_first_controller(filter, controller_config.preferred())?
+            let (input, candidate) =
+                discovery::open_first_controller(filter, controller_config.preferred())?;
+            (input, candidate.identity, candidate.path)
         };
         let mut measurement = benchmark::Benchmark::new(
             target,
@@ -522,7 +547,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             reload,
             status,
             identity,
-            (bridge, filter),
+            (bridge, filter, &path),
             Some(&mut measurement),
         );
         measurement.write(identity, result.is_err(), std::io::stdout().lock())?;
@@ -547,7 +572,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             reload,
             status,
             identity,
-            (bridge, filter),
+            (bridge, filter, &path),
             None,
         )?;
     } else {
@@ -557,13 +582,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             reload,
             status,
             |event| match event {
-                discovery::Event::Connected(input, identity, filter) => serve_session(
+                discovery::Event::Connected(input, identity, filter, path) => serve_session(
                     input,
                     &mut runtime,
                     reload,
                     status,
                     identity,
-                    (bridge, filter),
+                    (bridge, filter, path),
                     None,
                 ),
                 discovery::Event::Reload(reload, current_filter) => {
@@ -612,7 +637,11 @@ fn serve_session(
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
     identity: Identity,
-    (bridge, filter): (profile::BridgeOptions, discovery::ControllerFilter),
+    (bridge, filter, path): (
+        profile::BridgeOptions,
+        discovery::ControllerFilter,
+        &std::path::Path,
+    ),
     mut measurement: Option<&mut benchmark::Benchmark>,
 ) -> std::io::Result<Option<discovery::ControllerFilter>> {
     use std::{cell::Cell, os::fd::AsFd, time::Instant};
@@ -647,6 +676,7 @@ fn serve_session(
     let mut touch_click = touchpad::ClickState::default();
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());
+        status.set_active_hidraw(path);
     }
     let resource_start = measurement
         .as_ref()

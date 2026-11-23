@@ -163,14 +163,14 @@ pub fn open_controller(path: &Path, filter: ControllerFilter) -> io::Result<(Fil
 pub fn open_first_controller(
     filter: ControllerFilter,
     preferred: Option<ControllerId>,
-) -> io::Result<(File, Identity)> {
+) -> io::Result<(File, Candidate)> {
     find_controller(filter, preferred, &mut HashSet::new())?
-        .map(|(candidate, opened)| (opened.file, candidate.identity))
+        .map(|(candidate, opened)| (opened.file, candidate))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("connect a {filter}")))
 }
 
 pub enum Event<'a> {
-    Connected(&'a mut File, Identity, ControllerFilter),
+    Connected(&'a mut File, Identity, ControllerFilter, &'a Path),
     Reload(reload::Request<'a>, ControllerFilter),
 }
 
@@ -213,7 +213,7 @@ pub fn run(
                 transport_name(identity.transport),
                 identity.model_name()
             );
-            match handle(Event::Connected(&mut file, identity, filter)) {
+            match handle(Event::Connected(&mut file, identity, filter, &path)) {
                 Ok(Some(next)) => {
                     config.change_filters(filter, next);
                     filter = next;
