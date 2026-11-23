@@ -5,6 +5,18 @@ pub const MAX_FLICK_AXIAL_THRESHOLD_DEG: f64 = 30.0;
 pub const MAX_GYRO_RATE_DPS: f64 = 2_000.0;
 pub const MAX_GYRO_ACCEL_MULTIPLIER: f64 = 10.0;
 
+/// Angle in radians, clockwise from forward in the stick's device coordinates.
+pub fn flick_stick_angle(x: f64, y: f64, axial_threshold_radians: f64) -> f64 {
+    let angle = x.atan2(-y);
+    let quarter_turn = std::f64::consts::FRAC_PI_2;
+    let cardinal = (angle / quarter_turn).round() * quarter_turn;
+    if (angle - cardinal).abs() <= axial_threshold_radians {
+        cardinal
+    } else {
+        angle
+    }
+}
+
 pub fn validate_flick_axial_threshold(degrees: f64) -> Result<f64, &'static str> {
     if (0.0..=MAX_FLICK_AXIAL_THRESHOLD_DEG).contains(&degrees) {
         Ok(degrees)

@@ -257,7 +257,8 @@ after the window exits. Both calibration windows accept controller
 navigation while focused, including numeric adjustment and profile
 selection and a live result preview in the real-world calibration window.
 Flick Stick can snap to cardinal axes within a configurable angular
-threshold. Gyro aim has a minimum movement speed and optional bounded
+threshold with a live physical and adjusted preview in the editor.
+Gyro aim has a minimum movement speed and optional bounded
 speed-dependent gain.
 
 The tray launches a native profile editor. The editor creates, validates,

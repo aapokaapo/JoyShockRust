@@ -1,11 +1,11 @@
 use std::{
-    f64::consts::{FRAC_PI_2, PI, TAU},
+    f64::consts::{PI, TAU},
     time::Duration,
 };
 
 use joyshockrust_core::Stick;
 use joyshockrust_input::{Timebase, TimestampUpdate};
-use joyshockrust_motion::aim_response::DEFAULT_FLICK_AXIAL_THRESHOLD_DEG;
+use joyshockrust_motion::aim_response::{DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, flick_stick_angle};
 
 const FLICK_DURATION: Duration = Duration::from_millis(100);
 const ENGAGE_RADIUS: f32 = 0.90;
@@ -101,13 +101,8 @@ impl FlickStick {
         } else if self.armed
             && (self.angle.is_some() || radius_squared >= ENGAGE_RADIUS * ENGAGE_RADIUS)
         {
-            let angle = f64::from(stick.x).atan2(-f64::from(stick.y));
-            let cardinal = (angle / FRAC_PI_2).round() * FRAC_PI_2;
-            let current = if (angle - cardinal).abs() <= self.axial_threshold {
-                cardinal
-            } else {
-                angle
-            };
+            let current =
+                flick_stick_angle(f64::from(stick.x), f64::from(stick.y), self.axial_threshold);
             if let Some(previous) = self.angle.replace(current) {
                 let turn = (current - previous + PI).rem_euclid(TAU) - PI;
                 let degrees_rotated = turn.to_degrees();

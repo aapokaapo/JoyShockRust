@@ -207,7 +207,13 @@ the counts-per-degree value for the game's sensitivity before measuring
 the angles. Confirm the left stick still drives the virtual gamepad.
 Set the axial threshold to 12° and flick just left and right of forward.
 Verify both snap to forward. From a diagonal, steer back to forward.
-Set the threshold to 0° and repeat to compare the response.
+Set the threshold to 0° and repeat to compare the response. Open
+**Gyro → Flick Stick** with the bridge running. Move the active right
+stick near a sector edge and change the threshold in the editor.
+Check that both previews follow the stick, that the adjusted marker
+snaps inside a shaded sector, and that the sector updates before saving.
+Switch controllers or reconnect and check that the preview follows the
+active controller.
 
 The user reported that Flick Stick worked as expected.
 

@@ -755,6 +755,22 @@ pub(crate) mod tests {
         let (entry, _) = controls(&reopened, "Vertical");
         entry.set_text("9.5");
         assert_axes(31.25, 9.5);
+        let preview = descendants::<adw::PreferencesGroup>(&reopened)
+            .into_iter()
+            .find(|group| group.title() == "Flick Stick")
+            .unwrap();
+        assert_eq!(
+            descendants::<gtk::DrawingArea>(preview.upcast_ref()).len(),
+            2
+        );
+        for title in ["Physical input", "After threshold"] {
+            assert!(
+                descendants::<gtk::Label>(preview.upcast_ref())
+                    .iter()
+                    .any(|label| label.text() == title)
+            );
+        }
+
         let settings = descendants::<adw::SpinRow>(&reopened);
         for (title, value) in [
             ("Minimum speed", 2.0),

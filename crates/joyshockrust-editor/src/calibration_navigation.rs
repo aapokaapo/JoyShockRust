@@ -1,21 +1,15 @@
 use std::{
     cell::RefCell,
-    fs::OpenOptions,
     io::{self, Read},
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    os::fd::AsRawFd,
     path::Path,
     rc::Rc,
 };
 
 use adw::{glib, gtk, prelude::*};
-
 use joyshockrust_core::{Button, Controls, DPad};
-use joyshockrust_input::{
-    DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN, DUALSENSE_EDGE_USB_REPORT_LEN, DeviceModel, Transport,
-    parse_report,
-};
 
-use crate::calibration::positive_decimal;
+use crate::{calibration::positive_decimal, controller_input};
 
 pub fn watch(
     window: &adw::ApplicationWindow,
@@ -23,10 +17,7 @@ pub fn watch(
     mut on_command: impl FnMut(&str) + 'static,
     on_error: impl Fn(&io::Error) + 'static,
 ) -> io::Result<()> {
-    let mut input = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)?;
+    let mut input = controller_input::open(path)?;
     let source = Rc::new(RefCell::new(None::<glib::SourceId>));
     let active = source.clone();
     let mut previous = None;
@@ -67,38 +58,14 @@ pub fn watch(
 }
 
 fn read_commands(
-    mut input: impl Read,
+    input: impl Read,
     bytes: &mut [u8],
     previous: &mut Option<Controls>,
     mut dispatch: impl FnMut(&str) -> bool,
 ) -> io::Result<()> {
-    for _ in 0..32 {
-        let len = match input.read(bytes) {
-            Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "Controller disconnected",
-                ));
-            }
-            Ok(len) => len,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error),
-        };
-        let transport = match len {
-            DUALSENSE_EDGE_USB_REPORT_LEN => Transport::Usb,
-            DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN => Transport::Bluetooth,
-            _ => continue,
-        };
-        // The controls used for navigation have the same layout on both supported models.
-        if let Ok(report) = parse_report(DeviceModel::DualSense, transport, &bytes[..len], None)
-            && let Some(command) = command(previous, report.controls)
-            && !dispatch(command)
-        {
-            break;
-        }
-    }
-    Ok(())
+    controller_input::read_reports(input, bytes, 32, |controls| {
+        command(previous, controls).is_none_or(&mut dispatch)
+    })
 }
 
 #[derive(Clone)]
@@ -252,6 +219,7 @@ mod tests {
 
     #[test]
     fn navigation_reads_complete_usb_reports_and_preserves_press_edges() {
+        use joyshockrust_input::DUALSENSE_EDGE_USB_REPORT_LEN;
         use std::os::unix::net::UnixDatagram;
 
         struct Reports(UnixDatagram);

@@ -269,6 +269,7 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
 fn flick_threshold_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
         .title("Flick Stick")
+        .description("Shaded sectors show where the stick snaps to a cardinal direction.")
         .build();
     let value = gyro.map_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, |table| {
         number(table, FLICK_THRESHOLD, DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
@@ -285,6 +286,7 @@ fn flick_threshold_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pr
         ctx.edit(|doc| set_gyro_numbers(doc, [(FLICK_THRESHOLD, row.value())]));
     });
     group.add(&row);
+    crate::flick_preview::add(&group, &row.adjustment());
     group
 }
 

@@ -730,7 +730,10 @@ speeds for acceleration, in degrees per second. The acceleration
 multiplier ramps up between those speeds and caps at the selected value.
 A minimum speed of 0 and a multiplier of 1 preserve linear aim.
 Under **Flick Stick**, **Axial threshold** snaps the stick to the nearest
-cardinal direction inside the chosen angle. The default is 8°.
+cardinal direction inside the chosen angle. The default is 8°. The
+preview shows the shaded threshold sectors and compares the active
+controller's physical right-stick position with the position after
+snapping. The preview uses the draft threshold as you edit it.
 
 Open the profile actions menu to **Validate Profile** or **Save** to
 disk. **Save & Apply** writes the profile and loads it into the running
