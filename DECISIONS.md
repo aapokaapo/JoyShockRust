@@ -491,8 +491,12 @@ polling and command execution stay outside the input process.
 For tray RWC calibration, the bridge ends its active output session
 before acknowledging the pause and keeps serving control requests.
 Discovery resumes with the existing profile and controller filter.
-The tray waits for the interactive calibration terminal, then resumes
-the bridge. The calibration CLI owns the profile write.
+The tray waits for the GTK calibration window, then resumes the bridge.
+The window runs the same Flick Stick sweep as the interactive CLI.
+Measurement and saving are separate commands. The save command validates
+and atomically updates the profile. Closing the window during measurement
+stops and waits for the measurement process before the tray resumes
+normal outputs.
 
 The editor is a separate native window. Its controller diagram
 selects a physical input, and the inspector edits keyboard and mouse

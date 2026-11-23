@@ -705,9 +705,15 @@ disk. **Save & Apply** writes the profile and loads it into the running
 bridge. Use Ctrl+S to save or Ctrl+Shift+S to save and apply.
 
 Choose a file under **Calibrate game sensitivity (RWC)** while a controller
-is connected. The tray pauses virtual outputs and opens Konsole, GNOME
-Terminal or foot on Wayland for the existing whole-turn calibration. When the
-terminal closes, the bridge resumes with the same in-memory profile and
+is connected. The tray pauses virtual outputs and opens the Wayland
+calibration window. Enter the game's mouse sensitivity and select **Start
+Measurement**. Focus the game, aim at a landmark and press Options with the
+right stick centered. Sweep the stick around its edge until the camera has
+completed one or more whole turns and has returned to the landmark. Center
+the stick and press Options again. Return to the calibration window, enter
+the number of complete turns and select **Save Calibration**.
+
+Select **Done** to resume the bridge with the same in-memory profile and
 controller selection. To apply the saved calibration, select the
 updated profile in **Profiles**. If the tray was interrupted and the
 bridge is still paused, use **Resume virtual outputs** or run

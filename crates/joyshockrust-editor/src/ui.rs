@@ -258,12 +258,12 @@ pub fn advanced_required(description: &str) -> gtk::Widget {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::PathBuf;
 
     use super::*;
 
-    fn descendants<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Vec<T> {
+    pub(crate) fn descendants<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Vec<T> {
         let mut matches = Vec::new();
         let mut child = widget.first_child();
         while let Some(current) = child {

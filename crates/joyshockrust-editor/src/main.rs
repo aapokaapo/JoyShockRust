@@ -8,6 +8,7 @@ use std::{
 use adw::{gtk, prelude::*};
 
 mod bindings;
+mod calibration;
 mod controller;
 mod sensitivity;
 mod stick_keys;
@@ -142,7 +143,14 @@ impl Editor {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = env::args_os().skip(1);
+    let mut args = env::args_os().skip(1).peekable();
+    let bridge = env::current_exe()?.with_file_name("joyshockrust-linux");
+    if args.next_if(|arg| arg == "--calibrate-game").is_some() {
+        let [Some(profile), Some(node), None] = [args.next(), args.next(), args.next()] else {
+            return Err("usage: joyshockrust-editor --calibrate-game PROFILE HIDRAW".into());
+        };
+        return calibration::run(bridge, profile.into(), node.into());
+    }
     let path = args.next().map(PathBuf::from);
     if args.next().is_some() {
         return Err("usage: joyshockrust-editor [PROFILE]".into());
@@ -158,7 +166,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .ok_or("expected an absolute XDG_CONFIG_HOME or HOME")?
         .join("joyshockrust/profiles");
-    let bridge = env::current_exe()?.with_file_name("joyshockrust-linux");
     let editor = std::rc::Rc::new(std::cell::RefCell::new(Editor::open(
         bridge, directory, path,
     )?));

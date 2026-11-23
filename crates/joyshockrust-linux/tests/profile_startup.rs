@@ -442,3 +442,29 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
     check(false, "applied", "defaults", true);
     assert_eq!(fs::read_to_string(preset).unwrap(), "version = 1\n[gyro]\n");
 }
+
+#[test]
+fn whole_turn_calibration_saves_only_a_valid_measurement() {
+    let directory = TestDirectory::new("whole-turn-calibration");
+    let profile = directory.0.join("profile.toml");
+    let original = "version = 1\n[gyro]\nsensitivity_x = 2.5 # keep this\n";
+    fs::write(&profile, original).unwrap();
+    let save = |turns| {
+        Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
+            .args(["--calibrate-game", "--save-measurement"])
+            .arg(&profile)
+            .args(["28800", "2", turns])
+            .output()
+            .unwrap()
+    };
+    assert!(!save("0").status.success());
+    assert!(!save("1.5").status.success());
+    assert_eq!(fs::read_to_string(&profile).unwrap(), original);
+    let saved = save("4");
+    assert!(saved.status.success(), "{saved:?}");
+    assert_eq!(saved.stdout, b"40.0\n");
+    let text = fs::read_to_string(&profile).unwrap();
+    assert!(text.contains("sensitivity_x = 2.5 # keep this"));
+    assert!(text.contains("real_world_calibration = 40.0"));
+    assert!(text.contains("in_game_sens = 2.0"));
+}

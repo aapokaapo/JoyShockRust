@@ -227,7 +227,7 @@ impl ksni::Tray for Tray {
             menu.push(label(error));
         }
         if state.calibrating {
-            menu.push(label("Calibrating in terminal"));
+            menu.push(label("Calibrating game sensitivity"));
             return menu;
         }
         if state
@@ -408,9 +408,10 @@ impl Desktop {
                 .arg("--check-profile")
                 .arg(profile),
         )?;
-        let mut terminal = calibration_terminal(&self.bridge, profile, node)?;
+        let mut dialog = Command::new(self.bridge.with_file_name("joyshockrust-editor"));
+        dialog.args(["--calibrate-game"]).arg(profile).arg(node);
         self.set_outputs_paused(true)?;
-        match terminal.spawn() {
+        match dialog.spawn() {
             Ok(child) => Ok(child),
             Err(error) => {
                 if let Err(resume) = self.set_outputs_paused(false) {
@@ -478,51 +479,6 @@ impl Desktop {
         }
         Ok(())
     }
-}
-
-fn calibration_terminal(bridge: &Path, profile: &Path, node: &str) -> io::Result<Command> {
-    // Pass file names as arguments. The shell only keeps the result visible.
-    const HOLD_TERMINAL: &str = r#""$@"
-result=$?
-printf '\nPress Enter to return to JoyShockRust.\n'
-IFS= read -r ignored
-exit "$result""#;
-    for (program, args) in [
-        ("konsole", &["--separate", "-e"][..]),
-        ("gnome-terminal", &["--wait", "--"][..]),
-        ("foot", &["--"][..]),
-    ] {
-        let Some(path) = env::var_os("PATH").and_then(|paths| {
-            env::split_paths(&paths)
-                .map(|directory| directory.join(program))
-                .find(|path| path.is_file())
-        }) else {
-            continue;
-        };
-        let mut command = Command::new(path);
-        command.env_remove("DISPLAY");
-        match program {
-            "konsole" => {
-                command.env("QT_QPA_PLATFORM", "wayland");
-            }
-            "gnome-terminal" => {
-                command.env("GDK_BACKEND", "wayland");
-            }
-            _ => {}
-        }
-        command
-            .args(args)
-            .args(["/bin/sh", "-c", HOLD_TERMINAL, "joyshockrust-calibration"])
-            .arg(bridge)
-            .args(["--calibrate-game", "--profile"])
-            .arg(profile)
-            .arg(node);
-        return Ok(command);
-    }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "calibration needs Konsole, GNOME Terminal or foot on Wayland",
-    ))
 }
 
 fn output(command: &mut Command) -> io::Result<String> {

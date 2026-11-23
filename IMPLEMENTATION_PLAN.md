@@ -246,10 +246,11 @@ XDG autostart gives the user a login-start preference. The tray shows
 controller telemetry and offers independent controller and profile
 selectors.
 
-The tray opens terminal-based real-world calibration for a chosen
-profile. The bridge releases its virtual outputs during calibration
-while retaining the live profile and controller selection. The tray
-resumes the bridge after the terminal exits.
+The tray opens a Wayland real-world calibration window for a chosen
+profile. The bridge releases its virtual outputs while retaining the live
+profile and controller selection. The window uses the existing Flick
+Stick measurement and validates and saves the selected profile through
+the bridge CLI. The tray resumes the bridge after the window exits.
 
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects
@@ -269,7 +270,7 @@ The Sticks page edits keyboard direction keys and inner and outer zones
 independently for each stick. The mapping dialog validates the draft with
 the bridge before returning to the profile.
 
-Next, start a dedicated calibration dialog that can replace the terminal prompts.
+Next, verify the desktop calibration workflow and cancellation on hardware.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

@@ -64,6 +64,36 @@ fn calculate(counts: i32, in_game_sens: f64, turns: f64) -> Result<f64, &'static
 
 pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
     let mut args = args.peekable();
+    if args.next_if(|arg| arg == "--measure-stick").is_some() {
+        let sensitivity = parse_arg(args.next(), "invalid in-game sensitivity")?;
+        let hidraw = args.next().ok_or("expected a controller node")?;
+        let parent: i32 = parse_arg(args.next(), "invalid calibration window process ID")?;
+        if args.next().is_some() || !positive(sensitivity) || parent <= 1 {
+            return Err(
+                "expected sensitivity, controller node and calibration window process ID".into(),
+            );
+        }
+        // Release the calibration mouse even if its window is killed.
+        nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL)?;
+        if nix::unistd::getppid().as_raw() != parent {
+            return Err("calibration window has closed".into());
+        }
+        let counts = measure_with_stick(sensitivity, Some(Path::new(&hidraw)))?;
+        println!("{counts}");
+        return Ok(());
+    }
+    if args.next_if(|arg| arg == "--save-measurement").is_some() {
+        let path = args.next().ok_or("expected a profile path")?;
+        let counts: i32 = parse_arg(args.next(), "invalid mouse count")?;
+        let sensitivity = parse_arg(args.next(), "invalid in-game sensitivity")?;
+        let turns: u32 = parse_arg(args.next(), "invalid whole turn count")?;
+        if args.next().is_some() {
+            return Err("expected profile, mouse count, sensitivity and whole turns".into());
+        }
+        let calibration = save_measurement(Path::new(&path), counts, sensitivity, turns)?;
+        println!("{calibration:?}");
+        return Ok(());
+    }
     if args.next_if(|arg| arg == "--profile").is_some() {
         let profile = args
             .next()
@@ -103,6 +133,24 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn parse_arg<T: std::str::FromStr>(
+    arg: Option<OsString>,
+    error: &'static str,
+) -> Result<T, &'static str> {
+    arg.and_then(|arg| arg.to_str()?.parse().ok()).ok_or(error)
+}
+
+fn save_measurement(
+    path: &Path,
+    counts: i32,
+    sensitivity: f64,
+    turns: u32,
+) -> Result<f64, Box<dyn Error>> {
+    let calibration = calculate(counts, sensitivity, f64::from(turns))?;
+    profile::save_game_calibration(&path.canonicalize()?, calibration, sensitivity)?;
+    Ok(calibration)
+}
+
 fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let path = path.canonicalize()?;
     profile::load(&path)?;
@@ -116,6 +164,18 @@ fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dy
         |text| text.parse::<f64>().ok().filter(|&value| positive(value)),
     )?;
 
+    let counts = measure_with_stick(in_game_sens, hidraw)?;
+    let turns = prompt_value(
+        "Return to this terminal and enter the number of complete turns.",
+        |text| text.parse::<u32>().ok().filter(|&turns| turns > 0),
+    )?;
+    let calibration = save_measurement(&path, counts, in_game_sens, turns)?;
+    println!("real_world_calibration = {calibration:?}\nin_game_sens = {in_game_sens:?}");
+    println!("Saved calibration to {}", path.display());
+    Ok(())
+}
+
+fn measure_with_stick(in_game_sens: f64, hidraw: Option<&Path>) -> Result<i32, Box<dyn Error>> {
     let config = crate::controller_config::ControllerConfig::load();
     let filter = config.filter();
     let (mut controller, identity) = match hidraw {
@@ -174,19 +234,8 @@ fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dy
             Ok(ControlFlow::Continue(()))
         },
     )?;
-    drop(output);
-    let counts = i32::try_from(
-        measured_counts.ok_or("controller disconnected before calibration finished")?,
-    )?;
-    let turns = prompt_value(
-        "Return to this terminal and enter the number of complete turns.",
-        |text| text.parse::<u32>().ok().filter(|&turns| turns > 0),
-    )?;
-    let calibration = calculate(counts, in_game_sens, f64::from(turns))?;
-    println!("real_world_calibration = {calibration:?}\nin_game_sens = {in_game_sens:?}");
-    profile::save_game_calibration(&path, calibration, in_game_sens)?;
-    println!("Saved calibration to {}", path.display());
-    Ok(())
+    let counts = measured_counts.ok_or("controller disconnected before calibration finished")?;
+    Ok(i32::try_from(counts)?)
 }
 
 fn prompt_value<T>(prompt: &str, parse: impl Fn(&str) -> Option<T>) -> io::Result<T> {
