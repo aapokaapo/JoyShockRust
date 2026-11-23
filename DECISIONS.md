@@ -346,6 +346,9 @@ configuration error.
 Profile unload applies default mappings using the existing live update
 path. It releases held keyboard and mouse buttons and leaves the startup
 virtual gamepad configuration and current controller filter in effect.
+Status reports the active source separately from the last reload outcome.
+Only an applied profile update changes the source. It survives controller
+disconnects and switches.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
 Updated 2026-11-22. Keyboard bindings consume physical button states

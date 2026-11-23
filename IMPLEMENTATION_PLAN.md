@@ -185,6 +185,8 @@ selection and preset loading immediately. A manually started bridge can
 enable the same control socket without a startup profile.
 The CLI also supports unloading a profile to restore default mappings
 during the current session.
+Status identifies the active mapping source independently of the result of
+the last profile command.
 
 Keyboard profiles map digital buttons and D-pad directions to tap, hold
 and double-tap keys. Analog trigger travel can drive the same gestures

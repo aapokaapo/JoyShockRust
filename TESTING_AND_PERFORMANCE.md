@@ -606,6 +606,9 @@ Run `--unload-profile` while a mapped key is held. Verify that the key
 releases, gyro output ends, and the same controller remains selected.
 If a startup profile is configured, run `--reload-profile` and verify
 the profile's mappings work again.
+Use `--status` to check that `profile_source` reports `loaded` after a
+preset load, `defaults` after unload, and `startup` after a startup-file
+reload. Try a rejected load and verify the previous source remains active.
 
 To verify automatic startup selection, select a controller with both
 connected and restart the service. Confirm it chooses the same controller.

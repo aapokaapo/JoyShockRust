@@ -415,7 +415,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         remaps,
         ..profile::RuntimeOptions::default()
     };
-    let (mut runtime, startup_profile) = if let Some((profile_path, mode)) = profile_path {
+    use status::ProfileSource;
+    let (mut runtime, startup_profile, profile_source) = if let Some((profile_path, mode)) =
+        profile_path
+    {
         if mapping_options {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
@@ -434,15 +437,15 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         if mode == ProfileMode::Check && (path.is_some() || bridge_options || selection_options) {
             return Err("--check-profile takes only a profile path".into());
         }
-        let profile = match profile::load(&profile_path) {
-            Ok(profile) => profile,
+        let (profile, source) = match profile::load(&profile_path) {
+            Ok(profile) => (profile, ProfileSource::Startup),
             Err(err)
                 if mode == ProfileMode::RunIfPresent
                     && err
                         .downcast_ref::<std::io::Error>()
                         .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
             {
-                default_runtime()
+                (default_runtime(), ProfileSource::Defaults)
             }
             Err(err) => {
                 eprintln!("{}: {err}", profile_path.display());
@@ -454,9 +457,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             println!("Valid profile: {}", profile_path.display());
             return Ok(ExitCode::SUCCESS);
         }
-        (profile, Some(profile_path))
+        (profile, Some(profile_path), source)
     } else {
-        (default_runtime(), None)
+        let source = if mapping_options {
+            ProfileSource::CommandLine
+        } else {
+            ProfileSource::Defaults
+        };
+        (default_runtime(), None, source)
     };
     let status = status_path
         .as_deref()
@@ -468,6 +476,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let status = status.as_ref();
     if let Some(status) = status {
         status.update(None, runtime.gyro.is_some());
+        status.set_profile_source(profile_source);
     }
     let mut controller_config = controller_config::ControllerConfig::load();
     let controller_defaults = controller_config.filter();
@@ -569,7 +578,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         Some(reload::Update::Selection(selection)) => Some(selection),
                         None => return Ok(None),
                     };
-                    reload.applied();
+                    reload.applied(status);
                     Ok(selection)
                 }
             },
@@ -680,7 +689,7 @@ fn serve_session(
                             return Ok(ControlFlow::Break(()));
                         }
                         Some(reload::Update::Selection(_)) => {
-                            reload.applied();
+                            reload.applied(status);
                             return Ok(ControlFlow::Continue(()));
                         }
                         None => return Ok(ControlFlow::Continue(())),
@@ -735,7 +744,7 @@ fn serve_session(
                     if let Some(status) = status {
                         status.update(Some(identity), runtime.gyro.is_some());
                     }
-                    reload.applied();
+                    reload.applied(status);
                     return Ok(ControlFlow::Continue(()));
                 }
             };
@@ -804,7 +813,7 @@ fn serve_session(
             if let Some(status) = status {
                 status.update(None, runtime.gyro.is_some());
             }
-            request.applied();
+            request.applied(status);
             return Ok(Some(selection));
         }
     }

@@ -483,6 +483,9 @@ The `last_reload` field reports `not_attempted` when a startup profile path
 is configured, or `unavailable` when no path has been set. It reports
 `applied` or `rejected` after a profile update. To reload the startup file directly, run
 `$HOME/.local/bin/joyshockrust-linux --reload-profile`.
+The `profile_source` field shows which mappings are active. Its values
+are `defaults`, `command_line`, `startup` and `loaded`. A rejected load
+leaves the previously active source in effect.
 The status and reload sockets are under `$XDG_RUNTIME_DIR/joyshockrust/`
 and are removed when the service stops.
 

@@ -21,6 +21,27 @@ pub struct StatusSocket {
     reports: Cell<ReportStats>,
     sessions: Cell<SessionCounts>,
     filter: Cell<ControllerFilter>,
+    profile_source: Cell<ProfileSource>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub enum ProfileSource {
+    #[default]
+    Defaults,
+    CommandLine,
+    Startup,
+    Loaded,
+}
+
+impl ProfileSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Defaults => "defaults",
+            Self::CommandLine => "command_line",
+            Self::Startup => "startup",
+            Self::Loaded => "loaded",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -67,6 +88,7 @@ impl StatusSocket {
             reports: Cell::default(),
             sessions: Cell::default(),
             filter: Cell::default(),
+            profile_source: Cell::default(),
         })
     }
 
@@ -76,6 +98,10 @@ impl StatusSocket {
 
     pub fn set_filter(&self, filter: ControllerFilter) {
         self.filter.set(filter);
+    }
+
+    pub fn set_profile_source(&self, source: ProfileSource) {
+        self.profile_source.set(source);
     }
 
     pub fn update(&self, identity: Option<Identity>, gyro_configured: bool) {
@@ -167,8 +193,9 @@ impl StatusSocket {
         let filter = self.filter.get();
         let selected_transport = filter.transport.as_str();
         let selected_model = filter.model.as_str();
+        let profile_source = self.profile_source.get().as_str();
         let response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\n",
+            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\n",
             snapshot.gyro_configured,
             reports.decoded,
             reports.rejected,
@@ -260,6 +287,7 @@ mod tests {
             reports: Cell::default(),
             sessions: Cell::default(),
             filter: Cell::default(),
+            profile_source: Cell::default(),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
@@ -312,7 +340,7 @@ mod tests {
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         assert!(response.ends_with(
-            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=1\nuinput_mouse_button_batches=2\n"
+            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=1\nuinput_mouse_button_batches=2\nprofile_source=defaults\n"
         ));
         let reports = status.reports.get();
         let (start, initial_count) = reports.baseline.unwrap();
@@ -356,6 +384,7 @@ mod tests {
             reports: Cell::default(),
             sessions: Cell::default(),
             filter: Cell::default(),
+            profile_source: Cell::default(),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
@@ -440,6 +469,7 @@ mod tests {
             reports: Cell::default(),
             sessions: Cell::default(),
             filter: Cell::default(),
+            profile_source: Cell::default(),
         };
         let (_sender, input) = UnixStream::pair().unwrap();
 
@@ -518,7 +548,7 @@ mod tests {
             assert_eq!(
                 response,
                 format!(
-                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=0\nuinput_mouse_button_batches=0\n"
+                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=0\nuinput_mouse_button_batches=0\nprofile_source=defaults\n"
                 )
             );
         }

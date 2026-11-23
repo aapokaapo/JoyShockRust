@@ -167,7 +167,7 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
     let len = listener.recv(&mut ready).expect("bridge readiness");
     assert_eq!(&ready[..len], b"READY=1");
 
-    let check = |transport, model, gyro| {
+    let check = |transport, model, gyro, source| {
         let output = Command::new(binary)
             .arg("--status")
             .arg(&status)
@@ -180,13 +180,14 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
             format!("selected_transport={transport}"),
             format!("selected_model={model}"),
             format!("gyro_configured={gyro}"),
+            format!("profile_source={source}"),
             "controller_id_configured=true".to_owned(),
         ] {
             assert!(stdout.lines().any(|entry| entry == line), "{stdout}");
         }
         assert!(!stdout.contains("ff:ff:ff:ff:ff:ff"), "{stdout}");
     };
-    check("auto", "dualsense-edge", false);
+    check("auto", "dualsense-edge", false, "defaults");
     let startup_contents = format!("{}[gyro]\n", settings("usb", "dualsense"));
     fs::write(&startup, &startup_contents).unwrap();
     let result = Command::new(binary)
@@ -195,7 +196,7 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check("auto", "dualsense-edge", true);
+    check("auto", "dualsense-edge", true, "startup");
 
     fs::write(&preset, settings("bluetooth", "dualsense")).unwrap();
     let load = || {
@@ -208,7 +209,7 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
     };
     let result = load();
     assert!(result.status.success(), "{result:?}");
-    check("auto", "dualsense-edge", false);
+    check("auto", "dualsense-edge", false, "loaded");
 
     let result = Command::new(binary)
         .args([
@@ -222,7 +223,7 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check("bluetooth", "dualsense", false);
+    check("bluetooth", "dualsense", false, "loaded");
 
     // Reload a file with conflicting startup defaults after the live selection.
     let result = Command::new(binary)
@@ -231,7 +232,7 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check("bluetooth", "dualsense", true);
+    check("bluetooth", "dualsense", true, "startup");
     let saved = fs::read_to_string(controller_file).unwrap();
     assert!(saved.contains("transport = \"bluetooth\""), "{saved}");
     assert!(saved.contains("model = \"dualsense\""), "{saved}");
@@ -253,7 +254,7 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");
-        check("bluetooth", "dualsense", false);
+        check("bluetooth", "dualsense", false, "defaults");
     }
     assert_eq!(fs::read_to_string(&startup).unwrap(), startup_contents);
     let result = Command::new(binary)
@@ -262,7 +263,7 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check("bluetooth", "dualsense", true);
+    check("bluetooth", "dualsense", true, "startup");
 }
 
 #[test]
@@ -281,7 +282,7 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
         Command::new(binary)
             .env("NOTIFY_SOCKET", &notify)
             .env("XDG_CONFIG_HOME", &directory.0)
-            .args(["--controller-id", "ff:ff:ff:ff:ff:ff"])
+            .args(["--controller-id", "ff:ff:ff:ff:ff:ff", "--stick-curve", "2"])
             .arg("--status-socket")
             .arg(&status)
             .arg("--reload-socket")
@@ -305,7 +306,7 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    let check = |gyro, outcome| {
+    let check = |gyro, outcome, source| {
         let output = Command::new(binary)
             .arg("--status")
             .arg(&status)
@@ -318,11 +319,12 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
             "selected_transport=bluetooth".to_owned(),
             format!("gyro_configured={gyro}"),
             format!("last_reload={outcome}"),
+            format!("profile_source={source}"),
         ] {
             assert!(stdout.lines().any(|line| line == expected), "{stdout}");
         }
     };
-    check(false, "unavailable");
+    check(false, "unavailable", "command_line");
     fs::write(&preset, "version = 1\n[gyro]\n").unwrap();
     let result = Command::new(binary)
         .arg("--load-profile")
@@ -331,7 +333,7 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check(true, "applied");
+    check(true, "applied", "loaded");
     let result = Command::new(binary)
         .arg("--reload-profile")
         .arg(&reload)
@@ -339,13 +341,23 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
         .unwrap();
     assert!(!result.status.success(), "{result:?}");
     assert!(String::from_utf8_lossy(&result.stderr).contains("no startup profile configured"));
-    check(true, "applied");
+    check(true, "applied", "loaded");
+    let invalid = directory.0.join("invalid");
+    fs::write(&invalid, "version = 2\n").unwrap();
+    let result = Command::new(binary)
+        .arg("--load-profile")
+        .arg(&invalid)
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(!result.status.success(), "{result:?}");
+    check(true, "rejected", "loaded");
     let result = Command::new(binary)
         .arg("--unload-profile")
         .arg(&reload)
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check(false, "applied");
+    check(false, "applied", "defaults");
     assert_eq!(fs::read_to_string(preset).unwrap(), "version = 1\n[gyro]\n");
 }

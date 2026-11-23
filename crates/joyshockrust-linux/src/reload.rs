@@ -29,7 +29,7 @@ use crate::{
     discovery::{ControllerFilter, ModelSelection, Selection},
     hidraw::ControllerId,
     profile::{self, BridgeOptions, RuntimeOptions},
-    status::{self, StatusSocket},
+    status::{self, ProfileSource, StatusSocket},
 };
 
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
@@ -214,19 +214,27 @@ impl Request<'_> {
         }
     }
 
-    pub fn applied(self) {
+    pub fn applied(self, status: Option<&StatusSocket>) {
         if self.selection_payload().is_some() {
             eprintln!("Controller selection updated from CLI");
             self.reply(b"applied\n");
             return;
         }
         self.reload.outcome.set(Outcome::Applied);
-        if self.is_unload() {
+        let source = if self.is_unload() {
             eprintln!("Profile unloaded from CLI");
+            ProfileSource::Defaults
         } else if matches!(self.client, Some(Client::Load(_, _))) {
             eprintln!("Profile loaded from CLI");
-        } else if let Some(path) = &self.reload.path {
-            eprintln!("Profile reloaded: {}", path.display());
+            ProfileSource::Loaded
+        } else {
+            if let Some(path) = &self.reload.path {
+                eprintln!("Profile reloaded: {}", path.display());
+            }
+            ProfileSource::Startup
+        };
+        if let Some(status) = status {
+            status.set_profile_source(source);
         }
         self.reply(b"applied\n");
     }
@@ -624,7 +632,7 @@ mod tests {
         );
         assert_eq!(filter.transport, current.transport);
         assert_eq!(filter.model, current.model);
-        change.applied();
+        change.applied(None);
         let Some(Update::Selection(cleared)) = request(&reload, b"any\nany\nauto").resolve(filter)
         else {
             panic!("expected controller selection");
@@ -692,7 +700,7 @@ mod tests {
             panic!("expected profile update");
         };
         assert!(next.gyro.is_some());
-        request.applied();
+        request.applied(None);
         let mut reply = [0; 32];
         let len = client.recv(&mut reply).unwrap();
         assert_eq!(&reply[..len], b"applied\n");
@@ -704,7 +712,7 @@ mod tests {
         let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
         let request = request.unwrap();
         assert!(matches!(request.resolve(current), Some(Update::Profile(_))));
-        request.applied();
+        request.applied(None);
         let len = client.recv(&mut reply).unwrap();
         assert_eq!(&reply[..len], b"applied\n");
     }
@@ -742,7 +750,7 @@ mod tests {
         assert_eq!(response, "rejected\n");
 
         let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
-        request.unwrap().applied();
+        request.unwrap().applied(None);
         response.clear();
         second.read_to_string(&mut response).unwrap();
         assert_eq!(response, "applied\n");
