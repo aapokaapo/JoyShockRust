@@ -1,9 +1,9 @@
-use eframe::egui::{self, Color32, Rect, Stroke, vec2};
+use adw::{glib, gtk, prelude::*};
 use toml_edit::DocumentMut;
 
 use crate::{
-    adwaita,
     bindings::{self, Gesture},
+    ui::{self, Context},
 };
 
 struct Control {
@@ -123,297 +123,271 @@ fn mapped(doc: &DocumentMut, id: &str) -> bool {
         || matches!(bindings::gamepad_target(doc, id), Ok(Some(_)))
 }
 
-pub fn layout(ui: &mut egui::Ui, doc: &DocumentMut, selected: &mut &'static str) {
-    ui.heading("DualSense controller");
-    ui.label("Select a control to see or change its actions.");
-    let width = ui.available_width();
-    let scale = (width / 520.0).min(1.15);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 318.0 * scale), egui::Sense::hover());
-    let origin = rect.min + vec2((width - 520.0 * scale) * 0.5, 0.0);
-    let at = |x, y| origin + vec2(x, y) * scale;
-    let colors = adwaita::palette(ui);
-    let painter = ui.painter();
-    for (left, right, grip) in [(65., 178., 102.), (342., 455., 418.)] {
-        painter.add(egui::Shape::convex_polygon(
-            vec![
-                at(left, 128.),
-                at(right, 128.),
-                at(grip + 49., 257.),
-                at(grip - 49., 257.),
-            ],
-            colors.shell,
-            Stroke::NONE,
-        ));
-        painter.circle_filled(at(grip, 251.), 49.0 * scale, colors.shell);
-    }
-    painter.rect_filled(
-        Rect::from_min_max(at(55., 46.), at(465., 251.)),
-        65.0 * scale,
-        colors.shell,
-    );
-    painter.rect_filled(
-        Rect::from_min_max(at(173., 79.), at(347., 180.)),
-        22.0 * scale,
-        colors.touchpad,
-    );
-    painter.line_segment(
-        [at(224., 150.), at(296., 150.)],
-        Stroke::new(2.0_f32, colors.accent),
-    );
+pub fn page(ctx: &Context) -> gtk::Widget {
+    let Ok(doc) = ctx.document() else {
+        return ui::advanced_required("Fix the profile syntax in Advanced TOML to edit buttons.");
+    };
 
-    let mut controls_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-    for control in &FRONT {
-        let [x, y] = control.center;
-        let [w, h] = control.size;
-        let active = *selected == control.id;
-        let bound = mapped(doc, control.id);
-        let icon = matches!(control.glyph, "↑" | "↓" | "←" | "→" | "△" | "×" | "○" | "□");
-        let label = if icon { "" } else { control.glyph };
-        let bounds = Rect::from_center_size(at(x, y), vec2(w, h) * scale);
-        let button = egui::Button::new(egui::RichText::new(label).size((13.5 * scale).max(10.0)))
-            .min_size(bounds.size())
-            .wrap_mode(egui::TextWrapMode::Extend)
-            .fill(if active { colors.selected } else { colors.card })
-            .stroke(if active || bound {
-                Stroke::new(if active { 2.0_f32 } else { 1.0 }, colors.accent)
-            } else {
-                Stroke::NONE
-            })
-            .corner_radius(
-                if matches!(
-                    control.id,
-                    "triangle" | "cross" | "square" | "circle" | "l3" | "r3"
-                ) {
-                    h * scale * 0.5
-                } else {
-                    7.0
-                },
-            );
-        let response = controls_ui.put(bounds, button).on_hover_text(control.name);
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, control.name)
-        });
-        if icon {
-            draw_icon(
-                controls_ui.painter(),
-                response.rect.center(),
-                6.0 * scale,
-                control.glyph,
-                colors.foreground,
-            );
+    let layout = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    layout.set_margin_top(18);
+    layout.set_margin_bottom(24);
+    let clamp = adw::Clamp::builder()
+        .maximum_size(720)
+        .child(&layout)
+        .build();
+    let diagram = gtk::Fixed::new();
+    diagram.set_halign(gtk::Align::Center);
+    let diagram_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .child(&diagram)
+        .build();
+    layout.append(&diagram_scroll);
+    let outline = gtk::DrawingArea::builder()
+        .content_width(520)
+        .content_height(308)
+        .build();
+    outline.set_can_target(false);
+    outline.set_draw_func(|area, cr, _, _| {
+        let color = area.style_context().color();
+        cr.set_source_rgba(
+            color.red().into(),
+            color.green().into(),
+            color.blue().into(),
+            0.09,
+        );
+        cr.move_to(115.0, 45.0);
+        cr.curve_to(58.0, 45.0, 49.0, 98.0, 46.0, 156.0);
+        cr.curve_to(37.0, 236.0, 50.0, 302.0, 99.0, 302.0);
+        cr.curve_to(155.0, 302.0, 158.0, 250.0, 207.0, 250.0);
+        cr.line_to(313.0, 250.0);
+        cr.curve_to(362.0, 250.0, 365.0, 302.0, 421.0, 302.0);
+        cr.curve_to(470.0, 302.0, 483.0, 236.0, 474.0, 156.0);
+        cr.curve_to(471.0, 98.0, 462.0, 45.0, 405.0, 45.0);
+        cr.close_path();
+        let _ = cr.fill();
+    });
+    diagram.put(&outline, 0.0, 0.0);
+
+    let inspector = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    inspector.set_margin_start(24);
+    inspector.set_margin_end(24);
+    let selected = ctx.editor.borrow().selected;
+
+    let edge = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    edge.set_halign(gtk::Align::Center);
+    layout.append(&edge);
+    let mut first = None::<gtk::ToggleButton>;
+    for (id, label, glyph, control) in FRONT
+        .iter()
+        .map(|control| (control.id, control.name, control.glyph, Some(control)))
+        .chain(EDGE.into_iter().map(|(id, label)| (id, label, label, None)))
+    {
+        let button = gtk::ToggleButton::builder()
+            .label(glyph)
+            .tooltip_text(label)
+            .build();
+        button.update_property(&[gtk::accessible::Property::Label(label)]);
+        if let Some(first) = &first {
+            button.set_group(Some(first));
+        } else {
+            first = Some(button.clone());
         }
-        if response.clicked() {
-            *selected = control.id;
-            ui.ctx().request_repaint();
+        mark_assigned(&button, &doc, id);
+        if id == selected {
+            button.set_active(true);
+            show_bindings(&inspector, ctx, id, &button);
+        }
+        let change_ctx = ctx.clone();
+        let inspector_ref = inspector.downgrade();
+        button.connect_toggled(move |button| {
+            if button.is_active()
+                && let Some(inspector) = inspector_ref.upgrade()
+            {
+                change_ctx.editor.borrow_mut().selected = id;
+                show_bindings(&inspector, &change_ctx, id, button);
+            }
+        });
+        if let Some(control) = control {
+            let [x, y] = control.center.map(f64::from);
+            let [width, height] = control.size.map(f64::from);
+            button.set_size_request(width as i32, height as i32);
+            if matches!(
+                id,
+                "triangle"
+                    | "cross"
+                    | "square"
+                    | "circle"
+                    | "l3"
+                    | "r3"
+                    | "dpad-up"
+                    | "dpad-down"
+                    | "dpad-left"
+                    | "dpad-right"
+            ) {
+                button.add_css_class("circular");
+            }
+            diagram.put(&button, x - width / 2.0, y - height / 2.0);
+        } else {
+            edge.append(&button);
         }
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.label("DualSense Edge");
-        for (id, label) in EDGE {
-            let button = egui::Button::selectable(*selected == id, label);
-            let button = if mapped(doc, id) {
-                button.stroke(Stroke::new(1.0_f32, colors.accent))
-            } else {
-                button
-            };
-            if ui.add(button).clicked() {
-                *selected = id;
-                ui.ctx().request_repaint();
-            }
-        }
-    });
-    ui.label(egui::RichText::new("Thin outlines mark assigned controls.").weak());
+    layout.append(&inspector);
+
+    gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&clamp)
+        .build()
+        .upcast()
 }
 
-fn draw_icon(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    radius: f32,
-    glyph: &str,
-    foreground: Color32,
+fn show_bindings(
+    inspector: &gtk::Box,
+    ctx: &Context,
+    selected: &'static str,
+    button: &gtk::ToggleButton,
 ) {
-    let at = |x, y| center + vec2(x, y) * radius;
-    let stroke = Stroke::new(1.65_f32, foreground);
-    match glyph {
-        "○" => {
-            painter.circle_stroke(center, radius, stroke);
+    while let Some(child) = inspector.first_child() {
+        inspector.remove(&child);
+    }
+    let Ok(doc) = ctx.document() else { return };
+    let button = button.downgrade();
+    let keyboard = adw::PreferencesGroup::builder()
+        .title(name(selected))
+        .description("Keyboard and mouse actions")
+        .build();
+    inspector.append(&keyboard);
+    match bindings::keyboard_binding(&doc, selected) {
+        Ok(binding) => {
+            for gesture in Gesture::ALL {
+                let value = binding.and_then(|binding| bindings::gesture_output(binding, gesture));
+                if value.is_some_and(|value| value.as_str().is_none()) {
+                    unavailable(
+                        &keyboard,
+                        gesture.label(),
+                        "Edit this custom action in Advanced TOML.",
+                    );
+                    continue;
+                }
+                let ctx = ctx.clone();
+                let button = button.clone();
+                keyboard.add(&dropdown(
+                    gesture.label(),
+                    value.and_then(|value| value.as_str()),
+                    "No action",
+                    key_choices(),
+                    move |next| {
+                        edit_binding(&ctx, &button, selected, |doc| {
+                            bindings::set_key(doc, selected, gesture, next)
+                        })
+                    },
+                ));
+            }
         }
-        "□" => {
-            painter.rect_stroke(
-                Rect::from_min_max(at(-0.86, -0.86), at(0.86, 0.86)),
-                0,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-        }
-        "△" => {
-            painter.add(egui::Shape::closed_line(
-                vec![at(0., -1.), at(1., 0.86), at(-1., 0.86)],
-                stroke,
-            ));
-        }
-        "×" => {
-            painter.line_segment([at(-0.8, -0.8), at(0.8, 0.8)], stroke);
-            painter.line_segment([at(-0.8, 0.8), at(0.8, -0.8)], stroke);
-        }
-        arrow => {
-            let direction = match arrow {
-                "↑" => vec2(0., -1.),
-                "↓" => vec2(0., 1.),
-                "←" => vec2(-1., 0.),
-                "→" => vec2(1., 0.),
-                _ => return,
-            };
-            let side = vec2(-direction.y, direction.x);
-            let tip = center + direction * radius;
-            painter.line_segment([center - direction * radius, tip], stroke);
-            painter.add(egui::Shape::line(
-                vec![
-                    center + side * (radius * 0.75),
-                    tip,
-                    center - side * (radius * 0.75),
-                ],
-                stroke,
-            ));
+        Err(error) => unavailable(&keyboard, "Keyboard bindings", error),
+    }
+    if !selected.starts_with("dpad-") {
+        let gamepad = adw::PreferencesGroup::builder()
+            .title("Virtual gamepad")
+            .build();
+        inspector.append(&gamepad);
+        match bindings::gamepad_target(&doc, selected) {
+            Ok(current) => {
+                let ctx = ctx.clone();
+                gamepad.add(&dropdown(
+                    "Output button",
+                    current,
+                    "Same as controller",
+                    GAMEPAD_TARGETS
+                        .into_iter()
+                        .map(|(key, label)| (key.into(), label.into())),
+                    move |next| {
+                        edit_binding(&ctx, &button, selected, |doc| {
+                            bindings::set_gamepad(doc, selected, next)
+                        })
+                    },
+                ));
+            }
+            Err(error) => unavailable(&gamepad, "Output button", error),
         }
     }
+}
+
+fn edit_binding(
+    ctx: &Context,
+    button: &glib::WeakRef<gtk::ToggleButton>,
+    id: &str,
+    edit: impl FnOnce(&mut DocumentMut) -> Result<(), &'static str>,
+) {
+    ctx.edit(|doc| {
+        edit(doc)?;
+        if let Some(button) = button.upgrade() {
+            mark_assigned(&button, doc, id);
+        }
+        Ok(())
+    });
+}
+
+fn mark_assigned(button: &gtk::ToggleButton, doc: &DocumentMut, id: &str) {
+    if mapped(doc, id) {
+        button.add_css_class("accent");
+    } else {
+        button.remove_css_class("accent");
+    }
+}
+
+fn unavailable(group: &adw::PreferencesGroup, title: &str, detail: &str) {
+    group.add(
+        &adw::ActionRow::builder()
+            .title(title)
+            .subtitle(detail)
+            .build(),
+    );
+}
+
+fn key_choices() -> impl Iterator<Item = (String, String)> {
+    KEYS.iter()
+        .map(|&(key, label)| (key.into(), label.into()))
+        .chain(
+            ('A'..='Z')
+                .chain('0'..='9')
+                .map(|key| (format!("KEY_{key}"), key.to_string())),
+        )
+        .chain((1..=12).map(|number| (format!("KEY_F{number}"), format!("F{number}"))))
 }
 
 fn dropdown(
-    ui: &mut egui::Ui,
-    id: impl std::hash::Hash,
-    text: &str,
+    title: &str,
     current: Option<&str>,
     default: &str,
-    options: &[(&str, &str)],
-    keyboard: bool,
-) -> Option<Option<String>> {
-    let mut result = None;
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(text)
-        .width(ui.available_width().min(238.0))
-        .height(310.0)
-        .show_ui(ui, |ui| {
-            if ui.selectable_label(current.is_none(), default).clicked() {
-                result = Some(None);
-            }
-            for &(code, label) in options {
-                if ui.selectable_label(current == Some(code), label).clicked() {
-                    result = Some(Some(code.to_owned()));
-                }
-            }
-            if keyboard {
-                ui.separator();
-                for letter in ('A'..='Z').chain('0'..='9') {
-                    let code = format!("KEY_{letter}");
-                    if ui
-                        .selectable_label(current == Some(code.as_str()), letter.to_string())
-                        .clicked()
-                    {
-                        result = Some(Some(code));
-                    }
-                }
-                ui.separator();
-                for number in 1..=12 {
-                    let label = format!("F{number}");
-                    let code = format!("KEY_{label}");
-                    if ui
-                        .selectable_label(current == Some(code.as_str()), label)
-                        .clicked()
-                    {
-                        result = Some(Some(code));
-                    }
-                }
-            }
-        });
-    result
-}
-
-fn output_label<'a>(value: &'a str, options: &'a [(&str, &str)]) -> &'a str {
-    options.iter().find(|(code, _)| *code == value).map_or_else(
-        || value.strip_prefix("KEY_").unwrap_or(value),
-        |(_, label)| *label,
-    )
-}
-
-pub fn inspector(ui: &mut egui::Ui, doc: &mut DocumentMut, selected: &str) -> bool {
-    ui.heading(name(selected));
-    ui.add_space(12.0);
-    let mut changed = false;
-    ui.label(egui::RichText::new("Keyboard and mouse").strong());
-    if let Err(error) = keyboard_actions(ui, doc, selected, &mut changed) {
-        ui.colored_label(ui.visuals().error_fg_color, error);
-    }
-    if !selected.starts_with("dpad-") {
-        ui.add_space(12.0);
-        ui.separator();
-        ui.label(egui::RichText::new("Virtual gamepad").strong());
-        match gamepad_action(ui, doc, selected) {
-            Ok(edited) => changed |= edited,
-            Err(error) => {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-        }
-    }
-    changed
-}
-
-fn keyboard_actions(
-    ui: &mut egui::Ui,
-    doc: &mut DocumentMut,
-    selected: &str,
-    changed: &mut bool,
-) -> Result<(), &'static str> {
-    for gesture in Gesture::ALL {
-        ui.label(gesture.label());
-        let value = bindings::keyboard_binding(doc, selected)?
-            .and_then(|binding| bindings::gesture_output(binding, gesture));
-        if let Some(value) = value
-            && value.as_str().is_none()
-        {
-            ui.label("Custom action · Advanced TOML");
-            continue;
-        }
-        let current = value.and_then(|value| value.as_str());
-        let preview = current.map_or("No action", |value| output_label(value, KEYS));
-        if let Some(next) = dropdown(
-            ui,
-            gesture.label(),
-            preview,
-            current,
-            "No action",
-            KEYS,
-            true,
-        ) && next.as_deref() != current
-        {
-            bindings::set_key(doc, selected, gesture, next.as_deref())?;
-            *changed = true;
-        }
-    }
-    Ok(())
-}
-
-fn gamepad_action(
-    ui: &mut egui::Ui,
-    doc: &mut DocumentMut,
-    selected: &str,
-) -> Result<bool, &'static str> {
-    let current = bindings::gamepad_target(doc, selected)?;
-    let preview = current.map_or("Same as controller", |value| {
-        output_label(value, &GAMEPAD_TARGETS)
-    });
-    if let Some(next) = dropdown(
-        ui,
-        "gamepad-target",
-        preview,
-        current,
-        "Same as controller",
-        &GAMEPAD_TARGETS,
-        false,
-    ) && next.as_deref() != current
+    choices: impl Iterator<Item = (String, String)>,
+    changed: impl Fn(Option<&str>) + 'static,
+) -> adw::ComboRow {
+    let mut choices: Vec<_> = std::iter::once((None, default.to_owned()))
+        .chain(choices.map(|(key, label)| (Some(key), label)))
+        .collect();
+    let selected = if let Some(index) = choices
+        .iter()
+        .position(|(key, _)| key.as_deref() == current)
     {
-        bindings::set_gamepad(doc, selected, next.as_deref())?;
-        return Ok(true);
-    }
-    Ok(false)
+        index
+    } else {
+        choices.push((
+            current.map(str::to_owned),
+            current.unwrap_or_default().to_owned(),
+        ));
+        choices.len() - 1
+    };
+    let labels: Vec<_> = choices.iter().map(|(_, label)| label.as_str()).collect();
+    let row = adw::ComboRow::builder()
+        .title(title)
+        .model(&gtk::StringList::new(&labels))
+        .selected(selected as u32)
+        .build();
+    row.connect_selected_notify(move |row| {
+        if let Some((key, _)) = choices.get(row.selected() as usize) {
+            changed(key.as_deref());
+        }
+    });
+    row
 }

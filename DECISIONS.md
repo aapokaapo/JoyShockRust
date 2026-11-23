@@ -512,9 +512,10 @@ the shared profile exponent. The game calibration fields write only
 when both values and their ratio pass validation.
 [DualSense Tester stick settings](https://github.com/daidr/dualsense-tester/blob/5bc7ecee9f9bd09c7a562b5f0f2cbc0c35c710f9/src/router/DualSenseEdge/views/_Profile/pages/JoystickSensitivity.vue)
 
-2026-11-23. The editor's egui styles use Adwaita light and dark colors
-and share palette roles with the controller diagram and curve previews.
-[Adwaita color definitions](https://github.com/GNOME/libadwaita/blob/39fff6661b28cce7b332ad5692b4efb21967d50d/src/stylesheet/_colors.scss)
+2026-11-23. The editor uses GTK 4 and libadwaita for adaptive navigation,
+preference rows, feedback and dialogs. Only the controller outline and
+curve plots use custom drawing. The toolkit handles system appearance.
+[GNOME Human Interface Guidelines](https://developer.gnome.org/hig/patterns/index.html)
 
 The status reply includes the filename of the last applied profile,
 without its directory. Named live loads carry the filename with the

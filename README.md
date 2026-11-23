@@ -45,6 +45,8 @@ and [source analysis](docs/REFERENCE_ANALYSIS.md).
 From the workspace root with stable Rust, rustfmt and Clippy installed. The
 Linux bridge also needs `pkg-config` and the libudev development files
 (`libudev-dev` on Debian/Ubuntu or `systemd-devel` on Fedora).
+Workspace checks include the editor and need the GTK 4 and libadwaita
+development packages listed under [Desktop tray](#desktop-tray).
 
 Install the formatter for the Cargo toolchain you use:
 
@@ -627,7 +629,10 @@ The service needs the same hidraw and uinput access as a manual run.
 
 ### Desktop tray
 
-Use the desktop tray and its native profile editor from a Wayland session.
+Use the desktop tray and its GTK 4 profile editor from a Wayland session.
+Building the editor requires GTK 4 and libadwaita 1.5 or newer. Install
+`gtk4-devel libadwaita-devel` on Fedora, or `libgtk-4-dev libadwaita-1-dev`
+on Debian and Ubuntu.
 
 Install the tray beside the bridge binary and its launcher beside the
 desktop's other applications. Keep the bridge user unit installed.
@@ -655,7 +660,8 @@ from the command line.
 bridge and closes the tray.
 
 Use **Profile editor** to open a named profile or choose **New profile**.
-The editor uses the Adwaita palette with light and dark variants.
+The editor follows the system’s light or dark appearance. The page
+switcher moves to the bottom when the window is narrow.
 Select a physical control on the DualSense diagram or choose a DualSense
 Edge control below it. The inspector shows the selected control's tap,
 hold and double-tap keyboard or mouse actions, along with its base virtual
@@ -675,8 +681,9 @@ and in-game sensitivity in the **Game calibration** text fields.
 Changing these settings creates a `[gyro]` section if needed, which
 enables the profile's gyro mouse.
 
-Use **Validate** to check the profile, **Save** to write it to disk, or
-**Save and apply** to write it and load it into the running bridge.
+Open the profile actions menu to **Validate Profile** or **Save** to
+disk. **Save & Apply** writes the profile and loads it into the running
+bridge. Use Ctrl+S to save or Ctrl+Shift+S to save and apply.
 
 Choose a file under **Calibrate game sensitivity (RWC)** while a controller
 is connected. The tray pauses virtual outputs and opens Konsole, GNOME

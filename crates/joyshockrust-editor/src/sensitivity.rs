@@ -1,6 +1,8 @@
-use eframe::egui::{self, Stroke, vec2};
+use std::{cell::Cell, rc::Rc};
 
-use crate::adwaita;
+use adw::{gtk, prelude::*};
+
+use crate::ui::{self, Context};
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
 const GYRO_FIELDS: [&str; 2] = ["sensitivity_x", "sensitivity_y"];
@@ -57,176 +59,277 @@ fn calibration_values(drafts: &[String; 2]) -> Result<[f64; 2], &'static str> {
     Ok([rwc, sensitivity])
 }
 
-pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let colors = adwaita::palette(ui);
-    egui::Frame::new()
-        .fill(colors.card)
-        .stroke(Stroke::new(1.0_f32, colors.border))
-        .corner_radius(12)
-        .inner_margin(egui::Margin::same(16))
-        .show(ui, add)
-        .inner
-}
-
-pub fn gyro(ui: &mut egui::Ui, doc: &mut DocumentMut, draft: &mut CalibrationDraft) -> bool {
-    ui.heading("Gyro aim");
-    ui.label("Set horizontal and vertical response independently.");
-    ui.add_space(8.0);
-    let Some(gyro_table) = doc
+pub fn gyro_page(ctx: &Context) -> gtk::Widget {
+    let Ok(doc) = ctx.document() else {
+        return ui::advanced_required("Fix the profile syntax in Advanced TOML to edit gyro aim.");
+    };
+    let Some(gyro) = doc
         .get("gyro")
         .map_or(Some(None), |item| item.as_table_like().map(Some))
     else {
-        ui.label("Edit this gyro configuration in Advanced TOML.");
-        return false;
+        return ui::advanced_required("Edit this gyro configuration in Advanced TOML.");
     };
-    let mut changes = Vec::new();
-    card(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        ui.heading("Sensitivity");
-        ui.spacing_mut().slider_width = ui.available_width().clamp(140.0, 420.0);
-        for (key, label) in GYRO_FIELDS.into_iter().zip(["Horizontal", "Vertical"]) {
-            let mut value = gyro_table.map_or(4.0, |table| number(table, key, 4.0));
-            ui.label(label);
-            if ui
-                .add(
-                    egui::Slider::new(&mut value, 0.0..=100.0)
-                        .step_by(0.1)
-                        .clamping(egui::SliderClamping::Edits)
-                        .suffix(" counts/°"),
-                )
-                .changed()
-            {
-                changes.push((key, value));
-            }
-        }
-    });
-    ui.add_space(8.0);
-    let reset = card(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        ui.heading("Game calibration");
-        let values = draft.values.get_or_insert_with(|| {
-            CALIBRATION_FIELDS.map(|key| {
-                gyro_table
-                    .map_or(1.0, |table| number(table, key, 1.0))
-                    .to_string()
-            })
+    let page = adw::PreferencesPage::new();
+    let response = adw::PreferencesGroup::builder()
+        .title("Gyro sensitivity")
+        .description("Mouse counts per degree before game calibration.")
+        .build();
+    for (key, label) in GYRO_FIELDS.into_iter().zip(["Horizontal", "Vertical"]) {
+        let initial = gyro.map_or(4.0, |table| number(table, key, 4.0));
+        let ctx = ctx.clone();
+        let row = scale_row(label, initial, 0.0, 100.0, 10, move |value| {
+            ctx.edit(|doc| set_gyro_numbers(doc, [(key, value)]));
         });
-        let mut edited = false;
-        egui::Grid::new("calibration-values")
-            .num_columns(2)
-            .show(ui, |ui| {
-                for (text, label) in values
-                    .iter_mut()
-                    .zip(["Real-world calibration (RWC)", "In-game sensitivity"])
-                {
-                    ui.label(label);
-                    edited |= ui
-                        .add(
-                            egui::TextEdit::singleline(text)
-                                .desired_width(155.0)
-                                .background_color(adwaita::palette(ui).entry),
-                        )
-                        .changed();
-                    ui.end_row();
-                }
-            });
-        if edited {
-            match calibration_values(values) {
-                Ok(result) => {
-                    draft.error = None;
-                    changes.extend(CALIBRATION_FIELDS.into_iter().zip(result));
-                }
-                Err(error) => draft.error = Some(error),
+        response.add(&row);
+    }
+    page.add(&response);
+
+    let calibration = adw::PreferencesGroup::builder()
+        .title("Game calibration")
+        .build();
+    let saved = CALIBRATION_FIELDS.map(|key| {
+        gyro.map_or(1.0, |table| number(table, key, 1.0))
+            .to_string()
+    });
+    let draft = ctx.editor.borrow();
+    let values = draft
+        .calibration
+        .values
+        .clone()
+        .unwrap_or_else(|| saved.clone());
+    let error = draft.calibration.error;
+    drop(draft);
+
+    let entries = ["Real-world calibration (RWC)", "In-game sensitivity"].map(|title| {
+        let entry = adw::EntryRow::builder()
+            .title(title)
+            .input_purpose(gtk::InputPurpose::Number)
+            .build();
+        calibration.add(&entry);
+        entry
+    });
+    for (entry, value) in entries.iter().zip(&values) {
+        entry.set_text(value);
+    }
+    let warning = gtk::Label::builder().wrap(true).xalign(0.0).build();
+    warning.add_css_class("error");
+    warning.set_margin_top(6);
+    let reset = gtk::Button::with_label("Reset Fields");
+    reset.set_halign(gtk::Align::Start);
+    let footer = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    footer.append(&warning);
+    footer.append(&reset);
+    calibration.add(&footer);
+    display_error(error, &warning, &reset);
+
+    let resetting = Rc::new(Cell::new(false));
+    let draft_values = Rc::new(std::cell::RefCell::new(values));
+    for (index, entry) in entries.iter().enumerate() {
+        let ctx = ctx.clone();
+        let warning = warning.downgrade();
+        let reset = reset.downgrade();
+        let resetting = resetting.clone();
+        let draft_values = draft_values.clone();
+        entry.connect_changed(move |entry| {
+            if resetting.get() {
+                return;
+            }
+            let mut drafts = draft_values.borrow_mut();
+            drafts[index] = entry.text().into();
+            let result = calibration_values(&drafts);
+            ctx.editor.borrow_mut().calibration = CalibrationDraft {
+                values: Some(drafts.clone()),
+                error: result.err(),
+            };
+            if let Ok(values) = result {
+                ctx.edit(|doc| set_gyro_numbers(doc, CALIBRATION_FIELDS.into_iter().zip(values)));
+            }
+            if let (Some(warning), Some(reset)) = (warning.upgrade(), reset.upgrade()) {
+                display_error(result.err(), &warning, &reset);
+            }
+        });
+    }
+    let ctx = ctx.clone();
+    let entries = entries.each_ref().map(|entry| entry.downgrade());
+    let warning = warning.downgrade();
+    reset.connect_clicked(move |reset| {
+        let Ok(doc) = ctx.document() else { return };
+        let gyro = doc.get("gyro").and_then(Item::as_table_like);
+        let values = CALIBRATION_FIELDS.map(|key| {
+            gyro.map_or(1.0, |table| number(table, key, 1.0))
+                .to_string()
+        });
+        resetting.set(true);
+        for (entry, value) in entries.iter().zip(&values) {
+            if let Some(entry) = entry.upgrade() {
+                entry.set_text(value);
             }
         }
-        if let Some(error) = draft.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-            return ui.button("Reset fields").clicked();
+        resetting.set(false);
+        *draft_values.borrow_mut() = values;
+        ctx.editor.borrow_mut().calibration.reset();
+        if let Some(warning) = warning.upgrade() {
+            display_error(None, &warning, reset);
         }
-        false
     });
-    if reset {
-        draft.reset();
-    }
-    if changes.is_empty() {
-        return false;
-    }
-    let gyro_table = doc
+    page.add(&calibration);
+    page.upcast()
+}
+
+fn display_error(error: Option<&str>, warning: &gtk::Label, reset: &gtk::Button) {
+    warning.set_text(error.unwrap_or_default());
+    warning.set_visible(error.is_some());
+    reset.set_visible(error.is_some());
+}
+
+fn set_gyro_numbers(
+    doc: &mut DocumentMut,
+    changes: impl IntoIterator<Item = (&'static str, f64)>,
+) -> Result<(), &'static str> {
+    let gyro = doc
         .entry("gyro")
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_like_mut()
-        .expect("validated gyro table");
+        .ok_or("Edit this gyro configuration in Advanced TOML.")?;
     for (key, value) in changes {
-        set_number(gyro_table, key, value);
+        set_number(gyro, key, value);
     }
-    true
+    Ok(())
 }
 
-pub fn sticks(ui: &mut egui::Ui, doc: &mut DocumentMut) -> bool {
-    ui.heading("Stick response");
-    ui.label("Lower exponents give more response near the center. 1.00 is linear.");
-    ui.add_space(8.0);
+pub fn sticks_page(ctx: &Context) -> gtk::Widget {
+    let Ok(doc) = ctx.document() else {
+        return ui::advanced_required(
+            "Fix the profile syntax in Advanced TOML to edit stick response.",
+        );
+    };
+    let page = adw::PreferencesPage::new();
     let fallback = number(doc.as_table(), "stick_curve", 1.0);
-    let mut changed = false;
-    ui.columns(2, |columns| {
-        for ((ui, name), key) in columns
-            .iter_mut()
-            .zip(["Left stick", "Right stick"])
-            .zip(STICK_FIELDS)
-        {
-            card(ui, |ui| {
-                ui.heading(name);
-                let mut exponent = number(doc.as_table(), key, fallback);
-                curve_preview(ui, exponent);
-                ui.label("Response exponent");
-                ui.spacing_mut().slider_width = ui.available_width().clamp(100.0, 235.0);
-                if ui
-                    .add(
-                        egui::Slider::new(&mut exponent, 0.25..=4.0)
-                            .step_by(0.05)
-                            .clamping(egui::SliderClamping::Edits)
-                            .fixed_decimals(2),
-                    )
-                    .changed()
-                {
-                    set_number(doc.as_table_mut(), key, exponent);
-                    changed = true;
-                }
+    for (key, title) in STICK_FIELDS.into_iter().zip(["Left stick", "Right stick"]) {
+        let group = adw::PreferencesGroup::builder()
+            .title(title)
+            .description("Lower exponents give more response near the center. 1.00 is linear.")
+            .build();
+        let initial = number(doc.as_table(), key, fallback);
+        let plot = gtk::DrawingArea::builder()
+            .content_height(122)
+            .hexpand(true)
+            .build();
+        plot.set_margin_top(12);
+        plot.set_margin_bottom(12);
+        plot.set_margin_start(12);
+        plot.set_margin_end(12);
+        let exponent = Rc::new(Cell::new(initial));
+        let plot_state = exponent.clone();
+        plot.set_draw_func(move |area, cr, width, height| {
+            draw_curve(area, cr, width, height, plot_state.get())
+        });
+        let plot_ref = plot.downgrade();
+        let ctx = ctx.clone();
+        let row = scale_row("Response exponent", initial, 0.25, 4.0, 20, move |value| {
+            exponent.set(value);
+            if let Some(plot) = plot_ref.upgrade() {
+                plot.queue_draw();
+            }
+            ctx.edit(|doc| {
+                set_number(doc.as_table_mut(), key, value);
+                Ok(())
             });
+        });
+        group.add(&plot);
+        group.add(&row);
+        page.add(&group);
+    }
+    page.upcast()
+}
+
+fn scale_row(
+    label: &str,
+    initial: f64,
+    min: f64,
+    max: f64,
+    steps_per_unit: i32,
+    changed: impl Fn(f64) + 'static,
+) -> adw::ActionRow {
+    let units = f64::from(steps_per_unit);
+    let step = units.recip();
+    let digits = if steps_per_unit == 10 { 1 } else { 2 };
+    let adjustment = gtk::Adjustment::new(initial, min, max, step, 10.0 * step, 0.0);
+    let scale = gtk::Scale::builder()
+        .adjustment(&adjustment)
+        .digits(digits)
+        .draw_value(true)
+        .hexpand(true)
+        .valign(gtk::Align::Center)
+        .build();
+    scale.set_size_request(150, -1);
+    scale.update_property(&[gtk::accessible::Property::Label(label)]);
+    scale.connect_value_changed(move |scale| {
+        let value = scale.value();
+        let snapped = ((value * units).round() / units).clamp(min, max);
+        if (value - snapped).abs() > 1e-9 {
+            scale.set_value(snapped);
+        } else {
+            changed(snapped);
         }
     });
-    changed
+    let row = adw::ActionRow::builder().title(label).build();
+    row.add_suffix(&scale);
+    row
 }
 
-fn curve_preview(ui: &mut egui::Ui, exponent: f64) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 174.0), egui::Sense::hover());
-    let plot = rect.shrink(12.0);
-    let at = |x: f32, y: f32| plot.left_bottom() + vec2(x * plot.width(), -y * plot.height());
-    let colors = adwaita::palette(ui);
-    let painter = ui.painter();
-    painter.rect_filled(rect, 8, colors.entry);
-    for tick in 0..=4 {
-        let step = tick as f32 / 4.0;
-        let grid = Stroke::new(1.0_f32, colors.border);
-        painter.line_segment([at(step, 0.0), at(step, 1.0)], grid);
-        painter.line_segment([at(0.0, step), at(1.0, step)], grid);
-    }
-    painter.line_segment(
-        [at(0.0, 0.0), at(1.0, 1.0)],
-        Stroke::new(1.0_f32, colors.neutral_line),
+fn draw_curve(
+    area: &gtk::DrawingArea,
+    cr: &gtk::cairo::Context,
+    width: i32,
+    height: i32,
+    exponent: f64,
+) {
+    let width = f64::from(width) - 2.0;
+    let height = f64::from(height) - 2.0;
+    let at = |x: f64, y: f64| (1.0 + x * width, 1.0 + (1.0 - y) * height);
+    let line = |from, to| {
+        let (x, y) = from;
+        cr.move_to(x, y);
+        let (x, y) = to;
+        cr.line_to(x, y);
+    };
+    let foreground = area.style_context().color();
+    let rgb = (
+        foreground.red().into(),
+        foreground.green().into(),
+        foreground.blue().into(),
     );
-    let points = (0..=64)
-        .map(|i| {
-            let x = i as f32 / 64.0;
-            at(x, x.powf(exponent.clamp(0.25, 4.0) as f32))
-        })
-        .collect();
-    painter.add(egui::Shape::line(
-        points,
-        Stroke::new(2.5_f32, colors.accent),
-    ));
+    cr.set_source_rgba(rgb.0, rgb.1, rgb.2, 0.16);
+    cr.set_line_width(1.0);
+    for tick in 0..=4 {
+        let fraction = f64::from(tick) / 4.0;
+        line(at(fraction, 0.0), at(fraction, 1.0));
+        line(at(0.0, fraction), at(1.0, fraction));
+    }
+    let _ = cr.stroke();
+    cr.set_source_rgba(rgb.0, rgb.1, rgb.2, 0.45);
+    line(at(0.0, 0.0), at(1.0, 1.0));
+    let _ = cr.stroke();
+    let accent = area
+        .style_context()
+        .lookup_color("accent_color")
+        .unwrap_or(foreground);
+    cr.set_source_rgb(
+        accent.red().into(),
+        accent.green().into(),
+        accent.blue().into(),
+    );
+    cr.set_line_width(2.5);
+    let (x, y) = at(0.0, 0.0);
+    cr.move_to(x, y);
+    for index in 1..=64 {
+        let x = f64::from(index) / 64.0;
+        let (x, y) = at(x, x.powf(exponent.clamp(0.25, 4.0)));
+        cr.line_to(x, y);
+    }
+    let _ = cr.stroke();
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

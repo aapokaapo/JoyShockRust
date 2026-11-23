@@ -5,23 +5,14 @@ use std::{
     process::Command,
 };
 
-use eframe::egui;
-use toml_edit::DocumentMut;
+use adw::{gtk, prelude::*};
 
-mod adwaita;
 mod bindings;
 mod controller;
 mod sensitivity;
+mod ui;
 
 const NEW_PROFILE: &str = "version = 1\n";
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Page {
-    Buttons,
-    Sticks,
-    Gyro,
-    Advanced,
-}
 
 fn profile_filename(name: &str) -> Result<String, String> {
     let name = name.trim();
@@ -75,11 +66,7 @@ struct Editor {
     text: String,
     name: String,
     selected: &'static str,
-    page: Page,
     calibration: sensitivity::CalibrationDraft,
-    notice: Option<Result<String, String>>,
-    confirm_close: bool,
-    closing: bool,
 }
 
 impl Editor {
@@ -95,11 +82,7 @@ impl Editor {
             original,
             name: String::new(),
             selected: "cross",
-            page: Page::Buttons,
             calibration: sensitivity::CalibrationDraft::default(),
-            notice: None,
-            confirm_close: false,
-            closing: false,
         })
     }
 
@@ -152,159 +135,6 @@ impl Editor {
     }
 }
 
-impl eframe::App for Editor {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if ctx.input(|input| input.viewport().close_requested())
-            && (self.text != self.original || self.calibration.error.is_some())
-            && !self.closing
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm_close = true;
-        }
-        egui::TopBottomPanel::top("commands").show(ctx, |ui| {
-            ui.heading("JoyShockRust Profile Editor");
-            ui.horizontal(|ui| {
-                if let Some(path) = &self.path {
-                    ui.label(path.display().to_string());
-                } else {
-                    ui.label("Profile name");
-                    ui.text_edit_singleline(&mut self.name);
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                let previous = self.page;
-                for (page, label) in [
-                    (Page::Buttons, "Buttons"),
-                    (Page::Sticks, "Sticks"),
-                    (Page::Gyro, "Gyro"),
-                    (Page::Advanced, "Advanced TOML"),
-                ] {
-                    ui.selectable_value(&mut self.page, page, label);
-                }
-                if previous == Page::Gyro
-                    && self.page != previous
-                    && self.calibration.error.is_none()
-                {
-                    self.calibration.reset();
-                }
-                ui.separator();
-                if ui.button("Validate").clicked() {
-                    self.notice = Some(self.validate());
-                }
-                if ui.button("Save").clicked() {
-                    self.notice = Some(self.save_and_apply(false));
-                }
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Save and apply").color(egui::Color32::WHITE),
-                        )
-                        .fill(adwaita::BLUE),
-                    )
-                    .clicked()
-                {
-                    self.notice = Some(self.save_and_apply(true));
-                }
-            });
-        });
-        egui::TopBottomPanel::bottom("feedback").show(ctx, |ui| {
-            if let Some(notice) = &self.notice {
-                match notice {
-                    Ok(message) => {
-                        ui.label(message);
-                    }
-                    Err(message) => {
-                        ui.colored_label(ui.visuals().error_fg_color, message);
-                    }
-                }
-            }
-        });
-        if self.page == Page::Advanced {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.heading("Profile TOML");
-                egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.text)
-                                .code_editor()
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(24),
-                        );
-                    });
-            });
-        } else {
-            match self.text.parse::<DocumentMut>() {
-                Ok(mut doc) if self.page == Page::Buttons => {
-                    egui::SidePanel::right("binding-inspector")
-                        .exact_width(323.0)
-                        .resizable(false)
-                        .show(ctx, |ui| {
-                            egui::ScrollArea::vertical().show(ui, |ui| {
-                                if sensitivity::card(ui, |ui| {
-                                    ui.set_min_width(ui.available_width());
-                                    controller::inspector(ui, &mut doc, self.selected)
-                                }) {
-                                    self.text = doc.to_string();
-                                    self.notice = None;
-                                }
-                            });
-                        });
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            sensitivity::card(ui, |ui| {
-                                controller::layout(ui, &doc, &mut self.selected);
-                            });
-                        });
-                    });
-                }
-                Ok(mut doc) => {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            let changed = match self.page {
-                                Page::Sticks => sensitivity::sticks(ui, &mut doc),
-                                Page::Gyro => {
-                                    sensitivity::gyro(ui, &mut doc, &mut self.calibration)
-                                }
-                                _ => unreachable!("settings page"),
-                            };
-                            if changed {
-                                self.text = doc.to_string();
-                                self.notice = None;
-                                ui.ctx().request_repaint();
-                            }
-                        });
-                    });
-                }
-                Err(error) => {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        ui.heading("Profile needs attention");
-                        ui.label(error.to_string());
-                        if ui.button("Open Advanced TOML").clicked() {
-                            self.page = Page::Advanced;
-                        }
-                    });
-                }
-            }
-        }
-        if self.confirm_close {
-            egui::Window::new("Unsaved profile changes")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(ctx, |ui| {
-                    if ui.button("Keep editing").clicked() {
-                        self.confirm_close = false;
-                    }
-                    if ui.button("Discard changes and close").clicked() {
-                        self.closing = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                });
-        }
-    }
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
     let path = args.next().map(PathBuf::from);
@@ -323,21 +153,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("expected an absolute XDG_CONFIG_HOME or HOME")?
         .join("joyshockrust/profiles");
     let bridge = env::current_exe()?.with_file_name("joyshockrust-linux");
-    let editor = Editor::open(bridge, directory, path)?;
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1010.0, 630.0])
-            .with_min_inner_size([810.0, 430.0]),
-        ..Default::default()
-    };
-    eframe::run_native(
-        "JoyShockRust Profile Editor",
-        options,
-        Box::new(move |context| {
-            adwaita::configure(&context.egui_ctx);
-            Ok(Box::new(editor))
-        }),
-    )?;
+    let editor = std::rc::Rc::new(std::cell::RefCell::new(Editor::open(
+        bridge, directory, path,
+    )?));
+    gtk::gdk::set_allowed_backends("wayland");
+    let app = adw::Application::builder()
+        .application_id("io.github.aapokaapo.JoyShockRust.Editor")
+        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+    app.connect_activate(move |app| ui::open_window(app, editor.clone()));
+    if app.run_with_args(&["joyshockrust-editor"]) != adw::glib::ExitCode::SUCCESS {
+        return Err("Could not start the profile editor in a Wayland session".into());
+    }
     Ok(())
 }
 

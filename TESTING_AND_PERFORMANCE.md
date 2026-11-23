@@ -839,11 +839,15 @@ reported transport, decoded report rate and battery state against
 `joyshockrust-linux --status`. Select a controller and then a profile.
 Confirm the profile load keeps the selected controller active.
 
-Under **Profile editor**, open **New profile** and name it. Select Cross
+Under **Profile editor**, open **New profile** and name it. Switch the
+desktop between light and dark appearance and resize the editor to verify
+the page switcher moves between the header and bottom bar. Use Tab and
+the keyboard to select controls and change bindings. Edit a setting and
+close the window to check the discard confirmation. Select Cross
 on the controller diagram, choose **Space** for tap, then choose **Left
 Shift** for hold. Select another control and return to Cross to verify
 both choices remain visible. Choose a virtual gamepad target, then use
-**Save and apply**. Reopen the profile and check those settings. Select
+**Save & Apply**. Reopen the profile and check those settings. Select
 **No action** for a gesture and confirm the other action remains. In
 **Advanced TOML**, enter invalid syntax and check that validation or
 saving displays an error while the saved profile remains usable.
