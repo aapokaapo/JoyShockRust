@@ -419,6 +419,10 @@ on the button mouse. Wheel actions use gesture timing and generate no key
 release event. Wheel capabilities are advertised for profiles that use them.
 [Linux relative events](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/Documentation/input/event-codes.rst)
 
+Hold scroll actions reuse the gesture deadline loop. Each wake can deliver
+one step for the binding and schedules the next step from the current
+time. A release cancels its deadline.
+
 Keyboard bindings can override hold and double-tap deadlines independently.
 Both timers use the existing monotonic report and readiness clock. The
 default timings and immediate behavior of hold-only bindings are retained.

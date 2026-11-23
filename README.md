@@ -278,6 +278,18 @@ button = "dpad-down"
 tap = { scroll = "down" }
 ```
 
+Use `hold` to repeat a wheel step while the binding stays pressed.
+`scroll_repeat_ms` sets the interval in milliseconds and defaults to 100.
+A hold-only binding starts immediately. A binding that also has a tap or
+double-tap action starts scrolling at its `hold_ms` threshold.
+
+```toml
+[[keyboard.bindings]]
+button = "dpad-right"
+hold = { scroll = "right" }
+scroll_repeat_ms = 80
+```
+
 Use `chord` in place of `button` or `trigger` to require two active
 inputs. Either press order works. The second input completes the chord,
 and releasing either input ends it. Separate bindings for the member

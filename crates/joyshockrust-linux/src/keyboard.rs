@@ -18,6 +18,7 @@ use crate::touchpad::{Grid, TouchRegion};
 mod stick;
 
 const TAP_KEY_TIME: Duration = Duration::from_millis(30);
+const SCROLL_REPEAT_TIME: Duration = Duration::from_millis(100);
 const WHEEL_AXES: [RelativeAxisCode; 2] =
     [RelativeAxisCode::REL_WHEEL, RelativeAxisCode::REL_HWHEEL];
 
@@ -41,6 +42,7 @@ struct RawBinding {
     double_tap: Option<RawOutput>,
     hold_ms: Option<NonZeroU32>,
     double_tap_ms: Option<NonZeroU32>,
+    scroll_repeat_ms: Option<NonZeroU32>,
 }
 
 #[derive(Deserialize)]
@@ -67,13 +69,14 @@ enum ScrollDirection {
 }
 
 impl ScrollDirection {
-    fn step(self) -> (usize, i32) {
-        match self {
+    fn accumulate(self, scroll: &mut [i32; WHEEL_AXES.len()]) {
+        let (axis, step) = match self {
             Self::Up => (0, 1),
             Self::Down => (0, -1),
             Self::Left => (1, -1),
             Self::Right => (1, 1),
-        }
+        };
+        scroll[axis] = scroll[axis].saturating_add(step);
     }
 }
 
@@ -102,24 +105,16 @@ impl Config {
     fn keys(&self) -> impl Iterator<Item = KeyCode> {
         self.buttons
             .iter()
-            .flat_map(|binding| {
-                [
-                    binding.tap.as_ref().map_or(&[][..], Action::keys),
-                    &binding.hold,
-                    binding.double_tap.as_ref().map_or(&[][..], Action::keys),
-                ]
-                .into_iter()
-                .flatten()
-                .copied()
-            })
+            .flat_map(Binding::actions)
+            .flat_map(|action| action.keys().iter().copied())
             .chain(self.sticks.iter().flat_map(|binding| binding.keys()))
     }
 
     fn has_scroll(&self) -> bool {
-        self.buttons.iter().any(|binding| {
-            matches!(binding.tap, Some(Action::Scroll(_)))
-                || matches!(binding.double_tap, Some(Action::Scroll(_)))
-        })
+        self.buttons
+            .iter()
+            .flat_map(Binding::actions)
+            .any(|action| matches!(action, Action::Scroll(_)))
     }
 }
 
@@ -203,10 +198,19 @@ enum Source {
 struct Binding {
     source: BindingSource,
     tap: Option<Action>,
-    hold: Box<[KeyCode]>,
+    hold: Option<Action>,
     double_tap: Option<Action>,
     hold_time: Duration,
     double_tap_window: Duration,
+    scroll_repeat_time: Duration,
+}
+
+impl Binding {
+    fn actions(&self) -> impl Iterator<Item = &Action> {
+        [&self.tap, &self.hold, &self.double_tap]
+            .into_iter()
+            .flatten()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -322,13 +326,7 @@ impl Settings {
             let binding = Binding {
                 source,
                 tap: raw.tap.map(RawOutput::resolve).transpose()?,
-                hold: match raw.hold.map(RawOutput::resolve).transpose()? {
-                    Some(Action::Keys(keys)) => keys,
-                    Some(Action::Scroll(_)) => {
-                        return Err("scroll requires a tap or double_tap action".into());
-                    }
-                    None => Box::default(),
-                },
+                hold: raw.hold.map(RawOutput::resolve).transpose()?,
                 double_tap: raw.double_tap.map(RawOutput::resolve).transpose()?,
                 hold_time: raw
                     .hold_ms
@@ -336,10 +334,18 @@ impl Settings {
                 double_tap_window: raw.double_tap_ms.map_or(DOUBLE_TAP_WINDOW, |ms| {
                     Duration::from_millis(ms.get().into())
                 }),
+                scroll_repeat_time: raw.scroll_repeat_ms.map_or(SCROLL_REPEAT_TIME, |ms| {
+                    Duration::from_millis(ms.get().into())
+                }),
             };
-            if binding.tap.is_none() && binding.hold.is_empty() && binding.double_tap.is_none() {
+            if binding.actions().next().is_none() {
                 return Err(format!(
                     "keyboard binding for {name} needs at least one output"
+                ));
+            }
+            if raw.scroll_repeat_ms.is_some() && !matches!(binding.hold, Some(Action::Scroll(_))) {
+                return Err(format!(
+                    "keyboard binding for {name}: scroll_repeat_ms requires a scroll hold action"
                 ));
             }
             bindings.push(binding);
@@ -381,6 +387,7 @@ struct Gesture {
     source_pressed: [bool; 2],
     press: Press,
     pending_tap: Option<Instant>,
+    next_scroll: Option<Instant>,
 }
 
 impl Gesture {
@@ -432,7 +439,7 @@ impl Gesture {
                 }
             }
             Press::Down(start)
-                if !self.binding.hold.is_empty() && now >= start + self.binding.hold_time =>
+                if self.binding.hold.is_some() && now >= start + self.binding.hold_time =>
             {
                 self.press = Press::Held;
             }
@@ -444,12 +451,31 @@ impl Gesture {
 
     fn deadline(&self) -> Option<Instant> {
         let hold = match self.press {
-            Press::Down(start) if !self.binding.hold.is_empty() => {
+            Press::Down(start) if self.binding.hold.is_some() => {
                 Some(start + self.binding.hold_time)
             }
             _ => None,
         };
-        hold.into_iter().chain(self.pending_tap).min()
+        hold.into_iter()
+            .chain(self.pending_tap)
+            .chain(self.next_scroll)
+            .min()
+    }
+
+    fn held_action(&mut self, now: Instant) -> Option<&Action> {
+        if !matches!(self.press, Press::Held) {
+            self.next_scroll = None;
+            return None;
+        }
+        let action = self.binding.hold.as_ref()?;
+        if matches!(action, Action::Scroll(_)) {
+            if self.next_scroll.is_some_and(|deadline| deadline > now) {
+                return None;
+            }
+            // Resume from the actual wake time after a late poll, without a burst of old steps.
+            self.next_scroll = Some(now + self.binding.scroll_repeat_time);
+        }
+        Some(action)
     }
 }
 
@@ -493,6 +519,7 @@ impl State {
                 source_pressed: [false; 2],
                 press: Press::Up,
                 pending_tap: None,
+                next_scroll: None,
             })
             .collect();
         let mapped_keys: AttributeSet<KeyCode> = config.keys().collect();
@@ -561,16 +588,17 @@ impl State {
                         }
                     }
                 }
-                Some(Action::Scroll(direction)) => {
-                    let (axis, step) = direction.step();
-                    scroll[axis] = scroll[axis].saturating_add(step);
-                }
+                Some(Action::Scroll(direction)) => direction.accumulate(&mut scroll),
                 None => {}
             }
-            if matches!(gesture.press, Press::Held) {
-                for &key in &gesture.binding.hold {
-                    held.insert(key);
+            match gesture.held_action(now) {
+                Some(Action::Keys(keys)) => {
+                    for &key in keys {
+                        held.insert(key);
+                    }
                 }
+                Some(Action::Scroll(direction)) => direction.accumulate(&mut scroll),
+                None => {}
             }
             deadline = deadline.into_iter().chain(gesture.deadline()).min();
         }
@@ -1756,16 +1784,83 @@ mod tests {
     }
 
     #[test]
-    fn scroll_requires_a_known_direction_and_a_tap_gesture() {
+    fn scroll_requires_a_known_direction_and_valid_repeat_settings() {
         for setting in [
             "tap = { scroll = 'diagonal' }",
             "tap = { scroll = 'up', unexpected = true }",
-            "hold = { scroll = 'up' }",
+            "hold = { scroll = 'up' }\nscroll_repeat_ms = 0",
+            "hold = { scroll = 'up' }\nscroll_repeat_ms = -1",
+            "tap = { scroll = 'up' }\nscroll_repeat_ms = 40",
         ] {
             let profile =
                 format!("version = 1\n[[keyboard.bindings]]\nbutton = 'cross'\n{setting}\n");
             assert!(crate::profile::parse(&profile).is_err(), "{setting}");
         }
+    }
+
+    #[test]
+    fn held_scroll_repeats_at_deadlines_and_stops_on_release() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            button = "cross"
+            tap = "KEY_TAB"
+            hold = { scroll = "left" }
+            hold_ms = 100
+            scroll_repeat_ms = 40
+            [[keyboard.bindings]]
+            button = "l1"
+            hold = { scroll = "up" }
+        "#,
+        );
+        let mut state = State::new(&config);
+        let start = Instant::now();
+        let tab = (EventType::KEY, KeyCode::KEY_TAB.0);
+        let left = (EventType::RELATIVE, RelativeAxisCode::REL_HWHEEL.0, -1);
+        let up = (EventType::RELATIVE, RelativeAxisCode::REL_WHEEL.0, 1);
+        let frames = [
+            (0, Some(Button::South), Some(100), None),
+            (99, Some(Button::South), Some(100), None),
+            (100, Some(Button::South), Some(140), Some(left)),
+            (140, Some(Button::South), Some(180), Some(left)),
+            (310, Some(Button::South), Some(350), Some(left)), // One step despite the late wake.
+            (330, None, None, None),
+            (350, None, None, None),
+            (400, Some(Button::South), Some(500), None),
+            (420, None, Some(450), Some((tab.0, tab.1, 1))),
+            (450, None, None, Some((tab.0, tab.1, 0))),
+            (500, Some(Button::LeftShoulder), Some(600), Some(up)), // Hold-only starts immediately.
+            (599, Some(Button::LeftShoulder), Some(600), None),
+            (600, Some(Button::LeftShoulder), Some(700), Some(up)),
+            (700, None, None, None),
+        ];
+        let allocations = allocation_counter::measure(|| {
+            for (ms, button, deadline, expected) in frames {
+                let mut controls = Controls::default();
+                if let Some(button) = button {
+                    controls.buttons.insert(button);
+                }
+                let mut actual = None;
+                let next = state
+                    .update(
+                        input(controls),
+                        start + Duration::from_millis(ms),
+                        |events| {
+                            assert_eq!(events.len(), 1);
+                            let event = events[0];
+                            assert_eq!(
+                                actual.replace((event.event_type(), event.code(), event.value())),
+                                None
+                            );
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(actual, expected, "{ms} ms");
+                assert_eq!(next, deadline.map(|ms| start + Duration::from_millis(ms)));
+            }
+        });
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
     }
 
     #[test]

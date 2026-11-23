@@ -201,7 +201,8 @@ also target mouse buttons through a dedicated virtual pointer. Touchpad
 grid contacts, region clicks, and two-input chords can feed these gestures.
 Each gesture can emit a keyboard shortcut or a modified mouse click. Profiles can
 set the hold threshold and double-tap window per binding.
-Tap and double-tap can also emit a one-step vertical or horizontal mouse scroll.
+Tap and double-tap can emit a one-step vertical or horizontal mouse scroll.
+Hold actions can repeat wheel steps at a configurable rate.
 An opt-in uinput test covers the timed mouse tap and held-key cleanup with
 both virtual devices and synthetic USB reports.
 Deadline and output handling have synthetic coverage. The bridge supports
