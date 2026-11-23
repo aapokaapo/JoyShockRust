@@ -36,6 +36,7 @@ const MAX_PROFILE_BYTES: usize = 64 * 1024;
 const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
 const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
 const SET_GAMEPAD_PREFIX: &[u8] = b"\0set-gamepad\n";
+const SET_OUTPUTS_PREFIX: &[u8] = b"\0set-outputs\n";
 
 pub struct Reload {
     path: Option<PathBuf>,
@@ -137,6 +138,7 @@ pub enum Update {
     Profile(Box<RuntimeOptions>),
     Selection(ControllerFilter),
     Gamepad(bool),
+    OutputsPaused(bool),
 }
 
 impl Request<'_> {
@@ -156,6 +158,20 @@ impl Request<'_> {
     }
 
     pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
+        if let Some(payload) = self.command_payload(SET_OUTPUTS_PREFIX) {
+            if !self.reload.allow_controller_switch {
+                self.rejected("pausing outputs requires automatic discovery");
+                return None;
+            }
+            return match payload {
+                b"pause" => Some(Update::OutputsPaused(true)),
+                b"resume" => Some(Update::OutputsPaused(false)),
+                _ => {
+                    self.rejected("expected pause or resume");
+                    None
+                }
+            };
+        }
         if let Some(payload) = self.command_payload(SET_GAMEPAD_PREFIX) {
             return match payload {
                 b"on" => Some(Update::Gamepad(true)),
@@ -231,6 +247,10 @@ impl Request<'_> {
     }
 
     pub fn applied(self, status: Option<&StatusSocket>) {
+        if self.command_payload(SET_OUTPUTS_PREFIX).is_some() {
+            self.reply(b"applied\n");
+            return;
+        }
         if self.command_payload(SET_GAMEPAD_PREFIX).is_some() {
             eprintln!("Virtual gamepad setting updated from CLI");
             self.reply(b"applied\n");
@@ -358,6 +378,12 @@ pub fn set_gamepad(enabled: bool, reload_socket: Option<&Path>) -> io::Result<()
     let mut payload = SET_GAMEPAD_PREFIX.to_vec();
     payload.extend_from_slice(if enabled { b"on" } else { b"off" });
     send_update(&payload, reload_socket, "virtual gamepad update")
+}
+
+pub fn set_outputs_paused(paused: bool, reload_socket: Option<&Path>) -> io::Result<()> {
+    let mut payload = SET_OUTPUTS_PREFIX.to_vec();
+    payload.extend_from_slice(if paused { b"pause" } else { b"resume" });
+    send_update(&payload, reload_socket, "virtual output update")
 }
 
 pub fn parse_controller_selection(value: &str) -> Result<Option<ControllerId>, &'static str> {

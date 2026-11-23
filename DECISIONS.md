@@ -487,3 +487,9 @@ tray's Quit action stops the bridge before its menu disappears. Desktop
 polling and command execution stay outside the input process.
 [XDG Autostart](https://specifications.freedesktop.org/autostart-spec/latest/)
 · [StatusNotifierItem](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/)
+
+For tray RWC calibration, the bridge ends its active output session
+before acknowledging the pause and keeps serving control requests.
+Discovery resumes with the existing profile and controller filter.
+The tray waits for the interactive calibration terminal, then resumes
+the bridge. The calibration CLI owns the profile write.

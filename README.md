@@ -649,6 +649,15 @@ or select **Automatic**. Place named TOML profiles in
 **Default mappings** unloads the profile. **Quit JoyShockRust** stops the
 bridge and closes the tray.
 
+Choose a file under **Calibrate game sensitivity (RWC)** while a controller
+is connected. The tray pauses virtual outputs and opens Konsole, GNOME
+Terminal or xterm for the existing whole-turn calibration. When the
+terminal closes, the bridge resumes with the same in-memory profile and
+controller selection. To apply the saved calibration, select the
+updated profile in **Profiles**. If the tray was interrupted and the
+bridge is still paused, use **Resume virtual outputs** or run
+`joyshockrust-linux --set-outputs resume`.
+
 Check **Start when I log in** to enable desktop login startup. If you
 previously enabled the bridge unit directly, run
 `systemctl --user disable joyshockrust.service` once so the tray controls

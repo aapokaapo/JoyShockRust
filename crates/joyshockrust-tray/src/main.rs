@@ -2,8 +2,8 @@ use std::{
     env, fs,
     io::{self, Read},
     os::unix::net::UnixStream,
-    path::PathBuf,
-    process::Command,
+    path::{Path, PathBuf},
+    process::{Child, Command},
     sync::mpsc,
     time::{Duration, Instant},
 };
@@ -70,6 +70,7 @@ struct Status {
     battery: String,
     active_node: Option<String>,
     profile: String,
+    outputs_paused: bool,
 }
 
 impl Status {
@@ -135,6 +136,7 @@ impl Status {
                 .filter(|_| connected)
                 .map(str::to_owned),
             profile: profile.into(),
+            outputs_paused: field("outputs_paused") == Some("true"),
         })
     }
 }
@@ -144,7 +146,9 @@ enum Action {
     Select(Controller),
     AutoSelect,
     Load(PathBuf),
+    Calibrate(PathBuf),
     Unload,
+    ResumeOutputs,
     Start,
     Autostart(bool),
     Quit,
@@ -156,6 +160,7 @@ struct TrayState {
     inventory: Vec<Controller>,
     profiles: Vec<PathBuf>,
     autostart: bool,
+    calibrating: bool,
     error: Option<String>,
 }
 
@@ -215,6 +220,17 @@ impl ksni::Tray for Tray {
         if let Some(error) = &state.error {
             menu.push(label(error));
         }
+        if state.calibrating {
+            menu.push(label("Calibrating in terminal"));
+            return menu;
+        }
+        if state
+            .status
+            .as_ref()
+            .is_some_and(|status| status.outputs_paused)
+        {
+            menu.push(item("Resume virtual outputs", Action::ResumeOutputs));
+        }
         let mut controllers = vec![item("Automatic", Action::AutoSelect)];
         for controller in &state.inventory {
             let active = state
@@ -247,6 +263,30 @@ impl ksni::Tray for Tray {
             }
             .into(),
         );
+        if state
+            .status
+            .as_ref()
+            .is_some_and(|status| status.active_node.is_some())
+            && !state.profiles.is_empty()
+        {
+            menu.push(
+                SubMenu {
+                    label: "Calibrate game sensitivity (RWC)".into(),
+                    submenu: state
+                        .profiles
+                        .iter()
+                        .filter_map(|path| {
+                            Some(item(
+                                path.file_stem()?.to_string_lossy(),
+                                Action::Calibrate(path.clone()),
+                            ))
+                        })
+                        .collect(),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
 
         let mut profiles = vec![item("Default mappings", Action::Unload)];
         for path in &state.profiles {
@@ -320,6 +360,41 @@ impl Desktop {
         Ok(Status::parse(&reply))
     }
 
+    fn set_outputs_paused(&self, paused: bool) -> io::Result<()> {
+        self.command(&["--set-outputs", if paused { "pause" } else { "resume" }])
+            .map(|_| ())
+    }
+
+    fn calibrate(&self, profile: &Path, status: &Status) -> io::Result<Child> {
+        let node = status
+            .active_node
+            .as_deref()
+            .filter(|node| {
+                node.strip_prefix("/dev/hidraw").is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            })
+            .ok_or_else(|| io::Error::other("connect a controller to calibrate"))?;
+        output(
+            Command::new(&self.bridge)
+                .arg("--check-profile")
+                .arg(profile),
+        )?;
+        let mut terminal = calibration_terminal(&self.bridge, profile, node)?;
+        self.set_outputs_paused(true)?;
+        match terminal.spawn() {
+            Ok(child) => Ok(child),
+            Err(error) => {
+                if let Err(resume) = self.set_outputs_paused(false) {
+                    return Err(io::Error::other(format!(
+                        "{error}; could not resume outputs: {resume}"
+                    )));
+                }
+                Err(error)
+            }
+        }
+    }
+
     fn run(&self, action: &Action) -> io::Result<()> {
         match action {
             Action::Select(controller) => {
@@ -351,6 +426,8 @@ impl Desktop {
             Action::Unload => {
                 self.command(&["--unload-profile"])?;
             }
+            Action::Calibrate(_) => unreachable!("calibration is handled by the tray loop"),
+            Action::ResumeOutputs => self.set_outputs_paused(false)?,
             Action::Start => {
                 bridge_service("start")?;
             }
@@ -372,6 +449,41 @@ impl Desktop {
         }
         Ok(())
     }
+}
+
+fn calibration_terminal(bridge: &Path, profile: &Path, node: &str) -> io::Result<Command> {
+    // Pass file names as arguments. The shell only keeps the result visible.
+    const HOLD_TERMINAL: &str = r#""$@"
+result=$?
+printf '\nPress Enter to return to JoyShockRust.\n'
+IFS= read -r ignored
+exit "$result""#;
+    for (program, args) in [
+        ("konsole", &["--separate", "-e"][..]),
+        ("gnome-terminal", &["--wait", "--"][..]),
+        ("xterm", &["-e"][..]),
+    ] {
+        let Some(path) = env::var_os("PATH").and_then(|paths| {
+            env::split_paths(&paths)
+                .map(|directory| directory.join(program))
+                .find(|path| path.is_file())
+        }) else {
+            continue;
+        };
+        let mut command = Command::new(path);
+        command
+            .args(args)
+            .args(["/bin/sh", "-c", HOLD_TERMINAL, "joyshockrust-calibration"])
+            .arg(bridge)
+            .args(["--calibrate-game", "--profile"])
+            .arg(profile)
+            .arg(node);
+        return Ok(command);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "calibration needs Konsole, GNOME Terminal or xterm",
+    ))
 }
 
 fn output(command: &mut Command) -> io::Result<String> {
@@ -429,7 +541,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut published = TrayState::default();
     let mut last_inventory = None;
-    while !tray.is_closed() {
+    let mut calibration: Option<Child> = None;
+    while !tray.is_closed() || calibration.is_some() {
+        let finished = match calibration.as_mut().map(Child::try_wait) {
+            Some(Ok(Some(result))) => Some(if result.success() {
+                None
+            } else {
+                Some("Calibration cancelled or failed".to_owned())
+            }),
+            Some(Err(error)) => Some(Some(format!("Could not wait for calibration: {error}"))),
+            _ => None,
+        };
+        if let Some(outcome) = finished {
+            calibration = None;
+            state.calibrating = false;
+            state.error = match desktop.set_outputs_paused(false) {
+                Ok(()) => outcome,
+                Err(error) => Some(format!("Could not resume virtual outputs: {error}")),
+            };
+        }
         state.status = desktop.status().ok().flatten();
         if last_inventory.is_none_or(|last: Instant| last.elapsed() >= INVENTORY_REFRESH) {
             state.inventory = desktop
@@ -458,12 +588,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tray.update(|tray| tray.state.clone_from(&state));
         }
         match receiver.recv_timeout(REFRESH) {
+            Ok(_) if calibration.is_some() => {}
+            Ok(Action::Calibrate(path)) => {
+                let result = state
+                    .status
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("bridge unavailable"))
+                    .and_then(|status| desktop.calibrate(&path, status));
+                match result {
+                    Ok(child) => {
+                        calibration = Some(child);
+                        state.calibrating = true;
+                        state.error = None;
+                    }
+                    Err(error) => {
+                        state.error = Some(format!("Could not start calibration: {error}"))
+                    }
+                }
+            }
             Ok(action) => match desktop.run(&action) {
                 Ok(()) if matches!(action, Action::Quit) => break,
                 Ok(()) => state.error = None,
                 Err(error) => state.error = Some(format!("Action failed: {error}")),
             },
             Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) if calibration.is_some() => {
+                std::thread::sleep(REFRESH)
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -528,13 +679,16 @@ mod tests {
         let menu = tray.menu();
         for entry in menu {
             if let MenuItem::SubMenu(menu) = entry
-                && let MenuItem::Standard(option) = &menu.submenu[1]
+                && let Some(MenuItem::Standard(option)) = menu.submenu.last()
             {
                 (option.activate)(&mut tray);
             }
         }
         assert!(
             matches!(receiver.try_recv().unwrap(), Action::Select(selected) if selected == controller)
+        );
+        assert!(
+            matches!(receiver.try_recv().unwrap(), Action::Calibrate(selected) if selected == profile)
         );
         assert!(
             matches!(receiver.try_recv().unwrap(), Action::Load(selected) if selected == profile)

@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::HashSet,
     ffi::OsStr,
     fmt,
@@ -179,6 +180,7 @@ pub fn run(
     mut config: ControllerConfig,
     reload: Option<&Reload>,
     status: Option<&StatusSocket>,
+    outputs_paused: &Cell<bool>,
     mut handle: impl FnMut(Event<'_>) -> io::Result<Option<ControllerFilter>>,
 ) -> io::Result<()> {
     // Subscribe before enumerating so a connection between the scan and the
@@ -194,8 +196,9 @@ pub fn run(
         if let Some(status) = status {
             status.set_filter(filter);
         }
-        if let Some((candidate, opened)) =
-            find_controller(filter, config.preferred(), &mut disconnected)?
+        if !outputs_paused.get()
+            && let Some((candidate, opened)) =
+                find_controller(filter, config.preferred(), &mut disconnected)?
         {
             let OpenController { mut file, id } = opened;
             let Candidate {

@@ -373,6 +373,28 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
         .unwrap();
     assert!(result.status.success(), "{result:?}");
     check(true, "applied", "loaded", false);
+    for (mode, paused) in [("pause", true), ("pause", true), ("resume", false)] {
+        let result = Command::new(binary)
+            .args(["--set-outputs", mode])
+            .arg(&reload)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        let reply = Command::new(binary)
+            .arg("--status")
+            .arg(&status)
+            .output()
+            .unwrap();
+        assert!(reply.status.success(), "{reply:?}");
+        let reply = String::from_utf8(reply.stdout).unwrap();
+        assert!(
+            reply
+                .lines()
+                .any(|line| line == format!("outputs_paused={paused}")),
+            "{reply}"
+        );
+        check(true, "applied", "loaded", false);
+    }
     let result = Command::new(binary)
         .arg("--reload-profile")
         .arg(&reload)

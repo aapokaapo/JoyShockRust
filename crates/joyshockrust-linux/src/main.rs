@@ -63,6 +63,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --unload-profile [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --set-gamepad on|off [RELOAD_SOCKET]\n",
+        "       joyshockrust-linux --set-outputs pause|resume [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --select-controller ID|any [--controller-model MODEL] [--usb|--bluetooth|--auto-transport] [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
         "       joyshockrust-linux --calibrate-game --profile PATH [/dev/hidrawN]\n",
@@ -98,6 +99,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut load_profile_path = None;
     let mut unload_profile = false;
     let mut set_gamepad = None;
+    let mut set_outputs_paused = None;
     let mut controller_selection = None;
     let mut reload_path = None;
     let mut status_path = None;
@@ -225,6 +227,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     .to_str()
                     .ok_or("expected a controller HID ID or any")?,
             )?);
+        } else if arg == "--set-outputs" && set_outputs_paused.is_none() {
+            set_outputs_paused = Some(
+                match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+                    Some("pause") => true,
+                    Some("resume") => false,
+                    _ => return Err("expected pause or resume after --set-outputs".into()),
+                },
+            );
         } else if arg == "--reload-socket" && reload_path.is_none() {
             reload_path = Some(PathBuf::from(
                 args.next().ok_or("expected a reload socket path")?,
@@ -344,6 +354,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         + u8::from(load_profile_path.is_some())
         + u8::from(unload_profile)
         + u8::from(set_gamepad.is_some())
+        + u8::from(set_outputs_paused.is_some())
         + u8::from(controller_selection.is_some());
     if show_controller_id && !diagnose && !list_controllers {
         return Err("--show-controller-id requires --diagnose or --list-controllers".into());
@@ -382,6 +393,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 reload::unload_profile(path.as_deref())
             } else if let Some(enabled) = set_gamepad {
                 reload::set_gamepad(enabled, path.as_deref())
+            } else if let Some(paused) = set_outputs_paused {
+                reload::set_outputs_paused(paused, path.as_deref())
             } else if let Some(selection) = controller_selection {
                 reload::select_controller(selection, controller_model, transport, path.as_deref())
             } else {
@@ -576,6 +589,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 filter,
                 path: &path,
                 grab_touchpad,
+                outputs_paused: None,
             },
             &mut bridge,
             Some(&mut measurement),
@@ -606,16 +620,19 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 filter,
                 path: &path,
                 grab_touchpad,
+                outputs_paused: None,
             },
             &mut bridge,
             None,
         )?;
     } else {
+        let outputs_paused = std::cell::Cell::new(false);
         discovery::run(
             filter,
             controller_config,
             reload,
             status,
+            &outputs_paused,
             |event| match event {
                 discovery::Event::Connected(input, identity, filter, path) => serve_session(
                     input,
@@ -627,6 +644,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         filter,
                         path,
                         grab_touchpad,
+                        outputs_paused: Some(&outputs_paused),
                     },
                     &mut bridge,
                     None,
@@ -649,6 +667,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             bridge.virtual_gamepad = enabled;
                             if let Some(status) = status {
                                 status.set_gamepad_enabled(enabled);
+                            }
+                            None
+                        }
+                        Some(reload::Update::OutputsPaused(paused)) => {
+                            outputs_paused.set(paused);
+                            if let Some(status) = status {
+                                status.set_outputs_paused(paused);
                             }
                             None
                         }
@@ -725,6 +750,7 @@ struct SessionDevice<'a> {
     filter: discovery::ControllerFilter,
     path: &'a std::path::Path,
     grab_touchpad: bool,
+    outputs_paused: Option<&'a std::cell::Cell<bool>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -738,6 +764,7 @@ fn serve_session(
         filter,
         path,
         grab_touchpad,
+        outputs_paused,
     }: SessionDevice<'_>,
     bridge: &mut profile::BridgeOptions,
     mut measurement: Option<&mut benchmark::Benchmark>,
@@ -812,10 +839,18 @@ fn serve_session(
                         Some(reload::Update::Selection(selection))
                             if selection != current_filter =>
                         {
-                            switch = Some((selection, reload));
+                            switch = Some((Some(selection), reload));
                             return Ok(ControlFlow::Break(()));
                         }
                         Some(reload::Update::Selection(_)) => {
+                            reload.applied(status);
+                            return Ok(ControlFlow::Continue(()));
+                        }
+                        Some(reload::Update::OutputsPaused(paused)) => {
+                            if paused && outputs_paused.is_some() {
+                                switch = Some((None, reload));
+                                return Ok(ControlFlow::Break(()));
+                            }
                             reload.applied(status);
                             return Ok(ControlFlow::Continue(()));
                         }
@@ -994,8 +1029,16 @@ fn serve_session(
             if let Some(status) = status {
                 status.update(None, runtime.gyro.is_some());
             }
+            if selection.is_none()
+                && let Some(outputs_paused) = outputs_paused
+            {
+                outputs_paused.set(true);
+                if let Some(status) = status {
+                    status.set_outputs_paused(true);
+                }
+            }
             request.applied(status);
-            return Ok(Some(selection));
+            return Ok(Some(selection.unwrap_or(filter)));
         }
     }
     if let Some(status) = status {

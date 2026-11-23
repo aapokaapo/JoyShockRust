@@ -246,11 +246,15 @@ XDG autostart gives the user a login-start preference. The tray shows
 controller telemetry and offers independent controller and profile
 selectors.
 
-Next, add a tray calibration dialog that pauses normal outputs while
-measuring real-world calibration, saves the result to the selected
-profile and restores the bridge. Add a profile editor for creating,
-validating, saving and applying controller bindings. Display the active
-profile's name even when it was loaded outside the tray.
+The tray opens terminal-based real-world calibration for a chosen
+profile. The bridge releases its virtual outputs during calibration
+while retaining the live profile and controller selection. The tray
+resumes the bridge after the terminal exits.
+
+Next, add a profile editor for creating, validating, saving and
+applying controller bindings. A dedicated calibration dialog can
+eventually replace the terminal prompts. Display the active profile's
+name even when it was loaded outside the tray.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

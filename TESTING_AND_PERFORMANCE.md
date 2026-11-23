@@ -839,6 +839,14 @@ reported transport, decoded report rate and battery state against
 `joyshockrust-linux --status`. Select a controller and then a profile.
 Confirm the profile load keeps the selected controller active.
 
+Choose **Calibrate game sensitivity (RWC)** and a profile. While the
+terminal is open, check `outputs_paused=true` and verify the regular
+virtual outputs are removed. Complete a whole-turn calibration, confirm
+the file was updated and close the terminal. Verify `outputs_paused=false`,
+the controller reconnects, and the previous live profile remains active.
+Select the calibrated profile to apply the new values. Repeat and close
+the terminal before completing calibration to check cancellation.
+
 Enable **Start when I log in**, log out and back in, and confirm the tray
 and bridge start. Clear the setting and repeat to confirm manual
 launch is needed. Use **Quit JoyShockRust** and verify both user units

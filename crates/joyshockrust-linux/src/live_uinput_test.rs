@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     fs::{self, File},
     io::Write,
     os::{fd::OwnedFd, unix::net::UnixStream},
@@ -92,7 +93,8 @@ fn uinput_live_gamepad_toggle() {
     let reload_path = directory.0.join("reload");
     let status = StatusSocket::bind(&status_path).unwrap();
     let mut bridge = BridgeOptions::default();
-    let reload = reload::Reload::new(None, Some(&reload_path), bridge, false).unwrap();
+    let reload = reload::Reload::new(None, Some(&reload_path), bridge, true).unwrap();
+    let outputs_paused = Cell::new(false);
     let (mut sender, receiver) = UnixStream::pair().unwrap();
     receiver.set_nonblocking(true).unwrap();
     let mut input = File::from(OwnedFd::from(receiver));
@@ -171,9 +173,11 @@ fn uinput_live_gamepad_toggle() {
             wait_for("Cross release on the recreated device", || {
                 (!reopened.get_key_state().ok()?.contains(KeyCode::BTN_SOUTH)).then_some(())
             });
+            reload::set_outputs_paused(true, Some(reload_path)).unwrap();
+            assert!(!second.exists(), "virtual gamepad survived output pause");
         });
 
-        serve_session(
+        let selection = serve_session(
             &mut input,
             &mut RuntimeOptions::default(),
             Some(&reload),
@@ -186,11 +190,14 @@ fn uinput_live_gamepad_toggle() {
                 filter: ControllerFilter::default(),
                 path: Path::new("/dev/hidraw-test"),
                 grab_touchpad: false,
+                outputs_paused: Some(&outputs_paused),
             },
             &mut bridge,
             None,
         )
         .unwrap();
+        assert!(selection == Some(ControllerFilter::default()));
+        assert!(outputs_paused.get());
         observer.join().unwrap();
     });
 }
