@@ -637,17 +637,17 @@ pub(crate) mod tests {
             window: glib::WeakRef::new(),
             overlay: glib::WeakRef::new(),
         };
-        let controls = |axis: &str| {
-            let page = sensitivity::gyro_page(&ctx);
-            let row = descendants::<adw::ActionRow>(&page)
+        let controls = |page: &gtk::Widget, axis: &str| {
+            let row = descendants::<adw::ActionRow>(page)
                 .into_iter()
                 .find(|row| row.title() == axis)
                 .unwrap();
             let entry = descendants::<gtk::Entry>(row.upcast_ref()).pop().unwrap();
             let scale = descendants::<gtk::Scale>(row.upcast_ref()).pop().unwrap();
-            (page, entry, scale)
+            (entry, scale)
         };
-        let (_page, entry, scale) = controls("Horizontal");
+        let page = sensitivity::gyro_page(&ctx);
+        let (entry, scale) = controls(&page, "Horizontal");
         assert_eq!(entry.text(), "42.125");
         assert_eq!(scale.adjustment().upper(), 20.0);
         assert_eq!(scale.value(), 20.0);
@@ -674,7 +674,8 @@ pub(crate) mod tests {
             ctx.document().unwrap()["gyro"]["sensitivity_x"].as_float(),
             Some(100.0)
         );
-        let (_page, entry, scale) = controls("Horizontal");
+        let page = sensitivity::gyro_page(&ctx);
+        let (entry, scale) = controls(&page, "Horizontal");
         assert_eq!(entry.text(), "100.1");
         assert!(entry.has_css_class("error"));
         scale.set_value(19.27);
@@ -685,13 +686,76 @@ pub(crate) mod tests {
         );
         assert!(ctx.editor.borrow().draft_error().is_none());
 
-        let (_page, entry, scale) = controls("Vertical");
-        entry.set_text("8.125");
-        assert_eq!(scale.value(), 8.125);
+        let (vertical_entry, vertical_scale) = controls(&page, "Vertical");
+        vertical_entry.set_text("8.125");
+        assert_eq!(vertical_scale.value(), 8.125);
         assert_eq!(
             ctx.document().unwrap()["gyro"]["sensitivity_y"].as_float(),
             Some(8.125)
         );
+
+        let window = gtk::Window::builder()
+            .default_width(560)
+            .default_height(640)
+            .child(&page)
+            .build();
+        window.present();
+        let main = glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while scale.width() <= 0 || vertical_scale.width() <= 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "sliders were not allocated"
+            );
+            while main.pending() {
+                main.iteration(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(scale.width(), vertical_scale.width());
+        assert_eq!(
+            scale.compute_bounds(&page).unwrap().x(),
+            vertical_scale.compute_bounds(&page).unwrap().x(),
+        );
+
+        let link_switch = |page: &gtk::Widget| {
+            descendants::<adw::SwitchRow>(page)
+                .into_iter()
+                .find(|row| row.title() == "Link horizontal and vertical")
+                .unwrap()
+        };
+        let toggle = link_switch(&page);
+        assert!(!toggle.is_active());
+        toggle.set_active(true);
+        assert_eq!(descendants::<gtk::Scale>(&page).len(), 1);
+        let assert_axes = |horizontal, vertical| {
+            let doc = ctx.document().unwrap();
+            assert_eq!(doc["gyro"]["sensitivity_x"].as_float(), Some(horizontal));
+            assert_eq!(doc["gyro"]["sensitivity_y"].as_float(), Some(vertical));
+        };
+        assert_axes(19.3, 19.3);
+        let (entry, scale) = controls(&page, "Both axes");
+        scale.set_value(7.26);
+        assert_axes(7.3, 7.3);
+        entry.set_text("31,25");
+        assert_axes(31.25, 31.25);
+        assert_eq!(scale.value(), 20.0);
+        entry.set_text("invalid");
+        assert!(!toggle.is_sensitive());
+        assert!(ctx.editor.borrow().draft_error().is_some());
+
+        let reopened = sensitivity::gyro_page(&ctx);
+        let toggle = link_switch(&reopened);
+        assert!(toggle.is_active());
+        let (entry, _) = controls(&reopened, "Both axes");
+        assert_eq!(entry.text(), "invalid");
+        entry.set_text("31.25");
+        toggle.set_active(false);
+        assert_eq!(descendants::<gtk::Scale>(&reopened).len(), 2);
+        let (entry, _) = controls(&reopened, "Vertical");
+        entry.set_text("9.5");
+        assert_axes(31.25, 9.5);
+        window.close();
     }
 
     #[test]

@@ -579,6 +579,8 @@ active through full travel when enabled.
 The gyro editor offers 0–20 sliders for fine adjustment and text fields
 for the full 0–100 profile range. Opening a profile or typing a value
 above 20 keeps the recorded sensitivity and caps only the slider position.
+Linking uses the horizontal value as the starting point and edits both
+TOML values together. The link switch is part of the editor session.
 
 The status reply includes a display filename and, when known, the
 active profile's absolute path as encoded bytes. RWC uses the exact path

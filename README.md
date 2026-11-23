@@ -657,11 +657,11 @@ systemctl --user daemon-reload
 
 Open **JoyShockRust** from the application menu or run
 `systemctl --user start joyshockrust-tray.service`. The tray starts the
-bridge and shows the connection icon, decoded report rate in Hz, and
-battery icon on one row. The row includes the charge percentage while
-discharging. Open the submenu named after the active controller to choose
-a connected controller with an HID ID or select **Automatic**.
-Open the submenu named after the active profile to load a different
+bridge and shows the connection icon and decoded report rate in Hz.
+On Bluetooth, the same row shows the battery icon and the percentage
+while discharging. Under **Active controller**, open the submenu to
+choose a connected controller with an HID ID or select **Automatic**.
+Under **Active profile**, open the submenu to load a different
 profile from `$config_dir/joyshockrust/profiles/` or choose **Default
 mappings** to unload it. **Quit JoyShockRust** stops the bridge and closes
 the tray.
@@ -712,8 +712,12 @@ leave the release radius empty to use the bridge default. Select
 **Update Mapping** to validate the settings and return to the profile,
 then **Save & Apply** to load them into the running bridge.
 
-The **Gyro** page has separate horizontal and vertical sensitivity
-controls. The sliders cover 0–20 counts per degree in increments of 0.1.
+The **Gyro** page has matching horizontal and vertical sensitivity
+sliders. Enable **Link horizontal and vertical** to use one slider and
+one numeric field for both axes. Linking copies the horizontal value to
+the vertical axis. Turning the link off lets you adjust them separately
+again. Saving stores both axis values in the profile. The sliders cover
+0–20 counts per degree in increments of 0.1.
 Type any value from 0 to 100 in the fields, using a decimal point or comma.
 For values above 20, the field shows the actual sensitivity and the slider
 rests at its upper limit. Edit RWC

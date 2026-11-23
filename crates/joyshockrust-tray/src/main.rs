@@ -68,7 +68,7 @@ struct Status {
     controller: String,
     connection_icon: &'static str,
     rate: String,
-    battery: String,
+    battery: Option<String>,
     active_node: Option<String>,
     profile: String,
     active_profile: Option<PathBuf>,
@@ -97,7 +97,8 @@ impl Status {
             Some("dualsense_edge") => "DualSense Edge",
             _ => "Controller",
         };
-        let connection_icon = match field("transport").filter(|_| connected) {
+        let transport = field("transport").filter(|_| connected);
+        let connection_icon = match transport {
             Some("usb") => "drive-harddisk-usb-symbolic",
             Some("bluetooth") => "bluetooth-symbolic",
             _ => "",
@@ -113,21 +114,23 @@ impl Status {
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|value| value.is_finite() && *value >= 0.0)
             .map_or_else(|| "—".into(), |rate| format!("{rate:.1} Hz"));
-        let battery = match field("battery_state").filter(|_| connected) {
-            Some("discharging") => field("battery_percent")
-                .and_then(|value| value.parse::<u8>().ok())
-                .filter(|&value| value <= 100)
-                .map_or_else(
-                    || "🔋".into(),
-                    |value| {
-                        let icon = if value <= 10 { "🪫" } else { "🔋" };
-                        format!("{icon} {value}%")
-                    },
-                ),
-            Some("charging") => "🔋⚡".into(),
-            Some("full") => "🔋".into(),
-            Some("not_charging") => "🔋⏸".into(),
-            _ => "—".into(),
+        let battery = match field("battery_state").filter(|_| transport == Some("bluetooth")) {
+            Some("discharging") => Some(
+                field("battery_percent")
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .filter(|&value| value <= 100)
+                    .map_or_else(
+                        || "🔋".into(),
+                        |value| {
+                            let icon = if value <= 10 { "🪫" } else { "🔋" };
+                            format!("{icon} {value}%")
+                        },
+                    ),
+            ),
+            Some("charging") => Some("🔋⚡".into()),
+            Some("full") => Some("🔋".into()),
+            Some("not_charging") => Some("🔋⏸".into()),
+            _ => None,
         };
         let fallback_profile = match field("profile_source") {
             Some("loaded") => "Loaded profile",
@@ -235,7 +238,10 @@ impl ksni::Tray for Tray {
         let mut menu = if let Some(status) = &state.status {
             vec![
                 StandardItem {
-                    label: format!("{} · {}", status.rate, status.battery),
+                    label: status.battery.as_ref().map_or_else(
+                        || status.rate.clone(),
+                        |battery| format!("{} · {battery}", status.rate),
+                    ),
                     icon_name: status.connection_icon.into(),
                     enabled: false,
                     ..Default::default()
@@ -285,6 +291,7 @@ impl ksni::Tray for Tray {
                 Action::Select(controller.clone()),
             ));
         }
+        menu.push(label("Active controller"));
         menu.push(
             SubMenu {
                 label: state
@@ -312,10 +319,11 @@ impl ksni::Tray for Tray {
                 profiles.push(item(format!("{prefix}{name}"), Action::Load(path.clone())));
             }
         }
+        menu.push(label("Active profile"));
         menu.push(
             SubMenu {
                 label: status
-                    .map_or("Profiles", |status| &status.profile)
+                    .map_or("No active profile", |status| &status.profile)
                     .replace('_', "__"),
                 enabled: state.status.is_some(),
                 submenu: profiles,
@@ -685,7 +693,7 @@ mod tests {
         assert_eq!(status.controller, "DualSense Edge");
         assert_eq!(status.connection_icon, "bluetooth-symbolic");
         assert_eq!(status.rate, "249.4 Hz");
-        assert_eq!(status.battery, "🔋 95%");
+        assert_eq!(status.battery.as_deref(), Some("🔋 95%"));
         assert_eq!(status.active_node.as_deref(), Some("/dev/hidraw6"));
         assert_eq!(status.profile, "Loaded profile");
         assert_eq!(
@@ -697,8 +705,9 @@ mod tests {
         assert_eq!(
             Status::parse(&connected.replace("discharging", "charging"))
                 .unwrap()
-                .battery,
-            "🔋⚡"
+                .battery
+                .as_deref(),
+            Some("🔋⚡")
         );
         assert_eq!(
             Status::parse(&format!(
@@ -713,7 +722,7 @@ mod tests {
         assert_eq!(waiting.connection_icon, "");
         assert_eq!(waiting.active_node, None);
         assert_eq!(waiting.rate, "—");
-        assert_eq!(waiting.battery, "—");
+        assert_eq!(waiting.battery, None);
         assert!(Status::parse(&connected.replace("version=1", "version=2")).is_none());
     }
 
@@ -789,10 +798,17 @@ mod tests {
         };
         let menu = tray.menu();
         assert!(matches!(&menu[0], MenuItem::Standard(row)
-            if row.label == "1000.0 Hz · 🔋" && row.icon_name == "drive-harddisk-usb-symbolic"));
-        for name in ["DualSense Edge", "gyro profile.toml"] {
-            let option = menu.iter().find_map(|entry| match entry {
-                MenuItem::SubMenu(menu) if menu.label == name => menu.submenu.last(),
+            if row.label == "1000.0 Hz" && row.icon_name == "drive-harddisk-usb-symbolic"));
+        for (heading, name) in [
+            ("Active controller", "DualSense Edge"),
+            ("Active profile", "gyro profile.toml"),
+        ] {
+            let option = menu.windows(2).find_map(|entries| match entries {
+                [MenuItem::Standard(label), MenuItem::SubMenu(menu)]
+                    if label.label == heading && !label.enabled && menu.label == name =>
+                {
+                    menu.submenu.last()
+                }
                 _ => None,
             });
             let Some(MenuItem::Standard(option)) = option else {

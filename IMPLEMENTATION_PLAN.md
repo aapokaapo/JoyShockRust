@@ -264,8 +264,9 @@ bindings in an inspector. Advanced TOML covers the full profile schema.
 The Sticks and Gyro pages expose stepped sensitivity controls, typed gyro values, radial
 response previews and editable game calibration values. The GTK 4 editor
 uses libadwaita navigation and follows the system appearance. The tray
-summarizes controller telemetry on one row and uses the active names as
-the controller and profile submenu titles. The editor has a separate
+summarizes controller telemetry on one row, omits USB battery status,
+and labels the active controller and profile submenus. The Gyro page
+supports separate or linked sensitivity adjustment. The editor has a separate
 picker for opening and creating profile drafts.
 
 The Touchpad page edits grid dimensions and per-cell gamepad, keyboard

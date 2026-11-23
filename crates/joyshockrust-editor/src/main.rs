@@ -71,6 +71,7 @@ struct Editor {
     name: String,
     selected: &'static str,
     calibration: sensitivity::CalibrationDraft,
+    link_gyro_sensitivity: bool,
     invalid_gyro_sensitivity: [Option<String>; 2],
 }
 
@@ -88,6 +89,7 @@ impl Editor {
             name: String::new(),
             selected: "cross",
             calibration: sensitivity::CalibrationDraft::default(),
+            link_gyro_sensitivity: false,
             invalid_gyro_sensitivity: [None, None],
         })
     }

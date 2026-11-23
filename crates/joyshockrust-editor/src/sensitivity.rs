@@ -1,4 +1,7 @@
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use adw::{gtk, prelude::*};
 
@@ -77,19 +80,7 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
         return ui::advanced_required("Edit this gyro configuration in Advanced TOML.");
     };
     let page = adw::PreferencesPage::new();
-    let response = adw::PreferencesGroup::builder()
-        .title("Gyro sensitivity")
-        .description("Counts per degree. Slide from 0 to 20 or enter a value from 0 to 100.")
-        .build();
-    for (axis, (key, label)) in GYRO_FIELDS
-        .into_iter()
-        .zip(["Horizontal", "Vertical"])
-        .enumerate()
-    {
-        let initial = gyro.map_or(4.0, |table| number(table, key, 4.0));
-        response.add(&gyro_sensitivity_row(ctx, axis, label, initial));
-    }
-    page.add(&response);
+    page.add(&gyro_sensitivity_group(ctx, gyro));
     page.add(&calibration_shortcut(ctx, gyro));
 
     let calibration = adw::PreferencesGroup::builder()
@@ -184,6 +175,81 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     page.upcast()
 }
 
+fn gyro_values(gyro: Option<&dyn TableLike>) -> [f64; 2] {
+    GYRO_FIELDS.map(|key| gyro.map_or(4.0, |table| number(table, key, 4.0)))
+}
+
+fn gyro_sensitivity_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("Gyro sensitivity")
+        .description("Counts per degree. Slide from 0 to 20 or enter a value from 0 to 100.")
+        .build();
+    let [horizontal, vertical] = gyro_values(gyro);
+    let mut editor = ctx.editor.borrow_mut();
+    editor.link_gyro_sensitivity &= horizontal == vertical;
+    let toggle = adw::SwitchRow::builder()
+        .title("Link horizontal and vertical")
+        .subtitle("Uses the horizontal value for both axes.")
+        .active(editor.link_gyro_sensitivity)
+        .sensitive(editor.invalid_gyro_sensitivity.iter().all(Option::is_none))
+        .build();
+    drop(editor);
+    group.add(&toggle);
+
+    let rows = Rc::new(RefCell::new(Vec::new()));
+    update_gyro_rows(
+        ctx,
+        &group,
+        &toggle,
+        &mut rows.borrow_mut(),
+        [horizontal, vertical],
+    );
+    let group_ref = group.downgrade();
+    let ctx = ctx.clone();
+    toggle.connect_active_notify(move |toggle| {
+        let Some(group) = group_ref.upgrade() else {
+            return;
+        };
+        let Ok(doc) = ctx.document() else { return };
+        let mut values = gyro_values(doc.get("gyro").and_then(Item::as_table_like));
+        if toggle.is_active() && values[0] != values[1] {
+            values[1] = values[0];
+            if !ctx.edit(|doc| set_gyro_numbers(doc, [(GYRO_FIELDS[1], values[0])])) {
+                toggle.set_active(false);
+                return;
+            }
+        }
+        ctx.editor.borrow_mut().link_gyro_sensitivity = toggle.is_active();
+        update_gyro_rows(&ctx, &group, toggle, &mut rows.borrow_mut(), values);
+    });
+    group
+}
+
+fn update_gyro_rows(
+    ctx: &Context,
+    group: &adw::PreferencesGroup,
+    toggle: &adw::SwitchRow,
+    rows: &mut Vec<adw::ActionRow>,
+    [horizontal, vertical]: [f64; 2],
+) {
+    for row in rows.drain(..) {
+        group.remove(&row);
+    }
+    let fields: &[(&[usize], &str, f64)] = if toggle.is_active() {
+        &[(&[0, 1], "Both axes", horizontal)]
+    } else {
+        &[
+            (&[0], "Horizontal", horizontal),
+            (&[1], "Vertical", vertical),
+        ]
+    };
+    for &(axes, label, value) in fields {
+        let row = gyro_sensitivity_row(ctx, toggle, axes, label, value);
+        group.add(&row);
+        rows.push(row);
+    }
+}
+
 fn parse_gyro_sensitivity(text: &str) -> Option<f64> {
     text.trim()
         .replace(',', ".")
@@ -192,7 +258,13 @@ fn parse_gyro_sensitivity(text: &str) -> Option<f64> {
         .filter(|value| (0.0..=GYRO_TEXT_MAX).contains(value))
 }
 
-fn gyro_sensitivity_row(ctx: &Context, axis: usize, label: &str, initial: f64) -> adw::ActionRow {
+fn gyro_sensitivity_row(
+    ctx: &Context,
+    toggle: &adw::SwitchRow,
+    axes: &'static [usize],
+    label: &str,
+    initial: f64,
+) -> adw::ActionRow {
     let scale = gtk::Scale::builder()
         .adjustment(&gtk::Adjustment::new(
             initial.clamp(0.0, GYRO_SLIDER_MAX),
@@ -206,7 +278,7 @@ fn gyro_sensitivity_row(ctx: &Context, axis: usize, label: &str, initial: f64) -
         .hexpand(true)
         .valign(gtk::Align::Center)
         .build();
-    scale.set_size_request(92, -1);
+    scale.set_size_request(132, -1);
     let axis_name = format!("{label} sensitivity");
     scale.update_property(&[gtk::accessible::Property::Label(&axis_name)]);
 
@@ -220,7 +292,7 @@ fn gyro_sensitivity_row(ctx: &Context, axis: usize, label: &str, initial: f64) -
         gtk::accessible::Property::Label(&axis_name),
         gtk::accessible::Property::Description("Accepts values from 0 to 100."),
     ]);
-    let invalid = ctx.editor.borrow().invalid_gyro_sensitivity[axis].clone();
+    let invalid = ctx.editor.borrow().invalid_gyro_sensitivity[axes[0]].clone();
     if let Some(text) = &invalid {
         entry.set_text(text);
     } else {
@@ -228,6 +300,8 @@ fn gyro_sensitivity_row(ctx: &Context, axis: usize, label: &str, initial: f64) -
     }
 
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    // The suffix stays at its natural width regardless of the row title length.
+    controls.set_hexpand(false);
     controls.append(&scale);
     controls.append(&entry);
     let row = adw::ActionRow::builder().title(label).build();
@@ -253,16 +327,26 @@ fn gyro_sensitivity_row(ctx: &Context, axis: usize, label: &str, initial: f64) -
     let ctx = ctx.clone();
     let updating_row = row.downgrade();
     let scale = scale.downgrade();
+    let toggle = toggle.downgrade();
     entry.connect_changed(move |entry| {
         let text = entry.text();
         let value = parse_gyro_sensitivity(&text);
-        ctx.editor.borrow_mut().invalid_gyro_sensitivity[axis] =
-            value.is_none().then(|| text.into());
+        let mut editor = ctx.editor.borrow_mut();
+        for &axis in axes {
+            editor.invalid_gyro_sensitivity[axis] = value.is_none().then(|| text.to_string());
+        }
+        let valid = editor.invalid_gyro_sensitivity.iter().all(Option::is_none);
+        drop(editor);
+        if let Some(toggle) = toggle.upgrade() {
+            toggle.set_sensitive(valid);
+        }
         if let Some(row) = updating_row.upgrade() {
             set_gyro_sensitivity_error(&row, entry, value.is_none());
         }
         if let Some(value) = value {
-            ctx.edit(|doc| set_gyro_numbers(doc, [(GYRO_FIELDS[axis], value)]));
+            ctx.edit(|doc| {
+                set_gyro_numbers(doc, axes.iter().map(|&axis| (GYRO_FIELDS[axis], value)))
+            });
             if let Some(scale) = scale.upgrade() {
                 syncing.set(true);
                 scale.set_value(value.min(GYRO_SLIDER_MAX));

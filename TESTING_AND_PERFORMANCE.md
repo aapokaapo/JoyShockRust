@@ -844,11 +844,11 @@ Install the tray and bridge using the [desktop tray instructions](README.md#desk
 Run JoyShockRust from the applications menu in a Wayland session with a
 StatusNotifierItem host. Verify the menu with no controller connected,
 then connect a supported controller over USB and Bluetooth. Check the
-connection icon, decoded report rate and battery indicator appear on
-one row and match `joyshockrust-linux --status`. Open the controller
-submenu and check its title updates after selection. Load another profile
-from the submenu titled with the active profile name and check that the
-title updates while the selected controller stays active.
+connection icon and decoded report rate match `joyshockrust-linux
+--status` and that the battery indicator only appears over Bluetooth.
+Under **Active controller**, open the submenu and check its title updates
+after selection. Under **Active profile**, load another profile and check
+that its name updates while the selected controller stays active.
 
 Click **Profile editor** and check it opens the active profile. Choose a
 different file in the editor's dropdown and check that the tray still
@@ -880,7 +880,11 @@ still switches stages with its default setting.
 In **Sticks**, move each response slider one step and verify its own
 preview updates. Save and check the two per-stick values in
 **Advanced**. In **Gyro**, move X and Y separately and check each slider
-stops at 20. Type a value above 20 with a decimal comma and verify it
+stops at 20. Check that both tracks have the same length and alignment.
+Enable **Link horizontal and vertical** and verify that the shared
+slider and entry update both axes. Disable the link and verify that
+changes to one axis leave the other at its last shared value.
+Type a value above 20 with a decimal comma and verify it
 survives saving and reopening. Confirm that invalid text prevents saving.
 Enter RWC and in-game sensitivity and verify they also round-trip.
 
