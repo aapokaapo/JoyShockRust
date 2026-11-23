@@ -291,7 +291,8 @@ mod tests {
         let stick = Stick { x: 0.08, y: -0.8 };
         let physical = marker(stick, 0.0);
         assert!((physical.0 - f64::from(stick.x)).abs() < 1e-9);
-        assert_eq!(marker(stick, 4.0_f64.to_radians()), physical);
+        let transition = marker(stick, 4.0_f64.to_radians());
+        assert!((0.0..physical.0).contains(&transition.0));
         let snapped = marker(stick, 8.0_f64.to_radians());
         assert_eq!(snapped.0, 0.0);
         assert!((snapped.1 + physical.0.hypot(physical.1)).abs() < 1e-9);

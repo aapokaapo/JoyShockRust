@@ -276,7 +276,7 @@ fn flick_threshold_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pr
     });
     let row = setting_row(
         "Axial threshold",
-        "Snap to the nearest cardinal direction within this angle in degrees. 0 disables snapping.",
+        "Snap to a cardinal direction within this angle and blend smoothly outside it. 0 disables snapping.",
         value,
         0.0,
         MAX_FLICK_AXIAL_THRESHOLD_DEG,

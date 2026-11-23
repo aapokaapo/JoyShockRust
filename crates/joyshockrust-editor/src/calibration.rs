@@ -7,10 +7,7 @@ use std::{
 };
 
 use adw::{gio, glib, gtk, prelude::*};
-use joyshockrust_motion::{
-    aim_response::{DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, validate_flick_axial_threshold},
-    game_calibration::calculate,
-};
+use joyshockrust_motion::game_calibration::calculate;
 
 use crate::calibration_navigation::{self, Control};
 
@@ -49,12 +46,6 @@ impl GameProfiles {
         value
             .as_float()
             .or_else(|| value.as_integer().map(|number| number as f64))
-    }
-
-    fn axial_threshold(&self) -> f64 {
-        self.gyro_number("flick_axial_threshold_deg")
-            .and_then(|degrees| validate_flick_axial_threshold(degrees).ok())
-            .unwrap_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
     }
 
     fn choices(&self, previous: Option<&Path>) -> Vec<PathBuf> {
@@ -363,21 +354,15 @@ impl Calibration {
                 window.close();
             }
         });
-        let mut args = vec![
+        let args = [
             OsString::from("--calibrate-game"),
             "--measure-stick".into(),
             sensitivity.to_string().into(),
             self.node.as_os_str().to_owned(),
             std::process::id().to_string().into(),
+            // Also disable snapping with older bridge binaries.
+            "0".into(),
         ];
-        let threshold = self
-            .game
-            .as_ref()
-            .expect("game calibration")
-            .axial_threshold();
-        if threshold != DEFAULT_FLICK_AXIAL_THRESHOLD_DEG {
-            args.push(threshold.to_string().into());
-        }
         let session = self.clone();
         self.launch(
             &args,
@@ -834,7 +819,7 @@ case "$1:$2" in
         ;;
     --calibrate-game:--measure-stick)
         shift
-        [ "$2" = 2 ] && [ "$5" = 12 ] || exit 1
+        [ "$2" = 2 ] && [ "$5" = 0 ] || exit 1
         if [ "$3" = cancel ]; then exec sleep 60; fi
         printf 'ready\n'
         wait_for_gate "$3.ready"

@@ -11,9 +11,7 @@ use std::{
 use evdev::{EventType, InputEvent, RelativeAxisCode};
 
 use joyshockrust_core::{Button, Stick};
-use joyshockrust_motion::aim_response::{
-    DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, validate_flick_axial_threshold,
-};
+use joyshockrust_motion::aim_response::validate_flick_axial_threshold;
 
 use crate::{
     SessionEvent, discovery,
@@ -32,14 +30,14 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
         let sensitivity = parse_arg(args.next(), "invalid in-game sensitivity")?;
         let hidraw = args.next().ok_or("expected a controller node")?;
         let parent: i32 = parse_arg(args.next(), "invalid calibration window process ID")?;
-        let axial_threshold = args
-            .next()
-            .map(|arg| {
-                let value = parse_arg(Some(arg), "invalid Flick Stick axial threshold")?;
-                validate_flick_axial_threshold(value)
-            })
-            .transpose()?
-            .unwrap_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG);
+        // Older editors supplied the profile's threshold. Keep accepting the
+        // argument while measuring with the physical angle in all cases.
+        if let Some(arg) = args.next() {
+            validate_flick_axial_threshold(parse_arg(
+                Some(arg),
+                "invalid Flick Stick axial threshold",
+            )?)?;
+        }
         if args.next().is_some() || !positive(sensitivity) || parent <= 1 {
             return Err(
                 "expected sensitivity, controller node and calibration window process ID".into(),
@@ -51,15 +49,10 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
             return Err("calibration window has closed".into());
         }
         let mut stdout = io::stdout().lock();
-        let counts = measure_with_stick(
-            sensitivity,
-            Some(Path::new(&hidraw)),
-            axial_threshold,
-            |progress| {
-                writeln!(stdout, "{}", progress.token())?;
-                stdout.flush()
-            },
-        )?;
+        let counts = measure_with_stick(sensitivity, Some(Path::new(&hidraw)), |progress| {
+            writeln!(stdout, "{}", progress.token())?;
+            stdout.flush()
+        })?;
         writeln!(stdout, "counts {counts}")?;
         return Ok(());
     }
@@ -134,10 +127,7 @@ fn save_measurement(
 
 fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let path = path.canonicalize()?;
-    let axial_threshold = profile::load(&path)?
-        .gyro
-        .unwrap_or_default()
-        .flick_axial_threshold();
+    profile::load(&path)?;
     let input = io::stdin();
     if !input.is_terminal() {
         return Err("stick calibration requires an interactive terminal".into());
@@ -148,7 +138,7 @@ fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dy
         |text| text.parse::<f64>().ok().filter(|&value| positive(value)),
     )?;
 
-    let counts = measure_with_stick(in_game_sens, hidraw, axial_threshold, |progress| {
+    let counts = measure_with_stick(in_game_sens, hidraw, |progress| {
         match progress {
             Progress::Ready => {
                 eprintln!(
@@ -201,7 +191,6 @@ impl Progress {
 fn measure_with_stick(
     in_game_sens: f64,
     hidraw: Option<&Path>,
-    axial_threshold: f64,
     mut progress: impl FnMut(Progress) -> io::Result<()>,
 ) -> Result<i32, Box<dyn Error>> {
     let config = crate::controller_config::ControllerConfig::load();
@@ -215,7 +204,7 @@ fn measure_with_stick(
     };
     let mut output = gyro_mouse::open_output("JoyShockRust Game Calibration Mouse")?;
     let haptics = Haptics::open(&controller, identity.transport);
-    let mut sweep = StickSweep::new((40.0 / in_game_sens).clamp(0.25, 10_000.0), axial_threshold);
+    let mut sweep = StickSweep::new((40.0 / in_game_sens).clamp(0.25, 10_000.0));
     let mut measured_counts = None;
     progress(Progress::Ready)?;
 
@@ -326,9 +315,9 @@ enum Confirmation {
 }
 
 impl StickSweep {
-    fn new(scale: f64, axial_threshold: f64) -> Self {
+    fn new(scale: f64) -> Self {
         Self {
-            flick: FlickStick::new(scale).with_axial_threshold(axial_threshold),
+            flick: FlickStick::new(scale).with_axial_threshold(0.0),
             measuring: false,
             options_pressed: true,
             counts: 0,
@@ -417,7 +406,7 @@ mod tests {
         let down = Stick { x: 0.0, y: 1.0 };
         let left = Stick { x: -1.0, y: 0.0 };
         let center = Stick::default();
-        let mut sweep = StickSweep::new(20.0, DEFAULT_FLICK_AXIAL_THRESHOLD_DEG);
+        let mut sweep = StickSweep::new(20.0);
         let mut ticks = 0;
         let mut advance = |stick, options| {
             ticks += 30_000;
@@ -440,6 +429,18 @@ mod tests {
         assert_eq!(delta, 0);
         assert_eq!(confirmation, Confirmation::Finished(14_400));
         assert_eq!(calculate(14_400, 2.0, 2.0).unwrap(), 40.0);
+    }
+
+    #[test]
+    fn measurement_can_make_fine_adjustments_next_to_forward() {
+        let mut sweep = StickSweep::new(20.0);
+        let center = Stick::default();
+        sweep.advance(center, 0, false);
+        assert_eq!(sweep.advance(center, 30_000, true).1, Confirmation::Started);
+        sweep.advance(Stick { x: 0.0, y: -1.0 }, 60_000, false);
+        let (x, forward) = 2.0_f32.to_radians().sin_cos();
+        let (counts, _, _) = sweep.advance(Stick { x, y: -forward }, 90_000, false);
+        assert!((39..=40).contains(&counts));
     }
 
     #[test]

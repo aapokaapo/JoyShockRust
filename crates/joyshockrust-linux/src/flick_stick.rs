@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(flick.advance(near_forward(0.1), 30_000), 0);
         assert_eq!(flick.advance(near_forward(-0.1), 60_000), 0);
         let turn = flick.advance(near_forward(0.3), 90_000);
-        assert!((16..=17).contains(&turn));
+        assert!((4..=5).contains(&turn));
         assert_eq!(flick.advance(near_forward(-0.1), 120_000), -turn);
         assert_eq!(flick.advance(Stick::default(), 150_000), 0);
     }

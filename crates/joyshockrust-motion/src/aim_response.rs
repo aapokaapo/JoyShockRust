@@ -1,20 +1,33 @@
 //! Optional response shaping applied after calibrated motion integration.
 
-pub const DEFAULT_FLICK_AXIAL_THRESHOLD_DEG: f64 = 8.0;
+pub const DEFAULT_FLICK_AXIAL_THRESHOLD_DEG: f64 = 4.0;
 pub const MAX_FLICK_AXIAL_THRESHOLD_DEG: f64 = 30.0;
 pub const MAX_GYRO_RATE_DPS: f64 = 2_000.0;
 pub const MAX_GYRO_ACCEL_MULTIPLIER: f64 = 10.0;
 
 /// Angle in radians, clockwise from forward in the stick's device coordinates.
 pub fn flick_stick_angle(x: f64, y: f64, axial_threshold_radians: f64) -> f64 {
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+
     let angle = x.atan2(-y);
-    let quarter_turn = std::f64::consts::FRAC_PI_2;
-    let cardinal = (angle / quarter_turn).round() * quarter_turn;
-    if (angle - cardinal).abs() <= axial_threshold_radians {
-        cardinal
-    } else {
-        angle
+    if axial_threshold_radians <= 0.0 {
+        return angle;
     }
+    let cardinal = (angle / FRAC_PI_2).round() * FRAC_PI_2;
+    let offset = angle - cardinal;
+    let distance = offset.abs();
+    if distance <= axial_threshold_radians {
+        return cardinal;
+    }
+
+    let end = (axial_threshold_radians * 3.0).min(FRAC_PI_4);
+    if distance >= end {
+        return angle;
+    }
+    // Smoothstep starts with zero slope at the snap boundary and rejoins
+    // the original angle with unit slope at the end of the transition.
+    let t = (distance - axial_threshold_radians) / (end - axial_threshold_radians);
+    cardinal + offset * t * t * (3.0 - 2.0 * t)
 }
 
 pub fn validate_flick_axial_threshold(degrees: f64) -> Result<f64, &'static str> {
@@ -98,6 +111,28 @@ impl GyroResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flick_threshold_has_a_continuous_monotonic_transition() {
+        let aim = |angle: f64, threshold: f64| {
+            let (x, forward) = angle.to_radians().sin_cos();
+            flick_stick_angle(x, -forward, threshold.to_radians()).to_degrees()
+        };
+        for threshold in [4.0, 12.0, 30.0] {
+            assert_eq!(aim(threshold - 0.001, threshold), 0.0);
+            assert!(aim(threshold + 0.001, threshold).abs() < 0.001);
+            let mut previous = 0.0;
+            for step in 0..=450 {
+                let angle = f64::from(step) / 10.0;
+                let output = aim(angle, threshold);
+                assert!(output >= previous && output <= angle + 1e-10);
+                previous = output;
+            }
+            assert!((aim(45.0, threshold) - 45.0).abs() < 1e-10);
+            assert!((aim(45.001, threshold) - aim(44.999, threshold)).abs() < 0.003);
+        }
+        assert!((aim(-3.0, 0.0) + 3.0).abs() < 1e-10);
+    }
 
     #[test]
     fn gyro_threshold_and_acceleration_follow_pitch_yaw_speed() {

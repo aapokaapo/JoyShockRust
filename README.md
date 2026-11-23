@@ -730,8 +730,9 @@ speeds for acceleration, in degrees per second. The acceleration
 multiplier ramps up between those speeds and caps at the selected value.
 A minimum speed of 0 and a multiplier of 1 preserve linear aim.
 Under **Flick Stick**, **Axial threshold** snaps the stick to the nearest
-cardinal direction inside the chosen angle. The default is 8°. The
-preview shows the shaded threshold sectors and compares the active
+cardinal direction inside the chosen angle and blends back to the
+physical stick angle outside it. The default is 4° for profiles without
+an explicit setting. The preview shows the shaded threshold sectors and compares the active
 controller's physical right-stick position with the position after
 snapping. The preview uses the draft threshold as you edit it.
 
@@ -740,8 +741,9 @@ disk. **Save & Apply** writes the profile and loads it into the running
 bridge. Use Ctrl+S to save or Ctrl+Shift+S to save and apply.
 
 Select **Calibrate game sensitivity (RWC)** while a controller is connected. The tray pauses virtual outputs and opens the Wayland
-calibration window. Enter the game's mouse sensitivity and select **Start
-Measurement**. Wait for **Ready**, then focus the game, aim at a landmark
+calibration window. During measurement, the right stick uses its physical
+angle with full resolution near the cardinal directions. Enter the game's
+mouse sensitivity and select **Start Measurement**. Wait for **Ready**, then focus the game, aim at a landmark
 and press Options with the right stick centered. The window shows when
 measurement starts and whether the stick needs to be centered or more
 movement is needed. Sweep the stick around its edge until the camera has
