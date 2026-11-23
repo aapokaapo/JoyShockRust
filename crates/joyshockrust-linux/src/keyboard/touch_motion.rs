@@ -115,6 +115,10 @@ pub(super) struct PointerSettings {
     sensitivity_x: Option<f64>,
     sensitivity_y: Option<f64>,
     #[serde(default)]
+    invert_x: bool,
+    #[serde(default)]
+    invert_y: bool,
+    #[serde(default)]
     motion_threshold: u16,
     #[serde(default)]
     tap_to_click: bool,
@@ -305,10 +309,14 @@ impl TapContacts {
 impl PointerState {
     pub(super) fn new(settings: PointerSettings) -> Self {
         let threshold = i64::from(settings.motion_threshold);
+        let [x, y] = settings.sensitivity();
         Self {
             tracker: Tracker::default(),
             remainder: [0.0; 2],
-            sensitivity: settings.sensitivity(),
+            sensitivity: [
+                if settings.invert_x { -x } else { x },
+                if settings.invert_y { -y } else { y },
+            ],
             motion_threshold_squared: threshold * threshold,
             pending_displacement: (threshold != 0).then_some([0; 2]),
         }

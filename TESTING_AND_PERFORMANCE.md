@@ -799,6 +799,11 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     `tap_button = "BTN_MIDDLE"` and `two_finger_tap_button = "BTN_SIDE"`.
     Check that each tap produces one press and release of the selected
     mouse button in the virtual mouse event stream.
+30. Set `invert_x = true` in `[keyboard.touch_pointer]` and repeat the
+    same diagonal swipe. Check that only horizontal pointer motion
+    changes direction. Then set `invert_x = false` and `invert_y = true`
+    and check the vertical axis. Two-finger scrolling should keep its
+    configured direction.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

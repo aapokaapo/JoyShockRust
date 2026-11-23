@@ -2383,6 +2383,48 @@ mod tests {
     }
 
     #[test]
+    fn touch_pointer_inverts_axes_independently_and_preserves_fractional_motion() {
+        let x = RelativeAxisCode::REL_X.0;
+        let y = RelativeAxisCode::REL_Y.0;
+        for (invert_x, invert_y, x_sign, y_sign) in [(true, false, -1, 1), (false, true, 1, -1)] {
+            let config = config(&format!(
+                "[keyboard.touch_pointer]\nsensitivity_x = 0.5\nsensitivity_y = 1.5\n\
+                 invert_x = {invert_x}\ninvert_y = {invert_y}\n"
+            ));
+            let mut state = State::new(&config);
+            let now = Instant::now();
+            for (coordinate, expected) in [
+                (100, &[][..]),
+                (101, &[(y, y_sign)][..]),
+                (102, &[(x, x_sign), (y, 2 * y_sign)][..]),
+            ] {
+                let input = Input {
+                    contacts: [
+                        Some(TouchContact {
+                            id: 1,
+                            x: coordinate,
+                            y: coordinate,
+                        }),
+                        None,
+                    ],
+                    ..Input::default()
+                };
+                let mut observed = Vec::with_capacity(2);
+                state
+                    .update(input, now, |events| {
+                        for event in events {
+                            assert_eq!(event.event_type(), EventType::RELATIVE);
+                            observed.push((event.code(), event.value()));
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                assert_eq!(observed, expected, "{invert_x} {invert_y} {coordinate}");
+            }
+        }
+    }
+
+    #[test]
     fn touch_pointer_start_threshold_resets_and_leaves_taps_and_scroll_independent() {
         let config = config(
             r#"

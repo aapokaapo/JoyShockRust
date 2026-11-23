@@ -316,6 +316,9 @@ axis_lock = true
 Use `[keyboard.touch_pointer]` to move the virtual pointer with one
 finger. The sensitivity on each axis defaults to 0.5 counts per touchpad
 unit. Allowed values are 0–100, and 0 disables movement on that axis.
+Set `invert_x = true` or `invert_y = true` to reverse the corresponding
+pointer axis. These settings affect pointer movement only and both
+default to `false`.
 Set `motion_threshold` to suppress small initial movements. The pointer
 begins moving when the finger exceeds that distance from its starting
 position. It uses the current report's motion and discards earlier

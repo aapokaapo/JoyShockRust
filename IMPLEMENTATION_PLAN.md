@@ -207,9 +207,9 @@ One- or two-finger touchpad swipes can emit wheel steps at independent axis
 distances. Profiles can reverse either axis independently of wheel steps
 from mapped buttons or lock each swipe to the axis selected at the
 first wheel step. Synthetic tests cover axis selection and reset.
-One-finger swipes can also drive relative pointer motion with separate axis
-sensitivity and an optional radial start threshold, yielding to
-two-finger scrolling.
+One-finger swipes can drive relative pointer motion with independent
+sensitivity and direction per axis and an optional radial start
+threshold. Two-finger scrolling takes over when a second finger lands.
 The pointer profile maps single- and two-finger taps to configurable
 mouse buttons, defaulting to left and right. Both use a configurable duration and
 radial travel limit. Synthetic tests cover staggered contacts,
