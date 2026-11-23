@@ -482,7 +482,7 @@ the following gamepad buttons (Xbox A, B, X and Y).
    Cross. Slide to the right half while holding the click. Square should
    remain held while the touch binding changes to Circle. Release the
    click, then click on the right to check Triangle (Y).
-4. Repeat on Bluetooth with `transport = "auto"` in the startup profile.
+4. Repeat on Bluetooth with `transport = "auto"` in `controller.toml`.
    Disconnect while a target is held and reconnect with the touchpad
    clear. The virtual gamepad should return with the targets released.
 
@@ -510,7 +510,7 @@ several seconds apart. Expect the decoded count to increase and a positive
 rate once there is at least one second of observation. Check that the
 decoded count continues increasing after a valid profile reload.
 Disconnect and check that the values reset. Repeat over Bluetooth with
-`transport = "auto"` in the startup profile. Record the model, transport,
+`transport = "auto"` in `controller.toml`. Record the model, transport,
 kernel and both status snapshots for each connection.
 
 The rate estimates how many HID reports the host decodes per second after
@@ -532,6 +532,13 @@ gyro and Flick Stick output share the mouse counter. Both counters reset
 on disconnect and persist across a profile reload. They count normal
 report output during the session.
 
+With a keyboard and mouse profile, record `uinput_keyboard_batches` and
+`uinput_mouse_button_batches`. Tap a single keyboard binding and wait
+for its release. Expect two more keyboard batches. Repeat with a mouse
+button binding and check the mouse-button counter independently of the
+gyro mouse counter. Reload the profile and confirm the counters retain
+their values, then disconnect and check that both reset.
+
 ## Rapid reconnect acceptance
 
 Start the bridge in auto-discovery mode and record its process ID.
@@ -551,9 +558,9 @@ while connected and match while waiting. Reload the profile during a
 connection and check that both counts stay the same. A service restart
 starts a fresh count.
 
-With both DualSense models connected, set `[bridge].model` to
+With both DualSense models connected, set `model` in `controller.toml` to
 `"dualsense"`. Run `joyshockrust-linux --diagnose --profile PATH` and
-check that the Edge is listed as `excluded by profile`. Restart the
+check that the Edge is listed as `excluded by controller filter`. Restart the
 service and check that `--status` shows
 `model=dualsense`. Disconnect the standard DualSense and check that the
 service waits while the Edge remains connected. Reconnect the selected
@@ -562,10 +569,9 @@ model, then repeat with `model = "dualsense-edge"`. With
 
 For two controllers of the same model, use
 `--diagnose --auto-transport --show-controller-id` to obtain their IDs.
-Set `[bridge].controller_id` for one of them. Verify that profile-aware
-diagnostics exclude the other one. Start the service, confirm the intended
-controller produces input, then repeat over Bluetooth using the same
-profile. Record which selection matched on each transport. The optional
+Pass `--controller-id ID` to diagnostics and verify it excludes the other
+controller. Use `--select-controller ID` with the running service, confirm
+that the intended controller produces input, then repeat over Bluetooth. Record which selection matched on each transport. The optional
 diagnostic ID is the controller's hardware address. Omit it from shared
 test logs.
 
@@ -577,28 +583,32 @@ resume. The descriptor-based recovery is covered synthetically.
 
 ## Live controller selection acceptance
 
-Use the discovery-mode user service and record its PID. Start with a
-profile that selects your first controller by model or ID. Change only
-the selection in `[bridge]` to the second controller and run
-`systemctl --user reload joyshockrust.service`. Verify the old virtual
-gamepad disappears, the process PID stays the same and the new gamepad
-responds only to the newly selected controller. Start with the second
+Use the discovery-mode user service and record its PID. Use
+`--select-controller ID` to select the second controller. Include
+`--controller-model MODEL` and a transport flag if needed. Verify the
+old virtual gamepad disappears, the process PID stays the same, and
+the new controller uses the same bindings. Start with the second
 controller disconnected to verify the service waits for it.
 
-Repeat by loading a preset with `--load-profile PATH`. A preset that
-omits `[bridge]` should preserve the current selection. Test a
-mapping-only reload while connected and verify the virtual gamepad stays
-present. Use `--status` to inspect the active model and session counters.
-Check `selected_transport`, `selected_model` and
-`controller_id_configured` immediately after each successful reload,
-including while the service waits for the newly selected controller.
-
-With a model and transport filter that includes both controllers, use
-`--select-controller ID` to switch between them. Verify that bindings
-stay the same and that only one virtual gamepad is active. Use
+While connected, load a preset that changes a binding and specifies
+legacy controller fields. Confirm the new binding applies and the
+current virtual gamepad remains connected. Repeat with
+`--reload-profile` and while waiting for the selected controller.
+Use `--status` to verify that the selection fields and session counters
+stay the same through both kinds of profile updates. Use
 `--select-controller any` to clear the pin and check that
-`controller_id_configured=false`. Reload the startup profile to restore
-its selection.
+`controller_id_configured=false`.
+
+On a fresh user configuration without a startup profile, start the user
+service. Confirm `--select-controller` works before loading a profile.
+Then load a preset and check that the selected controller stays active.
+
+To verify automatic startup selection, select a controller with both
+connected and restart the service. Confirm it chooses the same controller.
+Stop the service, disconnect that controller, and start again. Confirm
+that the other controller is selected and becomes the saved preference.
+Stop and disconnect both, then start again. Check `controller=waiting`
+and connect a controller to verify activation without a service restart.
 
 ## Keyboard and mouse profile acceptance
 

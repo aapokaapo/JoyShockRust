@@ -18,6 +18,7 @@ use nix::{
 };
 
 use super::{
+    controller_config::ControllerConfig,
     hidraw::{self, ControllerId, Identity},
     reload::{self, Reload},
     status::StatusSocket,
@@ -32,7 +33,7 @@ pub fn transport_name(transport: Transport) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Selection {
     #[default]
@@ -42,6 +43,23 @@ pub enum Selection {
 }
 
 impl Selection {
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "usb" => Ok(Self::Usb),
+            "bluetooth" => Ok(Self::Bluetooth),
+            "auto" => Ok(Self::Auto),
+            _ => Err("expected usb, bluetooth or auto"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Usb => "usb",
+            Self::Bluetooth => "bluetooth",
+            Self::Auto => "auto",
+        }
+    }
+
     fn accepts(self, transport: Transport) -> bool {
         matches!(
             (self, transport),
@@ -51,7 +69,7 @@ impl Selection {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelSelection {
     #[default]
@@ -60,6 +78,25 @@ pub enum ModelSelection {
     DualSense,
     #[serde(rename = "dualsense-edge")]
     DualSenseEdge,
+}
+
+impl ModelSelection {
+    pub fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "any" => Ok(Self::Any),
+            "dualsense" => Ok(Self::DualSense),
+            "dualsense-edge" => Ok(Self::DualSenseEdge),
+            _ => Err("expected any, dualsense or dualsense-edge"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::DualSense => "dualsense",
+            Self::DualSenseEdge => "dualsense-edge",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -117,15 +154,18 @@ pub fn open_controller(path: &Path, filter: ControllerFilter) -> io::Result<(Fil
     if filter.controller_id.is_some() && !filter.accepts_id(hidraw::controller_id(&input)?) {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            "controller HID ID is absent or differs from the profile",
+            "controller HID ID is absent or differs from the selection",
         ));
     }
     Ok((input, identity))
 }
 
-pub fn open_first_controller(filter: ControllerFilter) -> io::Result<(File, Identity)> {
-    find_controller(filter, &mut HashSet::new())?
-        .map(|(candidate, input)| (input, candidate.identity))
+pub fn open_first_controller(
+    filter: ControllerFilter,
+    preferred: Option<ControllerId>,
+) -> io::Result<(File, Identity)> {
+    find_controller(filter, preferred, &mut HashSet::new())?
+        .map(|(candidate, opened)| (opened.file, candidate.identity))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("connect a {filter}")))
 }
 
@@ -136,6 +176,7 @@ pub enum Event<'a> {
 
 pub fn run(
     mut filter: ControllerFilter,
+    mut config: ControllerConfig,
     reload: Option<&Reload>,
     status: Option<&StatusSocket>,
     mut handle: impl FnMut(Event<'_>) -> io::Result<Option<ControllerFilter>>,
@@ -153,25 +194,32 @@ pub fn run(
         if let Some(status) = status {
             status.set_filter(filter);
         }
-        if let Some((candidate, mut input)) = find_controller(filter, &mut disconnected)? {
+        if let Some((candidate, opened)) =
+            find_controller(filter, config.preferred(), &mut disconnected)?
+        {
+            let OpenController { mut file, id } = opened;
             let Candidate {
                 path,
                 syspath,
                 identity,
             } = candidate;
             waiting = false;
+            if let Some(id) = id {
+                config.remember(id);
+            }
             eprintln!(
                 "Connected: {} ({}) {}",
                 path.display(),
                 transport_name(identity.transport),
                 identity.model_name()
             );
-            match handle(Event::Connected(&mut input, identity, filter)) {
+            match handle(Event::Connected(&mut file, identity, filter)) {
                 Ok(Some(next)) => {
+                    config.change_filters(filter, next);
                     filter = next;
                     continue;
                 }
-                result => finish_session(input.as_fd(), result.map(|_| ()))?,
+                result => finish_session(file.as_fd(), result.map(|_| ()))?,
             }
             eprintln!(
                 "Disconnected: {} ({}) {}",
@@ -198,6 +246,7 @@ pub fn run(
                     && let Some(next) = handle(Event::Reload(request, filter))?
                     && next != filter
                 {
+                    config.change_filters(filter, next);
                     filter = next;
                     waiting = false;
                 }
@@ -243,13 +292,20 @@ pub struct Candidate {
     pub identity: Identity,
 }
 
+struct OpenController {
+    file: File,
+    id: Option<ControllerId>,
+}
+
 fn find_controller(
     filter: ControllerFilter,
+    preferred: Option<ControllerId>,
     disconnected: &mut HashSet<PathBuf>,
-) -> io::Result<Option<(Candidate, File)>> {
+) -> io::Result<Option<(Candidate, OpenController)>> {
     Ok(first_available(
         controller_nodes(filter)?,
         disconnected,
+        preferred.filter(|_| filter.controller_id.is_none()),
         |candidate| {
             let (file, actual) = open_controller(&candidate.path, filter)?;
             let node =
@@ -260,15 +316,21 @@ fn find_controller(
                     "HID node identity changed since discovery",
                 ));
             }
-            Ok(file)
+            let id = filter
+                .controller_id
+                .or_else(|| hidraw::controller_id(&file).ok().flatten());
+            Ok(OpenController { file, id })
         },
+        |opened| opened.id,
     ))
 }
 
 fn first_available<T>(
     mut nodes: Vec<Candidate>,
     disconnected: &mut HashSet<PathBuf>,
+    preferred: Option<ControllerId>,
     mut open: impl FnMut(&Candidate) -> io::Result<T>,
+    identity: impl Fn(&T) -> Option<ControllerId>,
 ) -> Option<(Candidate, T)> {
     disconnected.retain(|syspath| nodes.iter().any(|node| &node.syspath == syspath));
     nodes.sort_by_key(|candidate| {
@@ -278,17 +340,25 @@ fn first_available<T>(
             identity.model != DeviceModel::DualSenseEdge,
         )
     });
+    let mut fallback = None;
     for candidate in nodes {
         if disconnected.contains(&candidate.syspath) {
             continue;
         }
         match open(&candidate) {
-            Ok(input) => return Some((candidate, input)),
+            Ok(input) if preferred.is_none() || identity(&input) == preferred => {
+                return Some((candidate, input));
+            }
+            Ok(input) => {
+                if fallback.is_none() {
+                    fallback = Some((candidate, input));
+                }
+            }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => eprintln!("Could not use {}: {err}", candidate.path.display()),
         }
     }
-    None
+    fallback
 }
 
 pub fn controller_nodes(filter: ControllerFilter) -> io::Result<Vec<Candidate>> {
@@ -342,6 +412,14 @@ mod tests {
     use std::{io::Write, os::unix::net::UnixStream};
 
     use super::*;
+
+    fn first_without_preference<T>(
+        nodes: Vec<Candidate>,
+        disconnected: &mut HashSet<PathBuf>,
+        open: impl FnMut(&Candidate) -> io::Result<T>,
+    ) -> Option<(Candidate, T)> {
+        first_available(nodes, disconnected, None, open, |_| None)
+    }
 
     #[test]
     fn failed_session_recovers_only_after_a_physical_disconnect() {
@@ -438,19 +516,56 @@ mod tests {
         let candidates = [bluetooth.clone(), usb.clone(), edge_usb.clone()];
         let mut disconnected = HashSet::new();
 
-        let selected = first_available(candidates.to_vec(), &mut disconnected, |_| Ok(()));
+        let selected = first_without_preference(candidates.to_vec(), &mut disconnected, |_| Ok(()));
         assert_eq!(selected, Some((edge_usb.clone(), ())));
         disconnected.insert(edge_usb.syspath);
-        let next = first_available(candidates.to_vec(), &mut disconnected, |_| Ok(()));
+        let next = first_without_preference(candidates.to_vec(), &mut disconnected, |_| Ok(()));
         assert_eq!(next, Some((usb, ())));
         disconnected.clear();
-        let fallback = first_available(candidates.to_vec(), &mut disconnected, |candidate| {
-            if candidate.identity.transport == Transport::Usb {
-                return Err(io::ErrorKind::PermissionDenied.into());
-            }
-            Ok(())
-        });
+        let fallback =
+            first_without_preference(candidates.to_vec(), &mut disconnected, |candidate| {
+                if candidate.identity.transport == Transport::Usb {
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+                Ok(())
+            });
         assert_eq!(fallback, Some((bluetooth, ())));
+    }
+
+    #[test]
+    fn remembered_controller_wins_then_falls_back_or_waits() {
+        let wired = candidate(
+            "/dev/hidraw0",
+            "wired",
+            DeviceModel::DualSenseEdge,
+            Transport::Usb,
+        );
+        let wireless = candidate(
+            "/dev/hidraw1",
+            "wireless",
+            DeviceModel::DualSense,
+            Transport::Bluetooth,
+        );
+        let remembered = ControllerId::parse("00:11:22:33:44:55");
+        let mut disconnected = HashSet::new();
+        for (nodes, expected) in [
+            (
+                vec![wired.clone(), wireless.clone()],
+                Some(wireless.clone()),
+            ),
+            (vec![wired.clone()], Some(wired.clone())),
+            (Vec::new(), None),
+            (vec![wireless.clone()], Some(wireless.clone())),
+        ] {
+            let chosen = first_available(
+                nodes,
+                &mut disconnected,
+                remembered,
+                |node| Ok(if node == &wireless { remembered } else { None }),
+                |id| *id,
+            );
+            assert_eq!(chosen.map(|(node, _)| node), expected);
+        }
     }
 
     #[test]
@@ -463,7 +578,7 @@ mod tests {
             Transport::Bluetooth,
         );
         let mut disconnected = HashSet::from([old.syspath.clone()]);
-        let selected = first_available(vec![old.clone()], &mut disconnected, |_| {
+        let selected = first_without_preference(vec![old.clone()], &mut disconnected, |_| {
             panic!("stale node reopened")
         });
         assert_eq!(selected, None::<(Candidate, ())>);
@@ -474,7 +589,7 @@ mod tests {
             (DeviceModel::DualSense, Transport::Bluetooth),
         ] {
             let new = candidate(path, "new", model, transport);
-            let selected = first_available(
+            let selected = first_without_preference(
                 vec![old.clone(), new.clone()],
                 &mut disconnected,
                 |candidate| {
@@ -503,12 +618,13 @@ mod tests {
         let mut disconnected = HashSet::from([first.syspath.clone(), second.syspath.clone()]);
 
         for nodes in [vec![first.clone(), second.clone()], vec![second.clone()]] {
-            let selected =
-                first_available(nodes, &mut disconnected, |_| panic!("stale node reopened"));
+            let selected = first_without_preference(nodes, &mut disconnected, |_| {
+                panic!("stale node reopened")
+            });
             assert_eq!(selected, None::<(Candidate, ())>);
         }
         assert_eq!(disconnected, HashSet::from([second.syspath.clone()]));
-        let selected = first_available(
+        let selected = first_without_preference(
             vec![first.clone(), second],
             &mut disconnected,
             |candidate| {

@@ -13,10 +13,7 @@ use std::{
 
 use joyshockrust_input::{BatteryReading, BatteryState, DeviceModel, Transport};
 
-use crate::{
-    discovery::{ControllerFilter, ModelSelection, Selection},
-    hidraw::Identity,
-};
+use crate::{discovery::ControllerFilter, hidraw::Identity};
 
 pub struct StatusSocket {
     listener: UnixListener,
@@ -46,6 +43,8 @@ struct ReportStats {
     full_batches: u64,
     gamepad_batches: u64,
     mouse_batches: u64,
+    keyboard_batches: u64,
+    mouse_button_batches: u64,
     baseline: Option<(Instant, u64)>,
 }
 
@@ -120,6 +119,13 @@ impl StatusSocket {
         self.reports.set(reports);
     }
 
+    pub fn observe_mapping_outputs(&self, keyboard: bool, mouse_buttons: bool) {
+        let mut reports = self.reports.get();
+        reports.keyboard_batches += u64::from(keyboard);
+        reports.mouse_button_batches += u64::from(mouse_buttons);
+        self.reports.set(reports);
+    }
+
     pub fn respond(&self, last_reload: &str) -> io::Result<()> {
         let snapshot = self.snapshot.get();
         let controller = if snapshot.identity.is_some() {
@@ -159,18 +165,10 @@ impl StatusSocket {
         let rate = rate.as_deref().unwrap_or("none");
         let sessions = self.sessions.get();
         let filter = self.filter.get();
-        let selected_transport = match filter.transport {
-            Selection::Usb => "usb",
-            Selection::Bluetooth => "bluetooth",
-            Selection::Auto => "auto",
-        };
-        let selected_model = match filter.model {
-            ModelSelection::Any => "any",
-            ModelSelection::DualSense => "dualsense",
-            ModelSelection::DualSenseEdge => "dualsense-edge",
-        };
+        let selected_transport = filter.transport.as_str();
+        let selected_model = filter.model.as_str();
         let response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\n",
+            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\n",
             snapshot.gyro_configured,
             reports.decoded,
             reports.rejected,
@@ -179,7 +177,9 @@ impl StatusSocket {
             reports.mouse_batches,
             sessions.started,
             sessions.ended,
-            filter.controller_id.is_some()
+            filter.controller_id.is_some(),
+            reports.keyboard_batches,
+            reports.mouse_button_batches,
         );
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
@@ -289,10 +289,12 @@ mod tests {
                     // Query on the next wake, after the current batch is counted.
                     if client.is_none() {
                         status.observe_outputs(true, true);
+                        status.observe_mapping_outputs(true, true);
                         client = Some(UnixStream::connect_addr(&address)?);
                         feedback_sender.send(b"stop")?;
                     } else {
                         status.observe_outputs(true, false);
+                        status.observe_mapping_outputs(false, true);
                     }
                     Ok(std::ops::ControlFlow::Continue(()))
                 }
@@ -310,7 +312,7 @@ mod tests {
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         assert!(response.ends_with(
-            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\n"
+            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=1\nuinput_mouse_button_batches=2\n"
         ));
         let reports = status.reports.get();
         let (start, initial_count) = reports.baseline.unwrap();
@@ -325,6 +327,8 @@ mod tests {
         assert_eq!(reports.rejected, 1);
         assert_eq!(reports.gamepad_batches, 2);
         assert_eq!(reports.mouse_batches, 1);
+        assert_eq!(reports.keyboard_batches, 1);
+        assert_eq!(reports.mouse_button_batches, 2);
 
         status.update(None, true);
         status.update(Some(identity), true);
@@ -334,6 +338,8 @@ mod tests {
         assert_eq!(reports.baseline, None);
         assert_eq!(reports.gamepad_batches, 0);
         assert_eq!(reports.mouse_batches, 0);
+        assert_eq!(reports.keyboard_batches, 0);
+        assert_eq!(reports.mouse_button_batches, 0);
         assert_eq!(status.sessions.get().started, 2);
         assert_eq!(status.sessions.get().ended, 1);
     }
@@ -512,7 +518,7 @@ mod tests {
             assert_eq!(
                 response,
                 format!(
-                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\n"
+                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=0\nuinput_mouse_button_batches=0\n"
                 )
             );
         }

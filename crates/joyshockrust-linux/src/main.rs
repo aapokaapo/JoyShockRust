@@ -1,6 +1,8 @@
 #[cfg(target_os = "linux")]
 mod benchmark;
 #[cfg(target_os = "linux")]
+mod controller_config;
+#[cfg(target_os = "linux")]
 mod diagnostics;
 #[cfg(target_os = "linux")]
 mod discovery;
@@ -49,19 +51,20 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     use joyshockrust_core::Button;
 
     const USAGE: &str = concat!(
-        "usage: joyshockrust-linux --profile PATH [/dev/hidrawN]\n",
+        "usage: joyshockrust-linux [--profile PATH|--profile-if-present PATH] [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
-        "       joyshockrust-linux --diagnose [--profile PATH] [--show-controller-id] [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
+        "       joyshockrust-linux --diagnose [--profile PATH] [--show-controller-id] [CONTROLLER_OPTIONS] [/dev/hidrawN]\n",
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
-        "       joyshockrust-linux --select-controller ID|any [RELOAD_SOCKET]\n",
+        "       joyshockrust-linux --select-controller ID|any [--controller-model MODEL] [--usb|--bluetooth|--auto-transport] [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
         "       joyshockrust-linux --calibrate-game --profile PATH [/dev/hidrawN]\n",
         "       joyshockrust-linux --calibrate-game COUNTS IN_GAME_SENS [MEASURED_TURNS]\n",
         "       joyshockrust-linux --benchmark-reports COUNT [--benchmark-timeout SECONDS] [--profile PATH] [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
-        "bridge options: [--bluetooth|--auto-transport] [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
+        "bridge options: [--usb|--bluetooth|--auto-transport] [--controller-model any|dualsense|dualsense-edge] [--controller-id ID|any]\n",
+        "                [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -71,6 +74,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     #[derive(PartialEq)]
     enum ProfileMode {
         Run,
+        RunIfPresent,
         Check,
         Install,
     }
@@ -92,6 +96,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut gamepad_kind = None;
     let mut rumble_enabled = false;
     let mut transport = None;
+    let mut controller_model = None;
+    let mut controller_id = None;
     let mut stick_curve = None;
     let mut remaps = gamepad::ButtonRemaps::default();
     let mut args = env::args_os().skip(1).peekable();
@@ -208,7 +214,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             ));
         } else if matches!(
             arg.to_str(),
-            Some("--profile" | "--check-profile" | "--install-profile")
+            Some("--profile" | "--profile-if-present" | "--check-profile" | "--install-profile")
         ) {
             if profile_path.is_some() {
                 return Err("select only one profile".into());
@@ -217,18 +223,34 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let mode = match arg.to_str() {
                 Some("--check-profile") => ProfileMode::Check,
                 Some("--install-profile") => ProfileMode::Install,
+                Some("--profile-if-present") => ProfileMode::RunIfPresent,
                 _ => ProfileMode::Run,
             };
             profile_path = Some((PathBuf::from(file), mode));
-        } else if arg == "--bluetooth" || arg == "--auto-transport" {
+        } else if matches!(
+            arg.to_str(),
+            Some("--usb" | "--bluetooth" | "--auto-transport")
+        ) {
             if transport.is_some() {
                 return Err("select only one transport option".into());
             }
-            transport = Some(if arg == "--bluetooth" {
-                discovery::Selection::Bluetooth
-            } else {
-                discovery::Selection::Auto
+            transport = Some(match arg.to_str() {
+                Some("--usb") => discovery::Selection::Usb,
+                Some("--bluetooth") => discovery::Selection::Bluetooth,
+                _ => discovery::Selection::Auto,
             });
+        } else if arg == "--controller-model" && controller_model.is_none() {
+            let value = args.next().ok_or("expected a controller model")?;
+            controller_model = Some(discovery::ModelSelection::parse(
+                value.to_str().ok_or("invalid controller model")?,
+            )?);
+        } else if arg == "--controller-id" && controller_id.is_none() {
+            let value = args.next().ok_or("expected a controller HID ID or any")?;
+            controller_id = Some(reload::parse_controller_selection(
+                value
+                    .to_str()
+                    .ok_or("expected a controller HID ID or any")?,
+            )?);
         } else if arg == "--rumble" && !rumble_enabled {
             rumble_enabled = true;
         } else if arg == "--gamepad" && gamepad_kind.is_none() {
@@ -289,6 +311,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mapping_options = gyro_mouse || stick_curve.is_some() || !remaps.is_empty();
     let bridge_options =
         status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some() || rumble_enabled;
+    let selection_options =
+        transport.is_some() || controller_model.is_some() || controller_id.is_some();
     let socket_commands = u8::from(status_query)
         + u8::from(reload_query)
         + u8::from(load_profile_path.is_some())
@@ -304,7 +328,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             || socket_commands > 0
             || profile_path
                 .as_ref()
-                .is_some_and(|(_, mode)| *mode != ProfileMode::Run))
+                .is_some_and(|(_, mode)| matches!(mode, ProfileMode::Check | ProfileMode::Install)))
     {
         return Err("--benchmark-reports requires a controller bridge run".into());
     }
@@ -313,7 +337,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             || diagnose
             || profile_path.is_some()
             || bridge_options
-            || transport.is_some()
+            || controller_id.is_some()
+            || (controller_selection.is_none() && selection_options)
             || mapping_options
         {
             return Err("select one socket command and provide its required arguments".into());
@@ -324,7 +349,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let result = if let Some(source) = load_profile_path.as_deref() {
                 reload::load_profile(source, path.as_deref())
             } else if let Some(selection) = controller_selection {
-                reload::select_controller(selection, path.as_deref())
+                reload::select_controller(selection, controller_model, transport, path.as_deref())
             } else {
                 reload::request(path.as_deref())
             };
@@ -348,38 +373,47 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 .is_some_and(|(_, mode)| *mode != ProfileMode::Run)
         {
             return Err(
-                "--diagnose accepts an optional profile, transport option and hidraw path".into(),
+                "--diagnose accepts an optional profile, controller selection options and hidraw path".into(),
             );
         }
-        let mut filter = if let Some((profile_path, _)) = &profile_path {
-            match profile::load(profile_path) {
-                Ok(profile) => profile.bridge.unwrap_or_default().controller_filter(),
-                Err(err) => {
-                    eprintln!("{}: {err}", profile_path.display());
-                    return Ok(ExitCode::from(78));
-                }
-            }
-        } else {
-            discovery::ControllerFilter::default()
-        };
+        if let Some((path, _)) = &profile_path
+            && let Err(err) = profile::load(path)
+        {
+            eprintln!("{}: {err}", path.display());
+            return Ok(ExitCode::from(78));
+        }
+        let mut filter = controller_config::ControllerConfig::load().filter();
         if let Some(transport) = transport {
             filter.transport = transport;
+        }
+        if let Some(model) = controller_model {
+            filter.model = model;
+        }
+        if let Some(id) = controller_id {
+            filter.controller_id = id;
         }
         diagnostics::run(
             path.as_deref(),
             filter,
-            profile_path.is_some(),
             show_controller_id,
             std::io::stdout().lock(),
         )?;
         return Ok(ExitCode::SUCCESS);
     }
-    let (mut runtime, reload) = if let Some((profile_path, mode)) = profile_path {
+    let default_runtime = || profile::RuntimeOptions {
+        bridge: None,
+        gyro: gyro_mouse.then_some(options),
+        stick_curve,
+        remaps,
+        touchpad: None,
+        keyboard: None,
+    };
+    let (mut runtime, startup_profile) = if let Some((profile_path, mode)) = profile_path {
         if mapping_options {
             return Err("use either a TOML profile or command-line mapping options".into());
         }
         if mode == ProfileMode::Install {
-            if bridge_options || transport.is_some() {
+            if bridge_options || selection_options {
                 return Err("--install-profile takes a source and an optional destination".into());
             }
             let destination = match path {
@@ -390,11 +424,19 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             println!("Installed profile: {}", destination.display());
             return Ok(ExitCode::SUCCESS);
         }
-        if mode == ProfileMode::Check && (path.is_some() || bridge_options || transport.is_some()) {
+        if mode == ProfileMode::Check && (path.is_some() || bridge_options || selection_options) {
             return Err("--check-profile takes only a profile path".into());
         }
         let profile = match profile::load(&profile_path) {
             Ok(profile) => profile,
+            Err(err)
+                if mode == ProfileMode::RunIfPresent
+                    && err
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                default_runtime()
+            }
             Err(err) => {
                 eprintln!("{}: {err}", profile_path.display());
                 // EX_CONFIG tells the systemd unit to wait for a profile fix.
@@ -405,29 +447,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             println!("Valid profile: {}", profile_path.display());
             return Ok(ExitCode::SUCCESS);
         }
-        let reload = reload::Reload::new(
-            profile_path,
-            reload_path.as_deref(),
-            profile.bridge.unwrap_or_default(),
-            path.is_none() && benchmark_target.is_none(),
-            transport,
-        )?;
-        (profile, Some(reload))
+        (profile, Some(profile_path))
     } else {
-        if reload_path.is_some() {
-            return Err("--reload-socket requires --profile".into());
-        }
-        (
-            profile::RuntimeOptions {
-                bridge: None,
-                gyro: gyro_mouse.then_some(options),
-                stick_curve,
-                remaps,
-                touchpad: None,
-                keyboard: None,
-            },
-            None,
-        )
+        (default_runtime(), None)
     };
     let status = status_path
         .as_deref()
@@ -440,23 +462,39 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     if let Some(status) = status {
         status.update(None, runtime.gyro.is_some());
     }
-    let reload = reload.as_ref();
+    let mut controller_config = controller_config::ControllerConfig::load();
+    let controller_defaults = controller_config.filter();
+    let filter = discovery::ControllerFilter {
+        transport: transport.unwrap_or(controller_defaults.transport),
+        model: controller_model.unwrap_or(controller_defaults.model),
+        controller_id: controller_id.flatten(),
+    };
     let configured_bridge = runtime.bridge.unwrap_or_default();
     let bridge = profile::BridgeOptions {
-        transport: transport.unwrap_or(configured_bridge.transport),
         gamepad: gamepad_kind.unwrap_or(configured_bridge.gamepad),
         rumble: rumble_enabled || configured_bridge.rumble,
         ..configured_bridge
     };
+    let reload = if startup_profile.is_some() || reload_path.is_some() {
+        Some(reload::Reload::new(
+            startup_profile,
+            reload_path.as_deref(),
+            runtime.bridge.unwrap_or(bridge),
+            path.is_none() && benchmark_target.is_none(),
+        )?)
+    } else {
+        None
+    };
+    let reload = reload.as_ref();
     if let Some(status) = status {
-        status.set_filter(bridge.controller_filter());
+        status.set_filter(filter);
     }
     if let Some(target) = benchmark_target {
         let (mut input, identity) = if let Some(path) = path {
-            discovery::open_controller(&path, bridge.controller_filter())
+            discovery::open_controller(&path, filter)
                 .map_err(|err| format!("could not use {}: {err}", path.display()))?
         } else {
-            discovery::open_first_controller(bridge.controller_filter())?
+            discovery::open_first_controller(filter, controller_config.preferred())?
         };
         let mut measurement = benchmark::Benchmark::new(
             target,
@@ -468,7 +506,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             reload,
             status,
             identity,
-            bridge,
+            (bridge, filter),
             Some(&mut measurement),
         );
         measurement.write(identity, result.is_err(), std::io::stdout().lock())?;
@@ -482,53 +520,50 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             return Ok(ExitCode::FAILURE);
         }
     } else if let Some(path) = path {
-        let (mut input, identity) =
-            discovery::open_controller(&path, bridge.controller_filter())
-                .map_err(|err| format!("could not use {}: {err}", path.display()))?;
+        let (mut input, identity) = discovery::open_controller(&path, filter)
+            .map_err(|err| format!("could not use {}: {err}", path.display()))?;
+        if let Ok(Some(id)) = hidraw::controller_id(&input) {
+            controller_config.remember(id);
+        }
         serve_session(
             &mut input,
             &mut runtime,
             reload,
             status,
             identity,
-            bridge,
+            (bridge, filter),
             None,
         )?;
     } else {
         discovery::run(
-            bridge.controller_filter(),
+            filter,
+            controller_config,
             reload,
             status,
             |event| match event {
-                discovery::Event::Connected(input, identity, filter) => {
-                    let active_bridge = profile::BridgeOptions {
-                        transport: filter.transport,
-                        model: filter.model,
-                        controller_id: filter.controller_id,
-                        ..bridge
-                    };
-                    serve_session(
-                        input,
-                        &mut runtime,
-                        reload,
-                        status,
-                        identity,
-                        active_bridge,
-                        None,
-                    )
-                }
+                discovery::Event::Connected(input, identity, filter) => serve_session(
+                    input,
+                    &mut runtime,
+                    reload,
+                    status,
+                    identity,
+                    (bridge, filter),
+                    None,
+                ),
                 discovery::Event::Reload(reload, current_filter) => {
-                    if let Some(update) = reload.resolve(current_filter) {
-                        if let Some(next) = update.profile {
-                            runtime = next;
+                    let selection = match reload.resolve(current_filter) {
+                        Some(reload::Update::Profile(next)) => {
+                            runtime = *next;
                             if let Some(status) = status {
                                 status.update(None, runtime.gyro.is_some());
                             }
+                            None
                         }
-                        reload.applied();
-                        return Ok(Some(update.filter));
-                    }
-                    Ok(None)
+                        Some(reload::Update::Selection(selection)) => Some(selection),
+                        None => return Ok(None),
+                    };
+                    reload.applied();
+                    Ok(selection)
                 }
             },
         )?;
@@ -561,13 +596,13 @@ fn serve_session(
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
     identity: Identity,
-    bridge: profile::BridgeOptions,
+    (bridge, filter): (profile::BridgeOptions, discovery::ControllerFilter),
     mut measurement: Option<&mut benchmark::Benchmark>,
 ) -> std::io::Result<Option<discovery::ControllerFilter>> {
     use std::{cell::Cell, os::fd::AsFd, time::Instant};
 
     let mut mouse = open_mouse(input, identity.transport, runtime.gyro)?;
-    let mut keyboard = keyboard::Keyboard::open(runtime.keyboard.as_ref())?;
+    let mut keyboard = keyboard::Keyboard::open(runtime.keyboard.as_ref(), status)?;
     let keyboard_deadline = Cell::new(None);
     let reload_input = reload.map(|_| input.try_clone()).transpose()?;
     let mut rumble = if bridge.virtual_gamepad && bridge.rumble {
@@ -628,20 +663,23 @@ fn serve_session(
                     return Ok(ControlFlow::Continue(()));
                 }
                 SessionEvent::Reload(reload) => {
-                    let current_filter = bridge.controller_filter();
-                    let Some(update) = reload.resolve(current_filter) else {
-                        return Ok(ControlFlow::Continue(()));
-                    };
-                    if update.filter != current_filter {
-                        switch = Some((update, reload));
-                        return Ok(ControlFlow::Break(()));
-                    }
-                    let Some(next) = update.profile else {
-                        reload.applied();
-                        return Ok(ControlFlow::Continue(()));
+                    let current_filter = filter;
+                    let next = match reload.resolve(current_filter) {
+                        Some(reload::Update::Profile(next)) => next,
+                        Some(reload::Update::Selection(selection))
+                            if selection != current_filter =>
+                        {
+                            switch = Some((selection, reload));
+                            return Ok(ControlFlow::Break(()));
+                        }
+                        Some(reload::Update::Selection(_)) => {
+                            reload.applied();
+                            return Ok(ControlFlow::Continue(()));
+                        }
+                        None => return Ok(ControlFlow::Continue(())),
                     };
                     let replacement_keyboard = if runtime.keyboard != next.keyboard {
-                        match keyboard::Keyboard::open(next.keyboard.as_ref()) {
+                        match keyboard::Keyboard::open(next.keyboard.as_ref(), status) {
                             Ok(device) => Some(device),
                             Err(err) => {
                                 reload.rejected(&err);
@@ -686,7 +724,7 @@ fn serve_session(
                         keyboard = replacement;
                         keyboard_deadline.set(None);
                     }
-                    *runtime = next;
+                    *runtime = *next;
                     if let Some(status) = status {
                         status.update(Some(identity), runtime.gyro.is_some());
                     }
@@ -746,7 +784,7 @@ fn serve_session(
         Ok(())
     };
     let result = result.and(release_gamepad).and(release_keyboard);
-    if let Some((update, request)) = switch {
+    if let Some((selection, request)) = switch {
         if let Err(err) = &result {
             request.rejected(err);
         } else {
@@ -756,14 +794,11 @@ fn serve_session(
             drop(mouse);
             drop(keyboard);
             drop(rumble);
-            if let Some(next) = update.profile {
-                *runtime = next;
-            }
             if let Some(status) = status {
                 status.update(None, runtime.gyro.is_some());
             }
             request.applied();
-            return Ok(Some(update.filter));
+            return Ok(Some(selection));
         }
     }
     if let Some(status) = status {

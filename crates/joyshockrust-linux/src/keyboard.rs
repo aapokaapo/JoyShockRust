@@ -10,6 +10,7 @@ use joyshockrust_input::{InputReport, TouchContact};
 use serde::Deserialize;
 
 use crate::gyro_gate::{self, DOUBLE_TAP_WINDOW, HOLD_TIME, TriggerGate};
+use crate::status::StatusSocket;
 use crate::touchpad::{Grid, TouchRegion};
 
 mod stick;
@@ -549,21 +550,22 @@ fn sort_releases(events: &mut [InputEvent], outer_keys: &AttributeSet<KeyCode>) 
     });
 }
 
-pub struct Keyboard {
+pub struct Keyboard<'a> {
     state: State,
-    outputs: Outputs,
+    outputs: Outputs<'a>,
 }
 
-struct Outputs {
+struct Outputs<'a> {
     keyboard: Option<VirtualDevice>,
     mouse: Option<VirtualDevice>,
     keys: Vec<InputEvent>,
     buttons: Vec<InputEvent>,
+    status: Option<&'a StatusSocket>,
 }
 
-impl Outputs {
+impl Outputs<'_> {
     fn emit(&mut self, events: &[InputEvent]) -> io::Result<()> {
-        match (&mut self.keyboard, &mut self.mouse) {
+        let (keys_written, buttons_written) = match (&mut self.keyboard, &mut self.mouse) {
             (Some(keyboard), Some(mouse)) => {
                 self.keys.clear();
                 self.buttons.clear();
@@ -580,16 +582,30 @@ impl Outputs {
                 if !self.buttons.is_empty() {
                     mouse.emit(&self.buttons)?;
                 }
-                Ok(())
+                (!self.keys.is_empty(), !self.buttons.is_empty())
             }
-            (Some(device), None) | (None, Some(device)) => device.emit(events),
+            (Some(keyboard), None) => {
+                keyboard.emit(events)?;
+                (true, false)
+            }
+            (None, Some(mouse)) => {
+                mouse.emit(events)?;
+                (false, true)
+            }
             (None, None) => unreachable!("mapping has an output device"),
+        };
+        if let Some(status) = self.status {
+            status.observe_mapping_outputs(keys_written, buttons_written);
         }
+        Ok(())
     }
 }
 
-impl Keyboard {
-    pub fn open(config: Option<&Config>) -> io::Result<Option<Self>> {
+impl<'a> Keyboard<'a> {
+    pub fn open(
+        config: Option<&Config>,
+        status: Option<&'a StatusSocket>,
+    ) -> io::Result<Option<Self>> {
         let Some(config) =
             config.filter(|config| !config.buttons.is_empty() || !config.sticks.is_empty())
         else {
@@ -632,6 +648,7 @@ impl Keyboard {
                 mouse,
                 keys: Vec::with_capacity(key_count),
                 buttons: Vec::with_capacity(button_count),
+                status,
             },
         }))
     }

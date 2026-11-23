@@ -11,7 +11,7 @@ use std::{
 use serde::Deserialize;
 
 use crate::{
-    discovery::{ControllerFilter, ModelSelection, Selection},
+    discovery::{ModelSelection, Selection},
     game_calibration::GameCalibration,
     gamepad::{ButtonRemaps, OutputKind, StickCurve},
     gyro_gate::{self, Binding, DigitalInput, TriggerGate},
@@ -24,7 +24,7 @@ use crate::{
 #[serde(deny_unknown_fields)]
 struct Profile {
     version: u32,
-    bridge: Option<BridgeOptions>,
+    bridge: Option<BridgeFile>,
     stick_curve: Option<f32>,
     #[serde(default)]
     remap_buttons: Vec<String>,
@@ -65,12 +65,8 @@ enum GyroBinding {
     Trigger(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BridgeOptions {
-    pub transport: Selection,
-    pub model: ModelSelection,
-    pub controller_id: Option<ControllerId>,
     pub gamepad: OutputKind,
     pub rumble: bool,
     pub virtual_gamepad: bool,
@@ -79,9 +75,6 @@ pub struct BridgeOptions {
 impl Default for BridgeOptions {
     fn default() -> Self {
         Self {
-            transport: Selection::default(),
-            model: ModelSelection::default(),
-            controller_id: None,
             gamepad: OutputKind::default(),
             rumble: false,
             virtual_gamepad: true,
@@ -89,13 +82,31 @@ impl Default for BridgeOptions {
     }
 }
 
-impl BridgeOptions {
-    pub fn controller_filter(self) -> ControllerFilter {
-        ControllerFilter {
-            transport: self.transport,
-            model: self.model,
-            controller_id: self.controller_id,
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BridgeFile {
+    // Allow existing profiles to load while their controller settings move out of the profile.
+    #[serde(rename = "transport")]
+    _legacy_transport: Option<Selection>,
+    #[serde(rename = "model")]
+    _legacy_model: Option<ModelSelection>,
+    #[serde(rename = "controller_id")]
+    _legacy_controller_id: Option<ControllerId>,
+    gamepad: Option<OutputKind>,
+    rumble: Option<bool>,
+    virtual_gamepad: Option<bool>,
+}
+
+impl BridgeFile {
+    fn outputs(self) -> Option<BridgeOptions> {
+        if self.gamepad.is_none() && self.rumble.is_none() && self.virtual_gamepad.is_none() {
+            return None;
         }
+        Some(BridgeOptions {
+            gamepad: self.gamepad.unwrap_or_default(),
+            rumble: self.rumble.unwrap_or_default(),
+            virtual_gamepad: self.virtual_gamepad.unwrap_or(true),
+        })
     }
 }
 
@@ -184,7 +195,7 @@ fn render_game_calibration(
     Ok(rendered)
 }
 
-fn replace_file(destination: &Path, content: &[u8]) -> io::Result<()> {
+pub(crate) fn replace_file(destination: &Path, content: &[u8]) -> io::Result<()> {
     match fs::symlink_metadata(destination) {
         Ok(metadata) if !metadata.file_type().is_file() => {
             return Err(io::Error::new(
@@ -266,7 +277,7 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         .map(|keyboard| keyboard.resolve(touchpad.as_ref()))
         .transpose()?;
     Ok(RuntimeOptions {
-        bridge: profile.bridge,
+        bridge: profile.bridge.and_then(BridgeFile::outputs),
         stick_curve,
         remaps,
         gyro,
@@ -417,6 +428,7 @@ mod tests {
     #[test]
     fn bridge_profiles_preserve_defaults_and_configure_output() {
         assert_eq!(parse("version = 1").unwrap().bridge, None);
+        assert_eq!(parse("version = 1\n[bridge]\ntransport = 'bluetooth'\nmodel = 'dualsense-edge'\ncontroller_id = '00:11:22:33:44:55'").unwrap().bridge, None);
         let profile = parse(
             r#"
             version = 1
@@ -431,9 +443,6 @@ mod tests {
         assert_eq!(
             profile.bridge.unwrap(),
             BridgeOptions {
-                transport: Selection::Auto,
-                model: ModelSelection::DualSenseEdge,
-                controller_id: None,
                 gamepad: OutputKind::XboxSeries,
                 rumble: true,
                 virtual_gamepad: true,
@@ -458,16 +467,6 @@ mod tests {
             "unknown = true",
         ] {
             assert!(parse(&format!("version = 1\n[bridge]\n{setting}")).is_err());
-        }
-        for (setting, model) in [
-            ("any", ModelSelection::Any),
-            ("dualsense", ModelSelection::DualSense),
-        ] {
-            let bridge = parse(&format!("version = 1\n[bridge]\nmodel = \"{setting}\""))
-                .unwrap()
-                .bridge
-                .unwrap();
-            assert_eq!(bridge.model, model);
         }
     }
 

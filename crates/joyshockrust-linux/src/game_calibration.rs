@@ -105,7 +105,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
 
 fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dyn Error>> {
     let path = path.canonicalize()?;
-    let settings = profile::load(&path)?;
+    profile::load(&path)?;
     let input = io::stdin();
     if !input.is_terminal() {
         return Err("stick calibration requires an interactive terminal".into());
@@ -116,10 +116,11 @@ fn calibrate_with_stick(path: &Path, hidraw: Option<&Path>) -> Result<(), Box<dy
         |text| text.parse::<f64>().ok().filter(|&value| positive(value)),
     )?;
 
-    let filter = settings.bridge.unwrap_or_default().controller_filter();
+    let config = crate::controller_config::ControllerConfig::load();
+    let filter = config.filter();
     let (mut controller, identity) = match hidraw {
         Some(path) => discovery::open_controller(path, filter)?,
-        None => discovery::open_first_controller(filter)?,
+        None => discovery::open_first_controller(filter, config.preferred())?,
     };
     let mut output = gyro_mouse::open_output("JoyShockRust Game Calibration Mouse")?;
     let mut sweep = StickSweep::new((40.0 / in_game_sens).clamp(0.25, 10_000.0));

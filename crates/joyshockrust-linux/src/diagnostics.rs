@@ -17,37 +17,23 @@ const INVENTORY: ControllerFilter = ControllerFilter {
 pub fn run(
     path: Option<&Path>,
     filter: ControllerFilter,
-    show_profile_filter: bool,
     show_id: bool,
     mut output: impl Write,
 ) -> io::Result<()> {
-    if show_profile_filter {
-        writeln!(output, "Controller filter: {filter}")?;
-    }
-    let scan = if show_profile_filter {
-        INVENTORY
-    } else {
-        filter
-    };
+    writeln!(output, "Controller filter: {filter}")?;
     if let Some(path) = path {
-        check_controller(path, scan, filter, show_id, &mut output)?;
+        check_controller(path, INVENTORY, filter, show_id, &mut output)?;
     } else {
-        let nodes = discovery::controller_nodes(scan)?;
         let mut matched = false;
-        for node in nodes {
+        for node in discovery::controller_nodes(INVENTORY)? {
             if filter.accepts(node.identity) || show_id {
-                matched |= check_controller(&node.path, scan, filter, show_id, &mut output)?
-                    || !show_profile_filter;
+                matched |= check_controller(&node.path, INVENTORY, filter, show_id, &mut output)?;
             } else {
                 describe_controller(&node.path, node.identity, None, filter, false, &mut output)?;
             }
         }
         if !matched {
-            if show_profile_filter {
-                writeln!(output, "No readable controller matches the profile.")?;
-            } else {
-                writeln!(output, "No {filter} hidraw nodes found.")?;
-            }
+            writeln!(output, "No readable controller matches the filter.")?;
         }
     }
     // Opening the builder checks the same permissions as startup. The
@@ -107,7 +93,7 @@ fn describe_controller(
     let result = if matched {
         "readable"
     } else {
-        "excluded by profile"
+        "excluded by controller filter"
     };
     write!(
         output,
@@ -149,12 +135,12 @@ mod tests {
             (
                 DeviceModel::DualSenseEdge,
                 Transport::Usb,
-                "wired DualSense Edge, excluded by profile",
+                "wired DualSense Edge, excluded by controller filter",
             ),
             (
                 DeviceModel::DualSense,
                 Transport::Bluetooth,
-                "Bluetooth DualSense, excluded by profile",
+                "Bluetooth DualSense, excluded by controller filter",
             ),
         ] {
             let mut output = Vec::new();
@@ -175,18 +161,13 @@ mod tests {
     }
 
     #[test]
-    fn profile_can_distinguish_two_controllers_of_the_same_model_without_printing_their_ids() {
-        let filter_for = |id| {
-            crate::profile::parse(&format!(
-                "version = 1\n[bridge]\nmodel = 'dualsense-edge'\ncontroller_id = '{id}'"
-            ))
-            .unwrap()
-            .bridge
-            .unwrap()
-            .controller_filter()
+    fn filter_can_distinguish_two_controllers_of_the_same_model_without_printing_their_ids() {
+        let filter = ControllerFilter {
+            model: ModelSelection::DualSenseEdge,
+            controller_id: ControllerId::parse("00:11:22:33:44:aa"),
+            ..ControllerFilter::default()
         };
-        let filter = filter_for("00:11:22:33:44:aa");
-        let other_id = filter_for("00:11:22:33:44:bb").controller_id;
+        let other_id = ControllerId::parse("00:11:22:33:44:bb");
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
             transport: Transport::Usb,
@@ -212,7 +193,7 @@ mod tests {
             assert!(output.contains(if expected {
                 "readable"
             } else {
-                "excluded by profile"
+                "excluded by controller filter"
             }));
         }
         let mut output = Vec::new();

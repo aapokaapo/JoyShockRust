@@ -45,6 +45,12 @@ impl<'de> serde::Deserialize<'de> for ControllerId {
     }
 }
 
+impl serde::Serialize for ControllerId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
 impl fmt::Display for ControllerId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let [a, b, c, d, e, f] = self.0;

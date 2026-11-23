@@ -2,9 +2,10 @@
 
 use std::{
     fs,
+    os::unix::net::UnixDatagram,
     path::PathBuf,
-    process::{self, Command},
-    time::{SystemTime, UNIX_EPOCH},
+    process::{self, Child, Command},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 struct TestDirectory(PathBuf);
@@ -27,15 +28,25 @@ impl Drop for TestDirectory {
     }
 }
 
+struct Bridge(Child);
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 fn invalid_startup_profile_exits_with_config_status() {
-    let output = Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
-        .args(["--profile", "/dev/null"])
-        .output()
-        .expect("run bridge with an empty profile");
-
-    assert_eq!(output.status.code(), Some(78));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("missing field `version`"));
+    for flag in ["--profile", "--profile-if-present"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
+            .args([flag, "/dev/null"])
+            .output()
+            .expect("run bridge with an empty profile");
+        assert_eq!(output.status.code(), Some(78));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("missing field `version`"));
+    }
 }
 
 #[test]
@@ -43,7 +54,13 @@ fn diagnostics_loads_the_profile_and_allows_a_transport_override() {
     let profile =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml");
     let output = Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
-        .args(["--diagnose", "--bluetooth", "--profile"])
+        .args([
+            "--diagnose",
+            "--controller-model",
+            "any",
+            "--bluetooth",
+            "--profile",
+        ])
         .arg(profile)
         .arg("/dev/null")
         .output()
@@ -107,18 +124,15 @@ fn installing_a_profile_preserves_source_bytes_and_rejects_invalid_replacements(
 }
 
 #[test]
-fn status_reports_the_current_selection_after_live_reload_while_waiting() {
-    use std::{os::unix::net::UnixDatagram, process::Child, time::Duration};
-
-    struct Bridge(Child);
-    impl Drop for Bridge {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-
+fn live_profiles_and_controller_selection_change_independently_while_waiting() {
     let directory = TestDirectory::new("selection");
+    let controller_file = directory.0.join("joyshockrust/controller.toml");
+    fs::create_dir_all(controller_file.parent().unwrap()).unwrap();
+    fs::write(
+        &controller_file,
+        "transport = 'auto'\nmodel = 'dualsense-edge'\n",
+    )
+    .unwrap();
     let startup = directory.0.join("profile.toml");
     let preset = directory.0.join("preset.toml");
     let status = directory.0.join("status");
@@ -134,13 +148,14 @@ fn status_reports_the_current_selection_after_live_reload_while_waiting() {
             "version = 1\n[bridge]\ntransport = '{transport}'\nmodel = '{model}'\ncontroller_id = 'ff:ff:ff:ff:ff:ff'\n"
         )
     };
-    fs::write(&startup, settings("usb", "dualsense")).unwrap();
     let binary = env!("CARGO_BIN_EXE_joyshockrust-linux");
     let _bridge = Bridge(
         Command::new(binary)
             .env("NOTIFY_SOCKET", &notify)
-            .arg("--profile")
+            .env("XDG_CONFIG_HOME", &directory.0)
+            .arg("--profile-if-present")
             .arg(&startup)
+            .args(["--controller-id", "ff:ff:ff:ff:ff:ff"])
             .arg("--status-socket")
             .arg(&status)
             .arg("--reload-socket")
@@ -152,7 +167,7 @@ fn status_reports_the_current_selection_after_live_reload_while_waiting() {
     let len = listener.recv(&mut ready).expect("bridge readiness");
     assert_eq!(&ready[..len], b"READY=1");
 
-    let check = |transport, model| {
+    let check = |transport, model, gyro| {
         let output = Command::new(binary)
             .arg("--status")
             .arg(&status)
@@ -164,21 +179,23 @@ fn status_reports_the_current_selection_after_live_reload_while_waiting() {
             "controller=waiting".to_owned(),
             format!("selected_transport={transport}"),
             format!("selected_model={model}"),
+            format!("gyro_configured={gyro}"),
             "controller_id_configured=true".to_owned(),
         ] {
             assert!(stdout.lines().any(|entry| entry == line), "{stdout}");
         }
         assert!(!stdout.contains("ff:ff:ff:ff:ff:ff"), "{stdout}");
     };
-    check("usb", "dualsense");
-    fs::write(&startup, settings("auto", "dualsense-edge")).unwrap();
+    check("auto", "dualsense-edge", false);
+    let startup_contents = format!("{}[gyro]\n", settings("usb", "dualsense"));
+    fs::write(&startup, &startup_contents).unwrap();
     let result = Command::new(binary)
         .arg("--reload-profile")
         .arg(&reload)
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check("auto", "dualsense-edge");
+    check("auto", "dualsense-edge", true);
 
     fs::write(&preset, settings("bluetooth", "dualsense")).unwrap();
     let load = || {
@@ -191,20 +208,33 @@ fn status_reports_the_current_selection_after_live_reload_while_waiting() {
     };
     let result = load();
     assert!(result.status.success(), "{result:?}");
-    check("bluetooth", "dualsense");
-
-    fs::write(&preset, "version = 1\n[gyro]\n").unwrap();
-    let result = load();
-    assert!(result.status.success(), "{result:?}");
-    check("bluetooth", "dualsense");
+    check("auto", "dualsense-edge", false);
 
     let result = Command::new(binary)
-        .args(["--select-controller", "ff:ff:ff:ff:ff:fe"])
+        .args([
+            "--select-controller",
+            "ff:ff:ff:ff:ff:fe",
+            "--controller-model",
+            "dualsense",
+            "--bluetooth",
+        ])
         .arg(&reload)
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
-    check("bluetooth", "dualsense");
+    check("bluetooth", "dualsense", false);
+
+    // Reload a file with conflicting startup defaults after the live selection.
+    let result = Command::new(binary)
+        .arg("--reload-profile")
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    check("bluetooth", "dualsense", true);
+    let saved = fs::read_to_string(controller_file).unwrap();
+    assert!(saved.contains("transport = \"bluetooth\""), "{saved}");
+    assert!(saved.contains("model = \"dualsense\""), "{saved}");
     let output = Command::new(binary)
         .arg("--status")
         .arg(&status)
@@ -216,8 +246,82 @@ fn status_reports_the_current_selection_after_live_reload_while_waiting() {
         "{stdout}"
     );
     assert!(!stdout.contains("ff:ff:ff:ff:ff:fe"), "{stdout}");
-    assert_eq!(
-        fs::read_to_string(&startup).unwrap(),
-        settings("auto", "dualsense-edge")
+    assert_eq!(fs::read_to_string(&startup).unwrap(), startup_contents);
+}
+
+#[test]
+fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
+    let directory = TestDirectory::new("no-profile");
+    let preset = directory.0.join("preset");
+    let status = directory.0.join("status");
+    let reload = directory.0.join("reload");
+    let notify = directory.0.join("notify");
+    let listener = UnixDatagram::bind(&notify).unwrap();
+    listener
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let binary = env!("CARGO_BIN_EXE_joyshockrust-linux");
+    let _bridge = Bridge(
+        Command::new(binary)
+            .env("NOTIFY_SOCKET", &notify)
+            .env("XDG_CONFIG_HOME", &directory.0)
+            .args(["--controller-id", "ff:ff:ff:ff:ff:ff"])
+            .arg("--status-socket")
+            .arg(&status)
+            .arg("--reload-socket")
+            .arg(&reload)
+            .spawn()
+            .unwrap(),
     );
+    let mut ready = [0; 64];
+    let len = listener.recv(&mut ready).expect("bridge readiness");
+    assert_eq!(&ready[..len], b"READY=1");
+
+    let result = Command::new(binary)
+        .args([
+            "--select-controller",
+            "ff:ff:ff:ff:ff:fe",
+            "--controller-model",
+            "dualsense",
+            "--bluetooth",
+        ])
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    let check = |gyro, outcome| {
+        let output = Command::new(binary)
+            .arg("--status")
+            .arg(&status)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        for expected in [
+            "selected_model=dualsense".to_owned(),
+            "selected_transport=bluetooth".to_owned(),
+            format!("gyro_configured={gyro}"),
+            format!("last_reload={outcome}"),
+        ] {
+            assert!(stdout.lines().any(|line| line == expected), "{stdout}");
+        }
+    };
+    check(false, "unavailable");
+    fs::write(&preset, "version = 1\n[gyro]\n").unwrap();
+    let result = Command::new(binary)
+        .arg("--load-profile")
+        .arg(&preset)
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    check(true, "applied");
+    let result = Command::new(binary)
+        .arg("--reload-profile")
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(!result.status.success(), "{result:?}");
+    assert!(String::from_utf8_lossy(&result.stderr).contains("no startup profile configured"));
+    check(true, "applied");
 }

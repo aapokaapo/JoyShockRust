@@ -251,10 +251,11 @@ after interruptions, and timeout uses the normal virtual-output cleanup
 path. Ordinary bridge runs wait for readiness without a deadline.
 [Live benchmarks](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
 
-Updated 2026-11-22. Status counts successful synchronized uinput output
-batches separately for the gamepad and mouse. Each output reports
-whether it emitted a batch. The status counters update only when a batch
-is emitted and reset with the HID session.
+Updated 2026-11-23. Status counts successful synchronized uinput output
+batches separately for the gamepad, gyro mouse, keyboard and mouse
+button device. The keyboard and mouse button counts include deadline
+events and releases during profile reload. Counters reset with the HID
+session.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
 
 Updated 2026-11-22. The live benchmark samples `getrusage(RUSAGE_SELF)`
@@ -318,10 +319,13 @@ gate uses the physical HID report and the same grid geometry as gamepad
 bindings. Profile validation resolves the cell even when it has no
 gamepad binding. [Touch region gyro input](README.md#touch-region-as-a-gyro-input)
 
-Updated 2026-11-22. Automatic discovery applies profile controller
-selection changes in the running process. It ends the active output
-session before scanning for the new selection. Gamepad and rumble
-settings still apply at startup. CLI transport overrides survive reloads.
+Updated 2026-11-23. The independent controller configuration stores model,
+transport and the last identifiable controller. Discovery prefers the
+remembered device, falls back to its first usable candidate, and waits
+on udev when none is available. The saved ID is a preference. An explicit
+live ID filter can require a particular controller for the current run.
+Profiles control mappings and virtual outputs. Legacy controller fields
+in version 1 profiles are parsed for compatibility and ignored.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
 Updated 2026-11-22. Status version 1 includes the effective model and
@@ -330,10 +334,14 @@ The status payload omits the actual HID ID. Discovery updates the
 filter snapshot between sessions, before it serves the next query.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
-Updated 2026-11-22. The CLI can update the current HID ID filter without
-loading a profile. The command uses the existing local datagram socket
-and the same single-session handoff as a profile filter change. It
+Updated 2026-11-23. The CLI can update the current HID ID, model, and
+transport filters. Only a changed selection triggers the single-session
+handoff and closes the active outputs before discovery resumes. The command
 preserves the active profile and records no profile reload outcome.
+The control socket also accepts selections and inline presets when no
+startup profile path is configured. The systemd unit treats a missing
+startup file as default mappings and still reports an invalid file as a
+configuration error.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
 Updated 2026-11-22. Keyboard bindings consume physical button states

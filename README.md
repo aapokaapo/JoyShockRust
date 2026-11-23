@@ -131,63 +131,62 @@ With the user service running, load a preset into the current session.
 ```
 
 This replaces the live mappings and gyro settings as a complete profile.
-The service replies after applying or rejecting it. The profile can omit
-`[bridge]` to keep the current controller selection and output settings. The loaded preset remains active
+The service replies after applying or rejecting it. Loading a preset or
+reloading the startup profile keeps the current controller selection.
+The profile can omit `[bridge]` to retain the running output settings.
+The loaded preset remains active
 until another load, a reload of the startup profile or a service restart.
 Use `--install-profile` to persist a preset for the next start.
 
-A profile can also select the bridge's controller and output options. Add this table to
-the active service profile to use automatic transport selection, Xbox
-Series output and rumble.
+Use `[bridge]` for virtual output settings such as Xbox Series output
+and rumble.
 
 ```toml
 [bridge]
-transport = "auto"
 gamepad = "xbox-series"
 rumble = true
 ```
 
-The transport options are `usb`, `bluetooth` and `auto`. The gamepad options
-are `generic`, `xbox360` and `xbox-series`. Profiles without this table use
-USB, generic output and rumble off. Restart JoyShockRust to change
-`gamepad`, `virtual_gamepad` or `rumble`. With automatic discovery, reload the profile to
-change `transport`, `model` or `controller_id` in the same process.
-The bridge releases and closes the current virtual devices before
-opening the selected controller. If it is absent, the bridge waits for
-it. An explicit hidraw path and a one-shot benchmark keep their original
-selection. The transport and gamepad CLI flags override their profile values.
-`--rumble` enables rumble for the run.
+The gamepad options are `generic`, `xbox360` and `xbox-series`. Restart
+JoyShockRust to change `gamepad`, `virtual_gamepad` or `rumble`.
 
-Set `model = "dualsense"` or `model = "dualsense-edge"` in `[bridge]`
-to select a controller model. If the chosen model is absent, automatic
-discovery waits for it. The default `model = "any"` accepts either model.
-The model selection also applies to benchmarks and game calibration
-that use the profile.
+### Controller selection
 
-To select one individual controller, run
-`joyshockrust-linux --diagnose --auto-transport --show-controller-id`
-and copy that controller's reported ID into `[bridge]`.
+The controller settings file is
+`${XDG_CONFIG_HOME:-$HOME/.config}/joyshockrust/controller.toml`.
+Its optional `transport` and `model` fields default to `"auto"` and
+`"any"` so USB and Bluetooth DualSense and DualSense Edge are eligible.
+Values for `transport` are `"usb"`, `"bluetooth"` and `"auto"`.
+Values for `model` are `"dualsense"`, `"dualsense-edge"` and `"any"`.
+Move any legacy model or transport restriction you still want from the
+profile to this file. Old profile keys are accepted for compatibility
+and have no effect on discovery.
 
-```toml
-[bridge]
-transport = "auto"
-model = "dualsense-edge"
-controller_id = "00:11:22:33:44:55"
+The bridge saves the last selected controller's HID ID as
+`last_controller_id` when it can read the ID. At startup it prefers that
+controller if it is available, otherwise it uses the first usable
+controller in discovery order. Without a match it stays running, reports
+`controller=waiting`, and connects when an eligible controller appears.
+Only one controller is active at a time.
+
+Run `joyshockrust-linux --diagnose --auto-transport --controller-model any --show-controller-id`
+to find a controller's HID ID. Use `--select-controller ID` to select it
+in a running discovery service or use `any` to clear the live ID filter.
+Add a model or transport flag to change those filters in the same command.
+
+```sh
+joyshockrust-linux --select-controller any --controller-model dualsense-edge --auto-transport
 ```
 
-Use your controller's value in place of the example. The ID comes from
-Linux's HID driver. A configured ID requires an exact match, with case
-ignored in hexadecimal digits. If the ID is unavailable, choose a model
-filter without an ID. Use `systemctl --user reload joyshockrust.service`
-or `--load-profile PATH` to change the active selection in discovery mode.
-
-To change only the live ID filter, use `joyshockrust-linux
---select-controller ID` or pass `any` to clear the ID filter.
-This keeps the current transport, model, mappings and gyro settings.
-The new ID applies until another selection command, a profile load that
-sets the selection, or a process restart. `--reload-profile` restores
-the startup selection. An optional final argument selects the reload
-socket.
+The command retains the loaded profile. Changed model and transport
+filters are saved to the controller settings file. An explicit ID filter
+waits for that controller for the current run. The next process treats
+the last active ID as a preference and can fall back to another controller.
+Controller selection also works before a profile is loaded. For a manual
+run, start the bridge with `--reload-socket PATH` and pass that path as
+the final argument to `--select-controller` or `--load-profile`.
+To override the settings at startup for a single run, use `--usb`, `--bluetooth`,
+`--auto-transport`, `--controller-model MODEL` or `--controller-id ID`.
 
 ### Keyboard and mouse profiles
 
@@ -404,7 +403,7 @@ Use `--diagnose --profile PATH` to check a specific profile before
 starting or restarting the bridge. It prints the effective controller
 filter and labels supported controllers outside that filter as
 `excluded by profile`. An optional `--bluetooth` or
-`--auto-transport` overrides the profile's transport for this check.
+`--auto-transport` overrides the controller settings file's transport for this check.
 Add `--show-controller-id` when you need to see individual HID IDs.
 
 Use `--benchmark-reports COUNT` for a bounded live bridge benchmark. It
@@ -418,7 +417,8 @@ The summary also reports CPU time and the process's peak resident memory.
 
 Stop any manually running bridge before starting the service. Install the
 binary and the [user unit](dist/systemd/joyshockrust.service) from this
-checkout. The sample profile is copied only if the destination is absent.
+checkout. The sample profile is optional. The command below copies it
+only if the destination is absent.
 
 ```sh
 cargo install --locked --path crates/joyshockrust-linux --root "$HOME/.local"
@@ -433,7 +433,9 @@ systemctl --user start joyshockrust.service
 journalctl --user -u joyshockrust.service -f
 ```
 
-The service uses the user manager's configuration directory. Edit
+The service starts with default mappings when the startup profile is
+absent. Controller selection and `--load-profile` are available in that
+state. To set up a startup profile, create or edit
 `joyshockrust/profile.toml` there and run
 `systemctl --user reload joyshockrust.service` to load the changes. The
 command waits for the result and exits with an error if the bridge rejects
@@ -468,12 +470,15 @@ batch has supplied a valid report. The counters reset to zero on disconnect.
 The `report_full_batches` field counts batches that read all 32 report
 slots, including any parser rejections.
 `uinput_gamepad_batches` and `uinput_mouse_batches` count synchronized
-event batches successfully submitted by the bridge for this connection.
+event batches successfully submitted by the gamepad and gyro mouse.
+`uinput_keyboard_batches` and `uinput_mouse_button_batches` count batches
+from the keyboard and button mouse. Both include timer-driven events and
+releases sent on profile reload. All four counters reset on disconnect.
 `controller_sessions_started` and `controller_sessions_ended` count
 session transitions since the bridge process started.
-The `last_reload` field reports `not_attempted` on startup, then `applied`
-or `rejected` after the bridge handles a reload. A bridge started without a
-profile reports `unavailable`. To request the same reload directly, run
+The `last_reload` field reports `not_attempted` when a startup profile path
+is configured, or `unavailable` when no path has been set. It reports
+`applied` or `rejected` after a profile update. To reload the startup file directly, run
 `$HOME/.local/bin/joyshockrust-linux --reload-profile`.
 The status and reload sockets are under `$XDG_RUNTIME_DIR/joyshockrust/`
 and are removed when the service stops.
@@ -647,7 +652,7 @@ joyshockrust-linux --calibrate-game --profile /path/to/game.toml
    prints and saves `real_world_calibration` and `in_game_sens` in the
    profile's `[gyro]` table.
 
-The command uses the profile's transport. Append a `/dev/hidrawN` path
+The command uses the separate controller settings. Append a `/dev/hidrawN` path
 to select one controller explicitly. The calibration mouse runs only
 for the measurement. For a known number of counts and measured turns,
 the calculator form remains available.

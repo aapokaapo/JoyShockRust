@@ -91,9 +91,9 @@ physical clicks independent of the touch input.
 Opt-in rumble forwards uinput effects to the physical controller through
 evdev. The event loop serves feedback while controller input is idle.
 The user verified that forwarding survives reconnection over USB and
-Bluetooth. Version 1 profiles can set the transport, output identity and
-rumble for a user service. The user verified USB and Bluetooth pulse
-tests with the profile. Changes to those settings apply on restart.
+Bluetooth. Version 1 profiles can set the output identity and rumble for
+a user service. Controller transport is configured separately. The user
+verified USB and Bluetooth pulse tests. Output changes apply on restart.
 [Rumble forwarding acceptance](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance)
 
 Battery and charging state are decoded on both transports and exposed in
@@ -142,6 +142,8 @@ peak resident memory. Physical idle and active baselines remain open.
 The service counts full read batches. A synthetic burst test checks that
 the readiness loop answers status queries between batches and preserves
 decoded report order despite malformed reports mixed into the burst.
+Status also reports separate keyboard and mouse button batch counts for
+the active session, including scheduled gesture output.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
 
 Discovery now tracks disconnected HID instances by sysfs path. Synthetic
@@ -153,12 +155,11 @@ Auto-discovery also recovers when a controller disconnects during
 session setup. A synthetic descriptor test checks that setup errors
 still propagate while the controller descriptor is live.
 
-Profiles can constrain discovery, manual sessions, live benchmarks and
-game calibration to a selected DualSense model. The bridge continues
-to run one controller session at a time. Profile-aware diagnostics show
-which attached devices are excluded by the configured filter.
-Profiles can also constrain the selection to a single Linux HID unique
-ID. Same-model and cross-transport hardware checks remain open.
+The independent controller settings file can constrain discovery, manual
+sessions, live benchmarks and game calibration by model and transport.
+Discovery prefers the last saved HID ID and falls back to another
+eligible device or waits for hotplug. Diagnostics show exclusions from
+the selected filter. Same-model and cross-transport hardware checks remain open.
 [Rapid reconnect acceptance](TESTING_AND_PERFORMANCE.md#rapid-reconnect-acceptance)
 
 Process-lifetime counters expose started and ended controller sessions.
@@ -173,13 +174,15 @@ The status socket reports virtual gamepad and mouse batch counts for the
 active connection. Synthetic tests cover output suppression and reset.
 [Report statistics acceptance](TESTING_AND_PERFORMANCE.md#report-statistics-acceptance)
 
-Discovery applies controller selection changes from live profiles and
-closes the existing virtual devices before opening a new controller.
-The process handles a single active controller session. Status shows
-the effective filter while waiting, and a headless integration test
-verifies it after file reload and preset load.
-The CLI also supports changing or clearing the ID filter directly while
-retaining the current mappings and other filters.
+Discovery changes controller selection only through the dedicated CLI
+command and closes the existing virtual devices before opening a new
+controller. Profile loads keep the current selection. The process
+handles a single active controller session. Status shows the effective
+filter while waiting, and a headless integration test verifies that
+selection changes and profile loads take effect independently.
+The user service starts without a profile file and exposes controller
+selection and preset loading immediately. A manually started bridge can
+enable the same control socket without a startup profile.
 
 Keyboard profiles map digital buttons and D-pad directions to tap, hold
 and double-tap keys. Analog trigger travel can drive the same gestures
