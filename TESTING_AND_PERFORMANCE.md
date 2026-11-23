@@ -656,6 +656,9 @@ The second test replays touch contacts through the USB parser and
 checks the virtual mouse event stream for the pointer start threshold,
 single- and two-finger clicks, and axis-locked scrolling. It uses
 synthetic reports and needs no physical controller.
+The regular test suite also runs the same sequence before uinput for
+DualSense and DualSense Edge over both USB and Bluetooth. It checks the
+mouse events and release deadlines without requiring virtual devices.
 
 Stop the user service while testing a standalone bridge.
 

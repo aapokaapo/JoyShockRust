@@ -221,7 +221,8 @@ An opt-in uinput test covers the timed mouse tap and held-key cleanup with
 both virtual devices and synthetic USB reports.
 The opt-in touchpad round trip replays USB reports and checks pointer
 motion, timed left and right clicks, and locked-axis scrolling through
-the virtual evdev mouse.
+the virtual evdev mouse. The default suite runs the same trace through
+the USB and Bluetooth decoders and mapper for both controller models.
 Deadline and output handling have synthetic coverage. The bridge supports
 keyboard and mouse profiles with the virtual gamepad disabled. Analog
 stick bindings support direction keys,

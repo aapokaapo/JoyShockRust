@@ -903,6 +903,8 @@ impl<'a> Keyboard<'a> {
 mod tests {
     use std::time::Duration;
 
+    use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
     use super::*;
 
     fn config(bindings: &str) -> Config {
@@ -923,7 +925,6 @@ mod tests {
     #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
     fn uinput_keyboard_and_mouse_gestures() {
         use crate::live_uinput_test::open_evdev;
-        use joyshockrust_input::{DeviceModel, Transport, parse_report};
 
         let config = config(
             r#"
@@ -999,38 +1000,34 @@ mod tests {
         assert!(!keys.get_key_state().unwrap().contains(KeyCode::KEY_F13));
     }
 
-    #[test]
-    #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
-    fn uinput_usb_touchpad_pointer_and_gestures() {
-        use crate::live_uinput_test::open_evdev;
-        use joyshockrust_input::{DeviceModel, Transport, parse_report};
+    const TOUCHPAD_REPLAY_PROFILE: &str = r#"
+        [keyboard.touch_pointer]
+        sensitivity_x = 1.0
+        motion_threshold = 10
+        tap_to_click = true
+        two_finger_tap_to_click = true
+        tap_max_travel = 10
+        [keyboard.touch_scroll]
+        fingers = 2
+        vertical_step = 10
+        horizontal_step = 10
+        axis_lock = true
+    "#;
 
-        let config = config(
-            r#"
-            [keyboard.touch_pointer]
-            sensitivity_x = 1.0
-            motion_threshold = 10
-            tap_to_click = true
-            two_finger_tap_to_click = true
-            tap_max_travel = 10
-            [keyboard.touch_scroll]
-            fingers = 2
-            vertical_step = 10
-            horizontal_step = 10
-            axis_lock = true
-            "#,
-        );
-        let mut output = Keyboard::open(Some(&config), None).unwrap().unwrap();
-        let sysfs = output
-            .outputs
-            .mouse
-            .as_mut()
-            .unwrap()
-            .get_syspath()
-            .unwrap();
-        let mut mouse = open_evdev(&sysfs);
-        mouse.set_nonblocking(true).unwrap();
+    const TOUCHPAD_REPLAY_EVENTS: [(EventType, u16, i32); 6] = [
+        (EventType::RELATIVE, RelativeAxisCode::REL_X.0, 2),
+        (EventType::KEY, KeyCode::BTN_LEFT.0, 1),
+        (EventType::KEY, KeyCode::BTN_LEFT.0, 0),
+        (EventType::KEY, KeyCode::BTN_RIGHT.0, 1),
+        (EventType::KEY, KeyCode::BTN_RIGHT.0, 0),
+        (EventType::RELATIVE, RelativeAxisCode::REL_WHEEL.0, -2),
+    ];
 
+    fn replay_touchpad(
+        model: DeviceModel,
+        transport: Transport,
+        mut apply: impl FnMut(Option<InputReport>, Instant) -> Option<Instant>,
+    ) {
         let contact =
             |id, x: u16, y: u16| [id, x as u8, ((x >> 8) | (y << 4)) as u8, (y >> 4) as u8];
         let inactive = [0x80, 0, 0, 0];
@@ -1068,21 +1065,85 @@ mod tests {
             (190, clear, None),
         ] {
             let now = start + Duration::from_millis(ms);
-            let deadline = if let Some([first, second]) = slots {
+            let report = slots.map(|[first, second]| {
                 frame[33..37].copy_from_slice(&first);
                 frame[37..41].copy_from_slice(&second);
-                let report =
-                    parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap();
+                match transport {
+                    Transport::Usb => parse_report(model, transport, &frame, None),
+                    Transport::Bluetooth => {
+                        let mut bluetooth = [0; 78];
+                        bluetooth[0] = 0x31;
+                        bluetooth[2..65].copy_from_slice(&frame[1..]);
+                        // Compute the HID input checksum bit by bit, independently of the parser table.
+                        let mut crc = u32::MAX;
+                        for byte in std::iter::once(0xa1).chain(bluetooth[..74].iter().copied()) {
+                            crc ^= u32::from(byte);
+                            for _ in 0..8 {
+                                let polynomial = if crc & 1 == 0 { 0 } else { 0xedb8_8320 };
+                                crc = (crc >> 1) ^ polynomial;
+                            }
+                        }
+                        bluetooth[74..].copy_from_slice(&(!crc).to_le_bytes());
+                        parse_report(model, transport, &bluetooth, None)
+                    }
+                    Transport::Other => unreachable!("touchpad replay uses USB or Bluetooth"),
+                }
+                .unwrap()
+            });
+            assert_eq!(
+                apply(report, now),
+                expected_deadline_ms.map(|ms| start + Duration::from_millis(ms)),
+                "{model:?} {transport:?} at {ms} ms"
+            );
+        }
+    }
+
+    #[test]
+    fn usb_and_bluetooth_touchpad_replay_emit_the_same_mouse_events() {
+        let config = config(TOUCHPAD_REPLAY_PROFILE);
+        for model in [DeviceModel::DualSense, DeviceModel::DualSenseEdge] {
+            for transport in [Transport::Usb, Transport::Bluetooth] {
+                let mut state = State::new(&config);
+                let mut events = Vec::with_capacity(TOUCHPAD_REPLAY_EVENTS.len());
+                replay_touchpad(model, transport, |report, now| {
+                    let input = report.map_or(state.input, Input::from);
+                    state
+                        .update(input, now, |batch| {
+                            events.extend(
+                                batch.iter().map(|e| (e.event_type(), e.code(), e.value())),
+                            );
+                            Ok(())
+                        })
+                        .unwrap()
+                });
+                assert_eq!(events, TOUCHPAD_REPLAY_EVENTS, "{model:?} {transport:?}");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
+    fn uinput_usb_touchpad_pointer_and_gestures() {
+        use crate::live_uinput_test::open_evdev;
+
+        let config = config(TOUCHPAD_REPLAY_PROFILE);
+        let mut output = Keyboard::open(Some(&config), None).unwrap().unwrap();
+        let sysfs = output
+            .outputs
+            .mouse
+            .as_mut()
+            .unwrap()
+            .get_syspath()
+            .unwrap();
+        let mut mouse = open_evdev(&sysfs);
+        mouse.set_nonblocking(true).unwrap();
+        replay_touchpad(DeviceModel::DualSenseEdge, Transport::Usb, |report, now| {
+            if let Some(report) = report {
                 output.publish(report, now).unwrap()
             } else {
                 output.tick(now).unwrap()
-            };
-            assert_eq!(
-                deadline,
-                expected_deadline_ms.map(|ms| start + Duration::from_millis(ms)),
-                "{ms} ms"
-            );
-        }
+            }
+        });
 
         let events: Vec<_> = mouse
             .fetch_events()
@@ -1090,17 +1151,7 @@ mod tests {
             .filter(|event| event.event_type() != EventType::SYNCHRONIZATION)
             .map(|event| (event.event_type(), event.code(), event.value()))
             .collect();
-        assert_eq!(
-            events,
-            [
-                (EventType::RELATIVE, RelativeAxisCode::REL_X.0, 2),
-                (EventType::KEY, KeyCode::BTN_LEFT.0, 1),
-                (EventType::KEY, KeyCode::BTN_LEFT.0, 0),
-                (EventType::KEY, KeyCode::BTN_RIGHT.0, 1),
-                (EventType::KEY, KeyCode::BTN_RIGHT.0, 0),
-                (EventType::RELATIVE, RelativeAxisCode::REL_WHEEL.0, -2),
-            ]
-        );
+        assert_eq!(events, TOUCHPAD_REPLAY_EVENTS);
     }
 
     #[test]
