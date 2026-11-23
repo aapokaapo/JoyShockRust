@@ -237,6 +237,18 @@ These gestures are sent by **JoyShockRust Button Mouse**, which also
 works in profiles with gyro disabled. Gyro and Flick Stick movement
 continue through **JoyShockRust Gyro Mouse** when enabled.
 
+Use `chord` in place of `button` or `trigger` to require two active
+inputs. Either press order works. The second input completes the chord,
+and releasing either input ends it. Separate bindings for the member
+inputs run independently. Chords accept buttons, D-pad directions and
+touchpad regions. Use a `trigger:` prefix for analog travel.
+
+```toml
+[[keyboard.bindings]]
+chord = ["l1", "trigger:r2:0.6:0.4"]
+hold = "BTN_RIGHT"
+```
+
 Use `[[keyboard.sticks]]` to bind an analog stick. This example uses
 `KEY_LEFTSHIFT` in the outer zone and keeps the current WASD direction
 held while entering or leaving that zone.

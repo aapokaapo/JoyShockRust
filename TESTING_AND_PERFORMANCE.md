@@ -653,6 +653,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
    held while the pressed finger slides across the grid.
    Release the pad and confirm the mouse button releases. Repeat over
    Bluetooth.
+10. Set `chord = ["l1", "trigger:r2:0.6:0.4"]` and `hold = "BTN_RIGHT"`
+    in a keyboard binding. Press L1 and R2 in both orders. Confirm the
+    right mouse button is held only when both are active, including when
+    R2 starts above 0.6 and backs off slightly before L1 is pressed.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

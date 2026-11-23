@@ -29,6 +29,7 @@ pub struct Settings {
 struct RawBinding {
     button: Option<String>,
     trigger: Option<String>,
+    chord: Option<Vec<String>>,
     tap: Option<String>,
     hold: Option<String>,
     double_tap: Option<String>,
@@ -100,13 +101,43 @@ enum Source {
 
 #[derive(Clone, Copy, PartialEq)]
 struct Binding {
-    source: Source,
+    source: BindingSource,
     tap: Option<KeyCode>,
     hold: Option<KeyCode>,
     double_tap: Option<KeyCode>,
 }
 
+#[derive(Clone, Copy)]
+enum BindingSource {
+    Single(Source),
+    Chord(Source, Source),
+}
+
+impl PartialEq for BindingSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (*self, *other) {
+            (Self::Single(a), Self::Single(b)) => a == b,
+            (Self::Chord(a, b), Self::Chord(c, d)) => (a == c && b == d) || (a == d && b == c),
+            _ => false,
+        }
+    }
+}
+
 impl Source {
+    fn trigger(spec: &str) -> Result<Self, String> {
+        TriggerGate::parse(spec)
+            .map(Self::Trigger)
+            .map_err(|error| format!("invalid keyboard binding trigger {spec}: {error}"))
+    }
+
+    fn chord_member(name: &str, grid: Option<&Grid>) -> Result<Self, String> {
+        if let Some(spec) = name.strip_prefix("trigger:") {
+            Self::trigger(spec)
+        } else {
+            Self::parse(name, grid)
+        }
+    }
+
     fn parse(name: &str, grid: Option<&Grid>) -> Result<Self, String> {
         if let Some((kind, spec)) = name.split_once(':') {
             let source = match kind {
@@ -158,16 +189,29 @@ impl Settings {
     pub fn resolve(self, grid: Option<&Grid>) -> Result<Config, String> {
         let mut bindings = Vec::<Binding>::new();
         for raw in self.bindings {
-            let (source, name) = match (raw.button.as_deref(), raw.trigger.as_deref()) {
-                (Some(name), None) => (Source::parse(name, grid)?, name),
-                (None, Some(spec)) => (
-                    Source::Trigger(TriggerGate::parse(spec).map_err(|error| {
-                        format!("invalid keyboard binding trigger {spec}: {error}")
-                    })?),
-                    spec,
-                ),
+            let (source, name) = match (raw.button, raw.trigger, raw.chord) {
+                (Some(name), None, None) => {
+                    (BindingSource::Single(Source::parse(&name, grid)?), name)
+                }
+                (None, Some(spec), None) => (BindingSource::Single(Source::trigger(&spec)?), spec),
+                (None, None, Some(members)) => {
+                    let [first, second] = members.as_slice() else {
+                        return Err("keyboard chord requires exactly two inputs".into());
+                    };
+                    let a = Source::chord_member(first, grid)?;
+                    let b = Source::chord_member(second, grid)?;
+                    if a == b {
+                        return Err("keyboard chord requires two distinct inputs".into());
+                    }
+                    (
+                        BindingSource::Chord(a, b),
+                        format!("chord [{first}, {second}]"),
+                    )
+                }
                 _ => {
-                    return Err("keyboard binding requires exactly one of button or trigger".into());
+                    return Err(
+                        "keyboard binding requires exactly one of button, trigger or chord".into(),
+                    );
                 }
             };
             if bindings.iter().any(|binding| binding.source == source) {
@@ -220,6 +264,7 @@ enum Press {
 
 struct Gesture {
     binding: Binding,
+    source_pressed: [bool; 2],
     press: Press,
     pending_tap: Option<Instant>,
 }
@@ -231,10 +276,21 @@ impl Gesture {
         click: Option<TouchContact>,
         now: Instant,
     ) -> Option<KeyCode> {
-        let pressed = self
-            .binding
-            .source
-            .pressed(input, click, !matches!(self.press, Press::Up));
+        let pressed = match self.binding.source {
+            BindingSource::Single(source) => {
+                self.source_pressed[0] = source.pressed(input, click, self.source_pressed[0]);
+                self.source_pressed[0]
+            }
+            BindingSource::Chord(first, second) => {
+                // Update both inputs even while the chord is inactive. A trigger
+                // may have crossed its engagement threshold before the other input.
+                self.source_pressed = [
+                    first.pressed(input, click, self.source_pressed[0]),
+                    second.pressed(input, click, self.source_pressed[1]),
+                ];
+                self.source_pressed[0] && self.source_pressed[1]
+            }
+        };
         let mut pulse = None;
         if self.pending_tap.is_some_and(|deadline| deadline <= now) {
             self.pending_tap = None;
@@ -315,6 +371,7 @@ impl State {
             .iter()
             .map(|&binding| Gesture {
                 binding,
+                source_pressed: [false; 2],
                 press: Press::Up,
                 pending_tap: None,
             })
@@ -1138,6 +1195,65 @@ mod tests {
             format!("{binding}{binding}"),
         ] {
             assert!(crate::profile::parse(&format!("version = 1\n{grid}{invalid}")).is_err());
+        }
+    }
+
+    #[test]
+    fn chord_holds_only_while_both_members_are_active_in_either_order() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            chord = ["l1", "trigger:r2:0.6:0.4"]
+            hold = "BTN_RIGHT"
+            [[keyboard.bindings]]
+            button = "l1"
+            hold = "KEY_Q"
+        "#,
+        );
+        let mut state = State::new(&config);
+        let now = Instant::now();
+        for (l1, trigger, right_mouse) in [
+            (false, 0.6, false),
+            (false, 0.5, false),
+            (true, 0.5, true),
+            (false, 0.5, false),
+            (false, 0.4, false),
+            (true, 0.5, false),
+            (true, 0.6, true),
+            (true, 0.4, false),
+        ] {
+            let mut controls = Controls {
+                right_trigger: trigger,
+                ..Controls::default()
+            };
+            if l1 {
+                controls.buttons.insert(Button::LeftShoulder);
+            }
+            assert_eq!(
+                state.update(input(controls), now, |_| Ok(())).unwrap(),
+                None
+            );
+            assert_eq!(state.held.contains(KeyCode::KEY_Q), l1);
+            assert_eq!(state.held.contains(KeyCode::BTN_RIGHT), right_mouse);
+        }
+    }
+
+    #[test]
+    fn validates_chord_members_and_rejects_reversed_duplicates() {
+        let binding = "[[keyboard.bindings]]\nchord = ['l1', 'r1']\ntap = 'KEY_TAB'\n";
+        for invalid in [
+            binding.replace("'l1', 'r1'", "'l1', 'l1'"),
+            binding.replace("'l1', 'r1'", "'l1'"),
+            binding.replace("'l1', 'r1'", "'l1', 'r1', 'cross'"),
+            binding.replace("'l1'", "'touch:1:1'"),
+            binding.replace("'l1'", "'trigger:l2:0.4:0.6'"),
+            format!("{binding}button = 'l1'\n"),
+            format!("{binding}{}", binding.replace("'l1', 'r1'", "'r1', 'l1'")),
+        ] {
+            assert!(
+                crate::profile::parse(&format!("version = 1\n{invalid}")).is_err(),
+                "{invalid}"
+            );
         }
     }
 }

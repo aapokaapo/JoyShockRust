@@ -371,4 +371,8 @@ Keyboard and mouse gestures can read touchpad grid cells directly. Touch
 reads both live contacts. A region click latches the first active
 contact on the mechanical press edge until release, matching gamepad
 region selection. Deadlines reuse the last report's contact state.
+
+Keyboard and mouse chords are symmetric pairs of physical inputs. Each
+member retains its own trigger hysteresis. Both must be active for the
+chord's gesture, and standalone bindings remain independent.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)
