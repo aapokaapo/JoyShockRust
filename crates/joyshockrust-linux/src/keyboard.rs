@@ -1,5 +1,6 @@
 use std::{
     io,
+    num::NonZeroU32,
     time::{Duration, Instant},
 };
 
@@ -33,6 +34,8 @@ struct RawBinding {
     tap: Option<RawOutput>,
     hold: Option<RawOutput>,
     double_tap: Option<RawOutput>,
+    hold_ms: Option<NonZeroU32>,
+    double_tap_ms: Option<NonZeroU32>,
 }
 
 #[derive(Deserialize)]
@@ -143,6 +146,8 @@ struct Binding {
     tap: Box<[KeyCode]>,
     hold: Box<[KeyCode]>,
     double_tap: Box<[KeyCode]>,
+    hold_time: Duration,
+    double_tap_window: Duration,
 }
 
 #[derive(Clone, Copy)]
@@ -260,6 +265,12 @@ impl Settings {
                 tap: RawOutput::resolve(raw.tap)?,
                 hold: RawOutput::resolve(raw.hold)?,
                 double_tap: RawOutput::resolve(raw.double_tap)?,
+                hold_time: raw
+                    .hold_ms
+                    .map_or(HOLD_TIME, |ms| Duration::from_millis(ms.get().into())),
+                double_tap_window: raw.double_tap_ms.map_or(DOUBLE_TAP_WINDOW, |ms| {
+                    Duration::from_millis(ms.get().into())
+                }),
             };
             if binding.tap.is_empty() && binding.hold.is_empty() && binding.double_tap.is_empty() {
                 return Err(format!(
@@ -338,19 +349,21 @@ impl Gesture {
             Press::Up if pressed => self.press = Press::Down(now),
             Press::Down(start) if !pressed => {
                 self.press = Press::Up;
-                if now.duration_since(start) < HOLD_TIME {
+                if now.duration_since(start) < self.binding.hold_time {
                     if !self.binding.double_tap.is_empty() {
                         if self.pending_tap.take().is_some() {
                             pulse = &self.binding.double_tap;
                         } else {
-                            self.pending_tap = Some(now + DOUBLE_TAP_WINDOW);
+                            self.pending_tap = Some(now + self.binding.double_tap_window);
                         }
                     } else {
                         pulse = &self.binding.tap;
                     }
                 }
             }
-            Press::Down(start) if !self.binding.hold.is_empty() && now >= start + HOLD_TIME => {
+            Press::Down(start)
+                if !self.binding.hold.is_empty() && now >= start + self.binding.hold_time =>
+            {
                 self.press = Press::Held;
             }
             Press::Held if !pressed => self.press = Press::Up,
@@ -361,7 +374,9 @@ impl Gesture {
 
     fn deadline(&self) -> Option<Instant> {
         let hold = match self.press {
-            Press::Down(start) if !self.binding.hold.is_empty() => Some(start + HOLD_TIME),
+            Press::Down(start) if !self.binding.hold.is_empty() => {
+                Some(start + self.binding.hold_time)
+            }
             _ => None,
         };
         hold.into_iter().chain(self.pending_tap).min()
@@ -1383,6 +1398,82 @@ mod tests {
             let profile =
                 format!("version = 1\n[[keyboard.bindings]]\nbutton = 'cross'\nhold = {value}\n");
             assert!(crate::profile::parse(&profile).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn custom_gesture_times_drive_hold_and_double_tap_deadlines() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            button = "cross"
+            tap = "KEY_SPACE"
+            hold = "KEY_LEFTSHIFT"
+            double_tap = "KEY_R"
+            hold_ms = 100
+            double_tap_ms = 120
+            [[keyboard.bindings]]
+            button = "l1"
+            hold = "KEY_Q"
+            hold_ms = 350
+        "#,
+        );
+        let mut state = State::new(&config);
+        let start = Instant::now();
+        let space = KeyCode::KEY_SPACE.0;
+        let r = KeyCode::KEY_R.0;
+        let shift = KeyCode::KEY_LEFTSHIFT.0;
+        let q = KeyCode::KEY_Q.0;
+        for (ms, cross, shoulder, deadline, expected) in [
+            (0, true, true, Some(100), &[(q, 1)][..]),
+            (99, true, false, Some(100), &[(q, 0)][..]),
+            (100, true, false, None, &[(shift, 1)][..]),
+            (150, false, false, None, &[(shift, 0)][..]),
+            (200, true, false, Some(300), &[][..]),
+            (210, false, false, Some(330), &[][..]),
+            (330, false, false, Some(360), &[(space, 1)][..]),
+            (360, false, false, None, &[(space, 0)][..]),
+            (400, true, false, Some(500), &[][..]),
+            (410, false, false, Some(530), &[][..]),
+            (450, true, false, Some(530), &[][..]),
+            (529, false, false, Some(559), &[(r, 1)][..]),
+            (559, false, false, None, &[(r, 0)][..]),
+        ] {
+            let mut controls = Controls::default();
+            if cross {
+                controls.buttons.insert(Button::South);
+            }
+            if shoulder {
+                controls.buttons.insert(Button::LeftShoulder);
+            }
+            let mut events = Vec::new();
+            let next = state
+                .update(
+                    input(controls),
+                    start + Duration::from_millis(ms),
+                    |batch| {
+                        events.extend(batch.iter().map(|event| (event.code(), event.value())));
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            assert_eq!(events, expected, "{ms} ms");
+            assert_eq!(next, deadline.map(|ms| start + Duration::from_millis(ms)));
+        }
+    }
+
+    #[test]
+    fn gesture_times_require_positive_integer_milliseconds() {
+        for setting in [
+            "hold_ms = 0",
+            "hold_ms = -10",
+            "double_tap_ms = 0",
+            "double_tap_ms = 12.5",
+        ] {
+            let profile = format!(
+                "version = 1\n[[keyboard.bindings]]\nbutton = 'cross'\ntap = 'KEY_TAB'\n{setting}\n"
+            );
+            assert!(crate::profile::parse(&profile).is_err(), "{setting}");
         }
     }
 }

@@ -380,4 +380,8 @@ Keyboard gesture outputs accept either a single target or a set of
 keyboard keys. A gesture activates its set together and shares key
 ownership with other bindings. Ctrl, Shift, Alt and Meta precede regular
 key presses and follow regular key releases.
+
+Keyboard bindings can override hold and double-tap deadlines independently.
+Both timers use the existing monotonic report and readiness clock. The
+default timings and immediate behavior of hold-only bindings are retained.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)

@@ -661,6 +661,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     `tap = ["KEY_LEFTCTRL", "KEY_TAB"]`. Tap Create with a browser
     focused and check that it switches tabs once. In a key-event viewer,
     check that Ctrl presses before Tab and releases after Tab.
+12. Set `hold_ms = 500` and `double_tap_ms = 400` on the Cross binding.
+    Verify that holding Cross starts Shift after the longer threshold.
+    Verify that two short taps within the window send R and that a
+    single short tap sends Space when the window expires.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

@@ -206,11 +206,14 @@ double_tap = "KEY_R"
 
 Targets are Linux `KEY_*` names. Each binding reads a physical button or
 a direction such as `dpad-up`. A diagonal activates both matching
-directions. A hold-only binding presses its key immediately. A binding
-with a tap action commits to a hold after 200 ms. Two short releases
-less than 300 ms apart trigger the double-tap key. A single tap waits
-for that window when a double-tap binding is configured. Tap outputs
-hold the virtual key briefly so games can observe the press.
+directions. A hold-only binding presses its key immediately. When a
+binding combines tap and hold, a release before `hold_ms` counts as a
+tap and a longer press activates the hold. Two short releases less
+than `double_tap_ms` apart trigger the double-tap action. A single tap
+waits for that window when a double-tap binding is configured. Both
+settings are optional positive integers in milliseconds and default to
+200 and 300 respectively. Tap outputs hold the virtual key briefly so
+games can observe the press.
 
 Give `tap`, `hold`, or `double_tap` an array of distinct `KEY_*` names
 to send a keyboard shortcut. Ctrl, Shift, Alt and Meta are pressed
