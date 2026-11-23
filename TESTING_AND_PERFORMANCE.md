@@ -829,6 +829,21 @@ different game sensitivity values. For a physical check, calibrate a
 copy of the profile for your game and compare a 90° right flick against
 an in-game landmark.
 
+## Desktop tray acceptance
+
+Install the tray and bridge using the [desktop tray instructions](README.md#desktop-tray).
+Run JoyShockRust from the applications menu on a desktop with a
+StatusNotifierItem host. Verify the menu with no controller connected,
+then connect a supported controller over USB and Bluetooth. Check the
+reported transport, decoded report rate and battery state against
+`joyshockrust-linux --status`. Select a controller and then a profile.
+Confirm the profile load keeps the selected controller active.
+
+Enable **Start when I log in**, log out and back in, and confirm the tray
+and bridge start. Clear the setting and repeat to confirm manual
+launch is needed. Use **Quit JoyShockRust** and verify both user units
+are inactive.
+
 ## Benchmarks
 Use a repeatable workload and document CPU model, kernel, Rust version, power profile, controller firmware/transport, report rate, and whether debug/release. Record p50, p95, p99, max, samples, and any drops. Include CPU contention, idle and reconnect cases. Avoid misleading comparisons between processing-only latency and physical end-to-end latency.
 

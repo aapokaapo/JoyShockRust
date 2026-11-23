@@ -131,7 +131,6 @@ through the real bridge. The same run reports device-clock interval
 percentiles and counts repeated timestamps, out-of-order samples, gaps
 and continuous wraps. USB and Bluetooth baselines, CPU and memory
 measurements, and contention and reconnect experiments remain open.
-Desktop controls are deferred until the broader GUI work.
 [Live benchmarks](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
 
 The benchmark can also terminate at a collection deadline and report a
@@ -239,6 +238,19 @@ Flick Stick calibration is covered by output
 counts before and after a scaling change.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
+
+## Phase 8 — desktop controls
+
+The desktop tray starts and stops the existing systemd user bridge.
+XDG autostart gives the user a login-start preference. The tray shows
+controller telemetry and offers independent controller and profile
+selectors.
+
+Next, add a tray calibration dialog that pauses normal outputs while
+measuring real-world calibration, saves the result to the selected
+profile and restores the bridge. Add a profile editor for creating,
+validating, saving and applying controller bindings. Display the active
+profile's name even when it was loaded outside the tray.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

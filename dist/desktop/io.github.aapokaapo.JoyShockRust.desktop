@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=JoyShockRust
+Comment=Manage the JoyShockRust controller bridge
+Icon=input-gaming
+Exec=systemctl --user start joyshockrust-tray.service
+Categories=Settings;
+Terminal=false

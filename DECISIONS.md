@@ -476,3 +476,14 @@ Keyboard bindings can override hold and double-tap deadlines independently.
 Both timers use the existing monotonic report and readiness clock. The
 default timings and immediate behavior of hold-only bindings are retained.
 [Keyboard profile acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)
+## Desktop process lifecycle
+
+2026-11-23. The input bridge stays supervised by systemd in the user
+session. The separate tray process owns the StatusNotifierItem menu and
+uses the bridge's existing control and status interfaces. Put the login
+preference in XDG autostart, which launches the same tray unit as the
+application menu. Systemd serializes launches of the tray unit. The
+tray's Quit action stops the bridge before its menu disappears. Desktop
+polling and command execution stay outside the input process.
+[XDG Autostart](https://specifications.freedesktop.org/autostart-spec/latest/)
+· [StatusNotifierItem](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/)

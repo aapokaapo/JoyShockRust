@@ -625,6 +625,36 @@ Use `systemctl --user enable joyshockrust.service` to start it with the
 user manager, or `systemctl --user stop joyshockrust.service` to stop it.
 The service needs the same hidraw and uinput access as a manual run.
 
+### Desktop tray
+
+Install the tray beside the bridge binary and its launcher beside the
+desktop's other applications. Keep the bridge user unit installed.
+
+```sh
+cargo install --locked --path crates/joyshockrust-tray --root "$HOME/.local"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
+install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
+install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+systemctl --user daemon-reload
+```
+
+Open **JoyShockRust** from the application menu or run
+`systemctl --user start joyshockrust-tray.service`. The tray starts the
+bridge, shows its current controller, connection, decoded report rate,
+and battery state, and shows the charge percentage while discharging.
+Use **Active controller** to choose a connected controller with an HID ID,
+or select **Automatic**. Place named TOML profiles in
+`$config_dir/joyshockrust/profiles/` for the **Profiles** submenu.
+**Default mappings** unloads the profile. **Quit JoyShockRust** stops the
+bridge and closes the tray.
+
+Check **Start when I log in** to enable desktop login startup. If you
+previously enabled the bridge unit directly, run
+`systemctl --user disable joyshockrust.service` once so the tray controls
+login startup. The tray requires a StatusNotifierItem host. Some desktops,
+including GNOME setups, may need an AppIndicator extension.
+
 Query the running service with `$HOME/.local/bin/joyshockrust-linux --status`.
 The command prints `controller=waiting` or `controller=connected` and
 `gyro_configured=true` or `gyro_configured=false`. The `transport` field

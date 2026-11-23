@@ -4,6 +4,7 @@ members = [
     "crates/joyshockrust-input",
     "crates/joyshockrust-linux",
     "crates/joyshockrust-motion",
+    "crates/joyshockrust-tray",
 ]
 resolver = "3"
 
