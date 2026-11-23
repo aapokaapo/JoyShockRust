@@ -261,7 +261,8 @@ impl Calibration {
             }
         });
         let args = [
-            OsString::from("--measure-stick"),
+            OsString::from("--calibrate-game"),
+            "--measure-stick".into(),
             sensitivity.to_string().into(),
             self.node.as_os_str().to_owned(),
             std::process::id().to_string().into(),
@@ -330,7 +331,8 @@ impl Calibration {
         );
         self.saving.set(true);
         let args = [
-            OsString::from("--save-measurement"),
+            OsString::from("--calibrate-game"),
+            "--save-measurement".into(),
             self.profile
                 .as_ref()
                 .expect("game calibration profile")
@@ -550,8 +552,8 @@ wait_for_gate() {
     done
     [ -f "$1" ] || exit 1
 }
-case "$1" in
-    --gyro-calibration)
+case "$1:$2" in
+    --gyro-calibration:*)
         case "$2" in
             --measure)
                 printf 'ready\nbias 00:11:22:33:44:55 0.25 0 -0.1\n'
@@ -563,7 +565,8 @@ case "$1" in
             *) exit 1 ;;
         esac
         ;;
-    --measure-stick)
+    --calibrate-game:--measure-stick)
+        shift
         [ "$2" = 2 ] || exit 1
         if [ "$3" = cancel ]; then exec sleep 60; fi
         printf 'ready\n'
@@ -576,7 +579,8 @@ case "$1" in
         wait_for_gate "$3.confirmed"
         printf 'counts 28800\n'
         ;;
-    --save-measurement)
+    --calibrate-game:--save-measurement)
+        shift
         [ "$3" = 28800 ] && [ "$4" = 2 ] && [ "$5" = 4 ] || exit 1
         printf '40.0\n'
         ;;
