@@ -370,6 +370,18 @@ grab_touchpad = true
 `native_touchpad_grabbed=true` confirms the reservation. If access fails,
 the bridge logs the reason and continues serving the profile.
 
+Load the [desktop touchpad profile](profiles/touchpad-desktop.toml) for
+one-finger pointing, left and right tap clicks, and two-finger scrolling.
+Press the physical pad and move one finger to drag. This profile requests
+the native touchpad grab.
+
+```sh
+"$HOME/.local/bin/joyshockrust-linux" --load-profile profiles/touchpad-desktop.toml
+```
+
+Use `--unload-profile` to exit the desktop profile. To switch virtual
+gamepad output independently, use `--set-gamepad off` or `--set-gamepad on`.
+
 Use `chord` in place of `button` or `trigger` to require two active
 inputs. Either press order works. The second input completes the chord,
 and releasing either input ends it. Separate bindings for the member

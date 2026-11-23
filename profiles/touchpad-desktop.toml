@@ -1,0 +1,22 @@
+version = 1
+
+[keyboard]
+grab_touchpad = true
+
+[keyboard.touch_pointer]
+sensitivity_x = 0.5
+sensitivity_y = 0.5
+motion_threshold = 10
+tap_to_click = true
+two_finger_tap_to_click = true
+
+[keyboard.touch_scroll]
+fingers = 2
+vertical_step = 120
+horizontal_step = 180
+axis_lock = true
+
+# Hold the physical pad down while moving one finger to drag.
+[[keyboard.bindings]]
+button = "touchpad"
+hold = "BTN_LEFT"

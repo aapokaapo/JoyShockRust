@@ -1093,6 +1093,54 @@ mod tests {
     }
 
     #[test]
+    fn desktop_touchpad_preset_drags_and_releases_on_the_physical_click() {
+        let profile =
+            crate::profile::parse(include_str!("../../../profiles/touchpad-desktop.toml")).unwrap();
+        assert!(profile.bridge.is_none());
+        assert!(profile.grab_touchpad);
+        let mut state = State::new(&profile.keyboard.unwrap());
+        let start = Instant::now();
+        let a = |x| Some(TouchContact { id: 1, x, y: 100 });
+        let left = KeyCode::BTN_LEFT.0;
+        let x = RelativeAxisCode::REL_X.0;
+        let mut events = Vec::new();
+        for (ms, contact, pressed) in [
+            (0, a(100), false),
+            (10, a(100), true),
+            (20, a(120), true),
+            (30, a(120), false),
+            (40, None, false),
+        ] {
+            let mut input = Input {
+                contacts: [contact, None],
+                ..Input::default()
+            };
+            if pressed {
+                input.controls.buttons.insert(Button::TouchpadClick);
+            }
+            let deadline = state
+                .update(input, start + Duration::from_millis(ms), |batch| {
+                    events.extend(
+                        batch
+                            .iter()
+                            .map(|event| (ms, event.event_type(), event.code(), event.value())),
+                    );
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(deadline, None);
+        }
+        assert_eq!(
+            events,
+            [
+                (10, EventType::KEY, left, 1),
+                (20, EventType::RELATIVE, x, 10),
+                (30, EventType::KEY, left, 0),
+            ]
+        );
+    }
+
+    #[test]
     fn usb_and_bluetooth_touchpad_replay_emit_the_same_mouse_events() {
         let config = config(TOUCHPAD_REPLAY_PROFILE);
         for model in [DeviceModel::DualSense, DeviceModel::DualSenseEdge] {

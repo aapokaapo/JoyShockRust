@@ -223,6 +223,8 @@ The opt-in touchpad round trip replays USB reports and checks pointer
 motion, timed left and right clicks, and locked-axis scrolling through
 the virtual evdev mouse. The default suite runs the same trace through
 the USB and Bluetooth decoders and mapper for both controller models.
+The desktop touchpad preset combines these mappings with a physical
+click-to-drag binding and can be loaded into a running service.
 Deadline and output handling have synthetic coverage. The bridge supports
 keyboard and mouse profiles with the virtual gamepad disabled. Analog
 stick bindings support direction keys,

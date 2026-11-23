@@ -804,6 +804,12 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     changes direction. Then set `invert_x = false` and `invert_y = true`
     and check the vertical axis. Two-finger scrolling should keep its
     configured direction.
+31. Load `profiles/touchpad-desktop.toml` in the running service and
+    verify `native_touchpad_grab_requested=true` with `--status`. Press
+    the physical pad over a window title bar and move one finger.
+    Confirm the window moves while the pad is pressed and releases
+    with the physical click. Unload the profile and verify that the
+    profile's touchpad grab request clears.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a
