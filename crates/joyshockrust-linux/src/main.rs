@@ -23,6 +23,8 @@ mod hidraw;
 mod keyboard;
 #[cfg(target_os = "linux")]
 mod launch;
+#[cfg(all(test, target_os = "linux"))]
+mod live_uinput_test;
 #[cfg(target_os = "linux")]
 mod profile;
 #[cfg(target_os = "linux")]
@@ -731,6 +733,7 @@ fn serve_session(
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());
         status.set_active_hidraw(path);
+        status.set_gamepad_device(output.as_mut());
     }
     let resource_start = measurement
         .as_ref()
@@ -815,6 +818,7 @@ fn serve_session(
                                 bridge.virtual_gamepad = enabled;
                                 if let Some(status) = status {
                                     status.set_gamepad_enabled(enabled);
+                                    status.set_gamepad_device(output.as_mut());
                                 }
                             }
                             reload.applied(status);

@@ -357,6 +357,9 @@ profile. Disabling releases the virtual controls and closes the gamepad
 and force-feedback descriptors. Enabling recreates the configured gamepad
 identity and starts publishing from the next HID report. The readiness
 loop refreshes its feedback descriptor before polling again.
+The status socket reports the current virtual gamepad sysfs path when the
+kernel supplies one. An opt-in Linux integration test observes the actual
+device lifecycle with synthetic HID input and production control commands.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
 Updated 2026-11-22. Keyboard bindings consume physical button states

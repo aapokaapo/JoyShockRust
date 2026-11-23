@@ -40,6 +40,15 @@ CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER=sudo \
   cargo test --locked -p joyshockrust-linux uinput_cross_press_and_release -- --ignored
 ```
 
+To test live gamepad toggling without a physical controller, run the session
+test with the same uinput and evdev permissions. It feeds synthetic USB
+reports into the live bridge, toggles the gamepad through the command
+socket, and checks the Linux device and button state before and after.
+
+```sh
+cargo test --locked -p joyshockrust-linux uinput_live_gamepad_toggle -- --ignored
+```
+
 Steam acceptance uses a wired DualSense Edge and the current build.
 
 1. Unplug the controller and start `cargo run --locked -p joyshockrust-linux`.

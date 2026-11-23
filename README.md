@@ -496,6 +496,8 @@ The `active_hidraw` field reports the device path for the active session
 and reads `none` while waiting for a controller.
 `virtual_gamepad_enabled` shows the effective emulation setting, including
 while the controller is disconnected.
+`virtual_gamepad_sysfs` shows the current virtual gamepad's Linux sysfs
+path when available and reads `none` when the device is absent.
 The status and reload sockets are under `$XDG_RUNTIME_DIR/joyshockrust/`
 and are removed when the service stops.
 

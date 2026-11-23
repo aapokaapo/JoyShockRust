@@ -191,6 +191,8 @@ Controller inventory lists connected nodes independently of the service.
 Status exposes the active node for comparison with the inventory.
 The virtual gamepad can be enabled or disabled through the control socket
 while retaining the physical controller session and other outputs.
+An opt-in uinput integration test exercises this path without a physical
+controller. Kernel device verification is pending on a host with uinput.
 
 Keyboard profiles map digital buttons and D-pad directions to tap, hold
 and double-tap keys. Analog trigger travel can drive the same gestures
