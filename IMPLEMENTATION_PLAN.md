@@ -260,8 +260,12 @@ response previews and editable game calibration values. The GTK 4 editor
 uses libadwaita navigation and follows the system appearance. The tray shows the active profile's
 filename for startup profiles and successful live loads.
 
-Next, extend structured editing to other inputs. A dedicated calibration
-dialog can eventually replace the terminal prompts.
+The Touchpad page edits grid dimensions and per-cell gamepad mappings
+for contact and click independently. Resizing checks cell references
+in gamepad, gyro and keyboard bindings.
+
+Next, add structured editing for touchpad keyboard and gyro bindings.
+A dedicated calibration dialog can eventually replace the terminal prompts.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

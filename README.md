@@ -666,8 +666,13 @@ Select a physical control on the DualSense diagram or choose a DualSense
 Edge control below it. The inspector shows the selected control's tap,
 hold and double-tap keyboard or mouse actions, along with its base virtual
 gamepad remap when available. Choose **No action** to clear a gesture or
-**Same as controller** to remove the base remap. Use **Advanced TOML** for
-chords, layers, and other settings.
+**Same as controller** to remove the base remap. Use the **Advanced**
+page for TOML settings such as chords and layers.
+
+In **Touchpad**, set the number of rows and columns, select a grid
+cell, and assign separate virtual gamepad buttons to **Touch** and
+**Click**. Choose **No action** to clear a mapping. Clear or update the
+bindings in any cells you want to remove before shrinking the grid.
 
 The **Sticks** page previews each virtual stick's response curve. Each
 exponent ranges from 0.25 to 4.00 in 0.05 increments. An exponent of 1.00

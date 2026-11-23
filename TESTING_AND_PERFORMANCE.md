@@ -849,14 +849,25 @@ Shift** for hold. Select another control and return to Cross to verify
 both choices remain visible. Choose a virtual gamepad target, then use
 **Save & Apply**. Reopen the profile and check those settings. Select
 **No action** for a gesture and confirm the other action remains. In
-**Advanced TOML**, enter invalid syntax and check that validation or
+the **Advanced** page, enter invalid TOML syntax and check that validation or
 saving displays an error while the saved profile remains usable.
 
 In **Sticks**, move each response slider one step and verify its own
 preview updates. Save and check the two per-stick values in
-**Advanced TOML**. In **Gyro**, move X and Y separately. Enter RWC and
+**Advanced**. In **Gyro**, move X and Y separately. Enter RWC and
 in-game sensitivity, verify the values round-trip through saving and
 reopening, and confirm an invalid value prevents saving.
+
+In **Touchpad**, set a grid with one row and two columns. Select the
+right cell and assign **Touch** to Cross and **Click** to Square. Try
+reducing the grid to one column and confirm the editor rejects the change.
+Save and apply the two-column grid, reopen it, and check the two actions
+on the virtual gamepad while touching and clicking the right half. The
+widget test runs without a controller in a Wayland session.
+
+```sh
+cargo test --locked -p joyshockrust-editor touchpad_widgets_edit_the_selected_cell -- --ignored
+```
 
 Choose **Calibrate game sensitivity (RWC)** and a profile. While the
 terminal is open, check `outputs_paused=true` and verify the regular

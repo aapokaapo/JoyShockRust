@@ -51,7 +51,7 @@ const EDGE: [(&str, &str); 4] = [
     ("paddle-right", "Right paddle"),
 ];
 
-const GAMEPAD_TARGETS: [(&str, &str); 13] = [
+pub(crate) const GAMEPAD_TARGETS: [(&str, &str); 13] = [
     ("cross", "South · A / Cross"),
     ("circle", "East · B / Circle"),
     ("square", "West · X / Square"),
@@ -356,7 +356,7 @@ fn key_choices() -> impl Iterator<Item = (String, String)> {
         .chain((1..=12).map(|number| (format!("KEY_F{number}"), format!("F{number}"))))
 }
 
-fn dropdown(
+pub(crate) fn dropdown(
     title: &str,
     current: Option<&str>,
     default: &str,

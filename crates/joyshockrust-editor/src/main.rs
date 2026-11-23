@@ -10,6 +10,7 @@ use adw::{gtk, prelude::*};
 mod bindings;
 mod controller;
 mod sensitivity;
+mod touchpad;
 mod ui;
 
 const NEW_PROFILE: &str = "version = 1\n";

@@ -517,6 +517,11 @@ preference rows, feedback and dialogs. Only the controller outline and
 curve plots use custom drawing. The toolkit handles system appearance.
 [GNOME Human Interface Guidelines](https://developer.gnome.org/hig/patterns/index.html)
 
+The editor’s Touchpad page updates the existing grid and region TOML.
+Resizing rejects a dimension change if it would invalidate a cell
+referenced by gamepad, keyboard or gyro bindings. Saving uses the
+bridge’s existing validation.
+
 The status reply includes the filename of the last applied profile,
 without its directory. Named live loads carry the filename with the
 TOML bytes. The bridge accepts legacy name-free loads and preserves

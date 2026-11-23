@@ -6,7 +6,7 @@ use std::{
 use adw::{gio, glib, gtk, prelude::*};
 use toml_edit::DocumentMut;
 
-use crate::{Editor, controller, sensitivity};
+use crate::{Editor, controller, sensitivity, touchpad};
 
 #[derive(Clone)]
 pub struct Context {
@@ -24,7 +24,7 @@ impl Context {
             .map_err(|error| error.to_string())
     }
 
-    pub fn edit(&self, change: impl FnOnce(&mut DocumentMut) -> Result<(), &'static str>) {
+    pub fn edit(&self, change: impl FnOnce(&mut DocumentMut) -> Result<(), &'static str>) -> bool {
         let result = self.document().and_then(|mut document| {
             change(&mut document)?;
             self.editor.borrow_mut().text = document.to_string();
@@ -32,7 +32,9 @@ impl Context {
         });
         if let Err(error) = result {
             self.report(Err(error));
+            return false;
         }
+        true
     }
 
     fn report(&self, result: Result<String, String>) {
@@ -77,8 +79,9 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let pages = [
         ("buttons", "Buttons", "input-gaming-symbolic"),
         ("sticks", "Sticks", "view-grid-symbolic"),
+        ("touchpad", "Touchpad", "input-touchpad-symbolic"),
         ("gyro", "Gyro", "preferences-system-symbolic"),
-        ("advanced", "Advanced TOML", "text-x-generic-symbolic"),
+        ("advanced", "Advanced", "text-x-generic-symbolic"),
     ];
     for (name, title, icon) in pages {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -152,7 +155,7 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
 
     let bottom = adw::ViewSwitcherBar::builder().stack(&stack).build();
     toolbar.add_bottom_bar(&bottom);
-    if let Ok(condition) = adw::BreakpointCondition::parse("max-width: 800sp") {
+    if let Ok(condition) = adw::BreakpointCondition::parse("max-width: 900sp") {
         let narrow = adw::Breakpoint::new(condition);
         narrow.add_setter(&switcher, "visible", Some(&false.to_value()));
         narrow.add_setter(&bottom, "reveal", Some(&true.to_value()));
@@ -216,6 +219,7 @@ fn refresh_page(stack: &adw::ViewStack, ctx: &Context) {
     let page: gtk::Widget = match name.as_str() {
         "advanced" => advanced_page(ctx).upcast(),
         "buttons" => controller::page(ctx),
+        "touchpad" => touchpad::page(ctx),
         "sticks" => sensitivity::sticks_page(ctx),
         "gyro" => sensitivity::gyro_page(ctx),
         _ => return,
@@ -251,4 +255,69 @@ pub fn advanced_required(description: &str) -> gtk::Widget {
         .description(description)
         .build()
         .upcast()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn descendants<T: IsA<gtk::Widget>>(widget: &gtk::Widget) -> Vec<T> {
+        let mut matches = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            matches.extend(descendants::<T>(&current));
+            if let Ok(current) = current.downcast::<T>() {
+                matches.push(current);
+            }
+        }
+        matches
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor"]
+    fn touchpad_widgets_edit_the_selected_cell() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: glib::WeakRef::new(),
+            overlay: glib::WeakRef::new(),
+        };
+        let page = touchpad::page(&ctx);
+        let columns = descendants::<adw::SpinRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Columns")
+            .unwrap();
+        columns.set_value(3.0);
+        let resize = descendants::<gtk::Button>(&page)
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some("Set Grid"))
+            .unwrap();
+        resize.emit_clicked();
+        let cell = descendants::<gtk::ToggleButton>(&page)
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some("1:3"))
+            .unwrap();
+        cell.set_active(true);
+        let rows = descendants::<adw::ComboRow>(&page);
+        rows.iter()
+            .find(|row| row.title() == "Touch")
+            .unwrap()
+            .set_selected(1);
+        rows.iter()
+            .find(|row| row.title() == "Click")
+            .unwrap()
+            .set_selected(3);
+        let doc = ctx.document().unwrap();
+        assert_eq!(doc["touchpad"]["columns"].as_integer(), Some(3));
+        let regions = doc["touchpad"]["regions"].as_array_of_tables().unwrap();
+        let region = regions.get(0).unwrap();
+        assert_eq!(region["column"].as_integer(), Some(3));
+        assert_eq!(region["touch"].as_str(), Some("cross"));
+        assert_eq!(region["click"].as_str(), Some("square"));
+    }
 }

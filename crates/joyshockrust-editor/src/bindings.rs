@@ -192,7 +192,7 @@ pub fn set_gamepad(
     Ok(())
 }
 
-fn replace_value(old: &mut Value, mut new: Value) {
+pub(crate) fn replace_value(old: &mut Value, mut new: Value) {
     *new.decor_mut() = old.decor().clone();
     *old = new;
 }
