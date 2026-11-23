@@ -478,6 +478,135 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
 }
 
 #[test]
+fn remembered_profile_and_emulation_controls_work_across_service_restarts() {
+    let directory = TestDirectory::new("remembered");
+    let startup = directory.0.join("profile.toml");
+    let preset = directory.0.join("gyro preset.toml");
+    let invalid = directory.0.join("invalid.toml");
+    let status = directory.0.join("status");
+    let reload = directory.0.join("reload");
+    let notify = directory.0.join("notify");
+    let listener = UnixDatagram::bind(&notify).unwrap();
+    listener
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    fs::write(&startup, "version = 1\n[bridge]\nvirtual_gamepad = false\n").unwrap();
+    fs::write(&preset, "version = 1\n[gyro]\n").unwrap();
+    fs::write(&invalid, "version = 2\n").unwrap();
+    let binary = env!("CARGO_BIN_EXE_joyshockrust-linux");
+    let start = || {
+        for path in [&status, &reload, &directory.0.join("reload.load")] {
+            let _ = fs::remove_file(path);
+        }
+        let bridge = Bridge(
+            Command::new(binary)
+                .env("NOTIFY_SOCKET", &notify)
+                .env("XDG_CONFIG_HOME", &directory.0)
+                .arg("--profile-if-present")
+                .arg(&startup)
+                .args(["--controller-id", "ff:ff:ff:ff:ff:ff"])
+                .arg("--status-socket")
+                .arg(&status)
+                .arg("--reload-socket")
+                .arg(&reload)
+                .spawn()
+                .unwrap(),
+        );
+        let mut ready = [0; 64];
+        let len = listener.recv(&mut ready).expect("bridge readiness");
+        assert_eq!(&ready[..len], b"READY=1");
+        bridge
+    };
+    let run = |args: &[&std::ffi::OsStr]| {
+        Command::new(binary)
+            .args(args)
+            .arg(&reload)
+            .output()
+            .unwrap()
+    };
+    let check = |expected: &[&str]| {
+        let result = Command::new(binary)
+            .arg("--status")
+            .arg(&status)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        let text = String::from_utf8(result.stdout).unwrap();
+        for line in expected {
+            assert!(text.lines().any(|actual| actual == *line), "{text}");
+        }
+    };
+
+    let bridge = start();
+    check(&[
+        "profile_name=profile.toml",
+        "virtual_gamepad_enabled=false",
+        "gyro_mouse_enabled=false",
+    ]);
+    assert!(
+        run(&["--set-gyro-mouse".as_ref(), "on".as_ref()])
+            .status
+            .success()
+    );
+    check(&["virtual_gamepad_enabled=false", "gyro_mouse_enabled=true"]);
+    assert!(
+        run(&["--set-emulation".as_ref(), "on".as_ref()])
+            .status
+            .success()
+    );
+    check(&["virtual_gamepad_enabled=true", "gyro_mouse_enabled=true"]);
+    assert!(
+        run(&["--set-emulation".as_ref(), "off".as_ref()])
+            .status
+            .success()
+    );
+    check(&["virtual_gamepad_enabled=false", "gyro_mouse_enabled=false"]);
+    assert!(
+        run(&["--load-profile".as_ref(), preset.as_os_str()])
+            .status
+            .success()
+    );
+    assert!(
+        !run(&["--load-profile".as_ref(), invalid.as_os_str()])
+            .status
+            .success()
+    );
+    check(&[
+        "profile_name=gyro preset.toml",
+        "gyro_configured=true",
+        "gyro_mouse_enabled=false",
+    ]);
+    drop(bridge);
+
+    let bridge = start();
+    check(&[
+        "profile_name=gyro preset.toml",
+        "profile_source=loaded",
+        "virtual_gamepad_enabled=false",
+        "gyro_mouse_enabled=true",
+    ]);
+    assert!(run(&["--unload-profile".as_ref()]).status.success());
+    drop(bridge);
+
+    let bridge = start();
+    check(&[
+        "profile_name=",
+        "profile_source=defaults",
+        "gyro_mouse_enabled=false",
+    ]);
+    assert!(
+        run(&["--load-profile".as_ref(), preset.as_os_str()])
+            .status
+            .success()
+    );
+    drop(bridge);
+
+    fs::remove_file(&preset).unwrap();
+    let _bridge = start();
+    check(&["profile_name=profile.toml", "profile_source=startup"]);
+}
+
+#[test]
 fn whole_turn_calibration_saves_only_a_valid_measurement() {
     let directory = TestDirectory::new("whole-turn-calibration");
     let profile = directory.0.join("profile.toml");

@@ -481,6 +481,13 @@ default timings and immediate behavior of hold-only bindings are retained.
 The tray profile submenu controls the loaded profile. The editor's own
 picker controls the file being edited and asks before discarding a draft.
 Save & Apply remains the action that applies the draft to the bridge.
+When run with an optional startup profile, the bridge remembers successful
+live profile selections in a separate file next to the startup profile.
+An explicit unload is remembered as default mappings. The startup file
+is still the target of a startup profile reload and serves as fallback
+if a remembered profile cannot be opened or validated.
+Gamepad and gyro mouse output overrides are process-local and independent.
+The combined control applies both settings using one bridge request.
 
 ## Desktop process lifecycle
 

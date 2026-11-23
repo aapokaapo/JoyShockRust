@@ -663,8 +663,18 @@ while discharging. Under **Active controller**, open the submenu to
 choose a connected controller with an HID ID or select **Automatic**.
 Under **Active profile**, open the submenu to load a different
 profile from `$config_dir/joyshockrust/profiles/` or choose **Default
-mappings** to unload it. **Quit JoyShockRust** stops the bridge and closes
-the tray.
+mappings** to unload it. The user service restores the last active
+profile or the explicit **Default mappings** choice on restart. If a
+remembered file cannot be loaded, it falls back to the startup profile.
+**Quit JoyShockRust** stops the bridge and closes the tray.
+
+Use **Gamepad emulation** and **Gyro mouse** to switch each output
+independently. **Gamepad and gyro mouse** switches both together. If only
+one is enabled, the combined switch enables both. Enabling gyro mouse on
+a profile without gyro settings uses the default gyro mapping. These
+switches apply for the life of the bridge process. The CLI equivalents
+are `--set-gamepad`, `--set-gyro-mouse` and `--set-emulation`, each
+followed by `on` or `off`.
 
 **Profile editor** opens the editor on the active file when available.
 Use the profile dropdown inside the editor to open a saved profile or

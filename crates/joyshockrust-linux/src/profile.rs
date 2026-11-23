@@ -5,7 +5,10 @@ use std::{
     error::Error,
     fs::{self, OpenOptions},
     io::{self, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::OpenOptionsExt,
+    },
     path::{Path, PathBuf},
     process,
 };
@@ -174,6 +177,65 @@ pub struct RuntimeOptions {
 pub fn load(path: &Path) -> Result<RuntimeOptions, Box<dyn Error>> {
     let source = fs::read_to_string(path)?;
     parse(&source)
+}
+
+pub fn selection_path(startup: &Path) -> Option<PathBuf> {
+    let mut name = startup.file_name()?.to_os_string();
+    name.push(".active");
+    Some(startup.with_file_name(name))
+}
+
+pub fn restore_selection(selection: &Path) -> Option<(RuntimeOptions, Option<PathBuf>)> {
+    let data = match fs::read(selection) {
+        Ok(data) => data,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            eprintln!(
+                "Could not read active profile selection {}: {error}",
+                selection.display()
+            );
+            return None;
+        }
+    };
+    if data == b"defaults\n" {
+        return Some((RuntimeOptions::default(), None));
+    }
+    if let Some(raw_path) = data.strip_prefix(b"profile\n") {
+        let path = PathBuf::from(std::ffi::OsString::from_vec(raw_path.to_vec()));
+        if path.is_absolute() {
+            match load(&path) {
+                Ok(runtime) => return Some((runtime, Some(path))),
+                Err(error) => {
+                    eprintln!(
+                        "Could not restore active profile {}: {error}",
+                        path.display()
+                    );
+                    return None;
+                }
+            }
+        }
+    }
+    eprintln!(
+        "Invalid active profile selection in {}",
+        selection.display()
+    );
+    None
+}
+
+pub fn remember_selection(file: &Path, selected: Option<&Path>, defaults: bool) -> io::Result<()> {
+    if let Some(path) = selected {
+        let path = std::path::absolute(path)?;
+        let mut data = b"profile\n".to_vec();
+        data.extend_from_slice(path.as_os_str().as_bytes());
+        replace_file(file, &data)
+    } else if defaults {
+        replace_file(file, b"defaults\n")
+    } else {
+        match fs::remove_file(file) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
 }
 
 pub fn default_path() -> io::Result<PathBuf> {

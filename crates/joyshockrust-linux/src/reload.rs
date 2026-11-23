@@ -41,10 +41,13 @@ const LOAD_PROFILE_PATH_PREFIX: &[u8] = b"\0load-profile-path\n";
 const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
 const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
 const SET_GAMEPAD_PREFIX: &[u8] = b"\0set-gamepad\n";
+const SET_GYRO_MOUSE_PREFIX: &[u8] = b"\0set-gyro-mouse\n";
+const SET_EMULATION_PREFIX: &[u8] = b"\0set-emulation\n";
 const SET_OUTPUTS_PREFIX: &[u8] = b"\0set-outputs\n";
 
 pub struct Reload {
     path: Option<PathBuf>,
+    selection_path: Option<PathBuf>,
     bridge_at_startup: BridgeOptions,
     allow_controller_switch: bool,
     signal: SignalFd,
@@ -66,6 +69,7 @@ impl Reload {
         socket: Option<&Path>,
         bridge_at_startup: BridgeOptions,
         allow_controller_switch: bool,
+        selection_path: Option<PathBuf>,
     ) -> io::Result<Self> {
         let listener = socket
             .map(|path| {
@@ -110,6 +114,7 @@ impl Reload {
             SignalFd::with_flags(&signals, SfdFlags::SFD_CLOEXEC | SfdFlags::SFD_NONBLOCK)?;
         Ok(Self {
             path,
+            selection_path,
             bridge_at_startup,
             allow_controller_switch,
             signal,
@@ -142,8 +147,47 @@ enum Client {
 pub enum Update {
     Profile(Box<RuntimeOptions>),
     Selection(ControllerFilter),
-    Gamepad(bool),
+    Emulation(OutputTarget, bool),
     OutputsPaused(bool),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputTarget {
+    Gamepad,
+    GyroMouse,
+    Both,
+}
+
+impl OutputTarget {
+    pub fn from_flag(flag: &str) -> Option<Self> {
+        match flag {
+            "--set-gamepad" => Some(Self::Gamepad),
+            "--set-gyro-mouse" => Some(Self::GyroMouse),
+            "--set-emulation" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    fn prefix(self) -> &'static [u8] {
+        match self {
+            Self::Gamepad => SET_GAMEPAD_PREFIX,
+            Self::GyroMouse => SET_GYRO_MOUSE_PREFIX,
+            Self::Both => SET_EMULATION_PREFIX,
+        }
+    }
+
+    pub fn settings(
+        self,
+        enabled: bool,
+        gamepad: bool,
+        gyro: Option<bool>,
+    ) -> (bool, Option<bool>) {
+        match self {
+            Self::Gamepad => (enabled, gyro),
+            Self::GyroMouse => (gamepad, Some(enabled)),
+            Self::Both => (enabled, Some(enabled)),
+        }
+    }
 }
 
 struct InlineProfile<'a> {
@@ -166,6 +210,19 @@ impl Request<'_> {
             Some(Client::Load(_, data)) => data.strip_prefix(prefix),
             _ => None,
         }
+    }
+
+    fn emulation_payload(&self) -> Option<(OutputTarget, &[u8])> {
+        [
+            OutputTarget::Gamepad,
+            OutputTarget::GyroMouse,
+            OutputTarget::Both,
+        ]
+        .into_iter()
+        .find_map(|target| {
+            self.command_payload(target.prefix())
+                .map(|payload| (target, payload))
+        })
     }
 
     fn inline_profile(&self) -> Result<Option<InlineProfile<'_>>, &'static str> {
@@ -227,10 +284,10 @@ impl Request<'_> {
                 }
             };
         }
-        if let Some(payload) = self.command_payload(SET_GAMEPAD_PREFIX) {
+        if let Some((target, payload)) = self.emulation_payload() {
             return match payload {
-                b"on" => Some(Update::Gamepad(true)),
-                b"off" => Some(Update::Gamepad(false)),
+                b"on" => Some(Update::Emulation(target, true)),
+                b"off" => Some(Update::Emulation(target, false)),
                 _ => {
                     self.rejected("expected on or off");
                     None
@@ -314,8 +371,8 @@ impl Request<'_> {
             self.reply(b"applied\n");
             return;
         }
-        if self.command_payload(SET_GAMEPAD_PREFIX).is_some() {
-            eprintln!("Virtual gamepad setting updated from CLI");
+        if self.emulation_payload().is_some() {
+            eprintln!("Emulation setting updated from CLI");
             self.reply(b"applied\n");
             return;
         }
@@ -341,14 +398,29 @@ impl Request<'_> {
             }
             (ProfileSource::Startup, path.and_then(Path::file_name), path)
         };
+        if let Some(selection) = self.reload.selection_path.as_deref() {
+            let selected = matches!(source, ProfileSource::Loaded)
+                .then_some(path)
+                .flatten();
+            if let Err(error) = profile::remember_selection(
+                selection,
+                selected,
+                matches!(source, ProfileSource::Defaults),
+            ) {
+                eprintln!(
+                    "Could not remember active profile {}: {error}",
+                    selection.display()
+                );
+            }
+        }
         if let Some(status) = status {
             status.set_profile(source, name, path);
         }
         self.reply(b"applied\n");
     }
     pub fn rejected(&self, err: impl Display) {
-        if self.command_payload(SET_GAMEPAD_PREFIX).is_some() {
-            eprintln!("Virtual gamepad setting rejected: {err}");
+        if self.emulation_payload().is_some() {
+            eprintln!("Emulation setting rejected: {err}");
             self.reply(b"rejected\n");
             return;
         }
@@ -455,10 +527,14 @@ pub fn unload_profile(reload_socket: Option<&Path>) -> io::Result<()> {
     send_update(UNLOAD_PROFILE_REQUEST, reload_socket, "profile unload")
 }
 
-pub fn set_gamepad(enabled: bool, reload_socket: Option<&Path>) -> io::Result<()> {
-    let mut payload = SET_GAMEPAD_PREFIX.to_vec();
+pub fn set_emulation(
+    target: OutputTarget,
+    enabled: bool,
+    reload_socket: Option<&Path>,
+) -> io::Result<()> {
+    let mut payload = target.prefix().to_vec();
     payload.extend_from_slice(if enabled { b"on" } else { b"off" });
-    send_update(&payload, reload_socket, "virtual gamepad update")
+    send_update(&payload, reload_socket, "emulation update")
 }
 
 pub fn set_outputs_paused(paused: bool, reload_socket: Option<&Path>) -> io::Result<()> {
@@ -697,6 +773,7 @@ mod tests {
     #[test]
     fn reload_rejects_changes_to_bridge_settings() {
         let reload = Reload {
+            selection_path: None,
             path: Some(
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml"),
             ),
@@ -746,6 +823,7 @@ mod tests {
     #[test]
     fn direct_controller_selection_preserves_the_profile_and_other_filters() {
         let mut reload = Reload {
+            selection_path: None,
             path: Some(PathBuf::from("/dev/null")),
             bridge_at_startup: BridgeOptions::default(),
             allow_controller_switch: true,
@@ -810,6 +888,7 @@ mod tests {
         let load_socket = UnixDatagram::bind_addr(&address).unwrap();
         load_socket.set_nonblocking(true).unwrap();
         let reload = Reload {
+            selection_path: None,
             path: Some(PathBuf::from("/dev/null")),
             bridge_at_startup: BridgeOptions {
                 rumble: true,
@@ -871,6 +950,7 @@ mod tests {
         let listener = UnixListener::bind_addr(&address).unwrap();
         listener.set_nonblocking(true).unwrap();
         let reload = Reload {
+            selection_path: None,
             path: Some(PathBuf::from("/dev/null")),
             bridge_at_startup: BridgeOptions::default(),
             allow_controller_switch: false,
@@ -913,6 +993,7 @@ mod tests {
         let load_socket = UnixDatagram::bind_addr(&address).unwrap();
         load_socket.set_nonblocking(true).unwrap();
         let reload = Reload {
+            selection_path: None,
             path: None,
             bridge_at_startup: BridgeOptions::default(),
             allow_controller_switch: false,
@@ -959,7 +1040,7 @@ mod tests {
                 crate::SessionEvent::Reload(request) => {
                     assert!(matches!(
                         request.resolve(ControllerFilter::default()),
-                        Some(Update::Gamepad(true))
+                        Some(Update::Emulation(OutputTarget::Gamepad, true))
                     ));
                     feedback.replace(new_feedback.take());
                     request.applied(None);

@@ -30,6 +30,7 @@ pub struct StatusSocket {
     profile_path_hex: RefCell<Option<String>>,
     active_hidraw: RefCell<Option<String>>,
     gamepad_enabled: Cell<bool>,
+    gyro_override: Cell<Option<bool>>,
     gamepad_kind: Cell<crate::gamepad::OutputKind>,
     gamepad_sysfs: RefCell<Option<PathBuf>>,
     touchpad_grabbed: Cell<bool>,
@@ -106,6 +107,7 @@ impl StatusSocket {
             profile_path_hex: RefCell::default(),
             active_hidraw: RefCell::default(),
             gamepad_enabled: Cell::new(true),
+            gyro_override: Cell::new(None),
             gamepad_kind: Cell::default(),
             gamepad_sysfs: RefCell::default(),
             touchpad_grabbed: Cell::default(),
@@ -153,6 +155,10 @@ impl StatusSocket {
 
     pub fn set_gamepad_enabled(&self, enabled: bool) {
         self.gamepad_enabled.set(enabled);
+    }
+
+    pub fn set_gyro_override(&self, enabled: Option<bool>) {
+        self.gyro_override.set(enabled);
     }
 
     pub fn set_gamepad_device(&self, device: Option<&mut evdev::uinput::VirtualDevice>) {
@@ -277,8 +283,9 @@ impl StatusSocket {
             .as_deref()
             .map_or(std::borrow::Cow::Borrowed("none"), Path::to_string_lossy);
         let outputs_paused = self.outputs_paused.get();
+        let gyro_enabled = self.gyro_override.get().unwrap_or(snapshot.gyro_configured);
         let mut response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\nactive_hidraw={active_hidraw}\nvirtual_gamepad_enabled={gamepad_enabled}\nvirtual_gamepad_kind={gamepad_kind}\nvirtual_gamepad_sysfs={gamepad_sysfs}\nnative_touchpad_grabbed={touchpad_grabbed}\nnative_touchpad_grab_requested={touchpad_grab_requested}\noutputs_paused={outputs_paused}\nprofile_name={profile_name}\n",
+            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\nactive_hidraw={active_hidraw}\nvirtual_gamepad_enabled={gamepad_enabled}\nvirtual_gamepad_kind={gamepad_kind}\nvirtual_gamepad_sysfs={gamepad_sysfs}\nnative_touchpad_grabbed={touchpad_grabbed}\nnative_touchpad_grab_requested={touchpad_grab_requested}\noutputs_paused={outputs_paused}\nprofile_name={profile_name}\ngyro_mouse_enabled={gyro_enabled}\n",
             snapshot.gyro_configured,
             reports.decoded,
             reports.rejected,
@@ -380,6 +387,7 @@ mod tests {
             profile_path_hex: RefCell::default(),
             active_hidraw: RefCell::default(),
             gamepad_enabled: Cell::new(true),
+            gyro_override: Cell::new(None),
             gamepad_kind: Cell::default(),
             gamepad_sysfs: RefCell::default(),
             touchpad_grabbed: Cell::default(),
@@ -440,7 +448,7 @@ mod tests {
         let mut response = String::new();
         client.read_to_string(&mut response).unwrap();
         assert!(response.ends_with(
-            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=1\nuinput_mouse_button_batches=2\nprofile_source=defaults\nactive_hidraw=/dev/hidraw6\nvirtual_gamepad_enabled=true\nvirtual_gamepad_kind=generic\nvirtual_gamepad_sysfs=none\nnative_touchpad_grabbed=true\nnative_touchpad_grab_requested=true\noutputs_paused=false\nprofile_name=\n"
+            "reports_decoded=2\nreports_rejected=1\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=2\nuinput_mouse_batches=1\ncontroller_sessions_started=1\ncontroller_sessions_ended=0\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=1\nuinput_mouse_button_batches=2\nprofile_source=defaults\nactive_hidraw=/dev/hidraw6\nvirtual_gamepad_enabled=true\nvirtual_gamepad_kind=generic\nvirtual_gamepad_sysfs=none\nnative_touchpad_grabbed=true\nnative_touchpad_grab_requested=true\noutputs_paused=false\nprofile_name=\ngyro_mouse_enabled=false\n"
         ));
         let reports = status.reports.get();
         let (start, initial_count) = reports.baseline.unwrap();
@@ -492,6 +500,7 @@ mod tests {
             profile_path_hex: RefCell::default(),
             active_hidraw: RefCell::default(),
             gamepad_enabled: Cell::new(true),
+            gyro_override: Cell::new(None),
             gamepad_kind: Cell::default(),
             gamepad_sysfs: RefCell::default(),
             touchpad_grabbed: Cell::default(),
@@ -586,6 +595,7 @@ mod tests {
             profile_path_hex: RefCell::default(),
             active_hidraw: RefCell::default(),
             gamepad_enabled: Cell::new(true),
+            gyro_override: Cell::new(None),
             gamepad_kind: Cell::default(),
             gamepad_sysfs: RefCell::default(),
             touchpad_grabbed: Cell::default(),
@@ -669,7 +679,7 @@ mod tests {
             assert_eq!(
                 response,
                 format!(
-                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=0\nuinput_mouse_button_batches=0\nprofile_source=defaults\nactive_hidraw=none\nvirtual_gamepad_enabled=true\nvirtual_gamepad_kind=generic\nvirtual_gamepad_sysfs=none\nnative_touchpad_grabbed=false\nnative_touchpad_grab_requested=false\noutputs_paused=false\nprofile_name=\n"
+                    "{expected}reports_decoded=0\nreports_rejected=0\nreport_rate_hz=none\nreport_full_batches=0\nuinput_gamepad_batches=0\nuinput_mouse_batches=0\ncontroller_sessions_started={started}\ncontroller_sessions_ended={ended}\nselected_transport=usb\nselected_model=any\ncontroller_id_configured=false\nuinput_keyboard_batches=0\nuinput_mouse_button_batches=0\nprofile_source=defaults\nactive_hidraw=none\nvirtual_gamepad_enabled=true\nvirtual_gamepad_kind=generic\nvirtual_gamepad_sysfs=none\nnative_touchpad_grabbed=false\nnative_touchpad_grab_requested=false\noutputs_paused=false\nprofile_name=\ngyro_mouse_enabled={gyro}\n"
                 )
             );
         }

@@ -870,6 +870,11 @@ connection icon and decoded report rate match `joyshockrust-linux
 Under **Active controller**, open the submenu and check its title updates
 after selection. Under **Active profile**, load another profile and check
 that its name updates while the selected controller stays active.
+Restart the bridge and verify that the same profile comes back. Repeat
+with **Default mappings** selected. Toggle **Gamepad emulation** and
+**Gyro mouse** separately, then check both states after toggling
+**Gamepad and gyro mouse**. Load another profile with both outputs off
+and verify that the profile changes while the outputs stay off.
 
 Click **Profile editor** and check it opens the active profile. Choose a
 different file in the editor's dropdown and check that the tray still

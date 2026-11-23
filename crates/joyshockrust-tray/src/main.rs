@@ -73,6 +73,8 @@ struct Status {
     profile: String,
     active_profile: Option<PathBuf>,
     outputs_paused: bool,
+    gamepad_enabled: Option<bool>,
+    gyro_mouse_enabled: Option<bool>,
 }
 
 impl Status {
@@ -141,6 +143,7 @@ impl Status {
         let profile = raw_field("profile_name")
             .filter(|name| !name.is_empty())
             .unwrap_or(fallback_profile);
+        let enabled = |key| field(key).and_then(|value| value.parse::<bool>().ok());
         Some(Self {
             controller,
             connection_icon,
@@ -152,6 +155,8 @@ impl Status {
             profile: profile.into(),
             active_profile: field("profile_path_hex").and_then(decode_profile_path),
             outputs_paused: field("outputs_paused") == Some("true"),
+            gamepad_enabled: enabled("virtual_gamepad_enabled"),
+            gyro_mouse_enabled: enabled("gyro_mouse_enabled"),
         })
     }
 }
@@ -179,6 +184,7 @@ enum Action {
     CalibrateGyro,
     Unload,
     ResumeOutputs,
+    SetEmulation(&'static str, bool),
     Start,
     Autostart(bool),
     Quit,
@@ -343,6 +349,30 @@ impl ksni::Tray for Tray {
             ));
         }
 
+        let gamepad = status.and_then(|status| status.gamepad_enabled);
+        let gyro = status.and_then(|status| status.gyro_mouse_enabled);
+        let both = gamepad.zip(gyro).map(|(gamepad, gyro)| gamepad && gyro);
+        for (text, flag, setting) in [
+            ("Gamepad emulation", "--set-gamepad", gamepad),
+            ("Gyro mouse", "--set-gyro-mouse", gyro),
+            ("Gamepad and gyro mouse", "--set-emulation", both),
+        ] {
+            let checked = setting.unwrap_or(false);
+            menu.push(
+                CheckmarkItem {
+                    label: text.into(),
+                    checked,
+                    enabled: setting.is_some()
+                        && status.is_some_and(|status| !status.outputs_paused),
+                    activate: Box::new(move |tray: &mut Tray| {
+                        let _ = tray.actions.send(Action::SetEmulation(flag, !checked));
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+
         if state.editor_open {
             menu.push(label("Profile editor"));
         } else {
@@ -484,6 +514,10 @@ impl Desktop {
                 unreachable!("calibration is handled by the tray loop")
             }
             Action::ResumeOutputs => self.set_outputs_paused(false)?,
+            Action::SetEmulation(flag, enabled) => {
+                self.command(&[flag, if *enabled { "on" } else { "off" }])?;
+            }
+
             Action::Start => {
                 bridge_service("start")?;
             }
@@ -724,6 +758,55 @@ mod tests {
         assert_eq!(waiting.rate, "—");
         assert_eq!(waiting.battery, None);
         assert!(Status::parse(&connected.replace("version=1", "version=2")).is_none());
+    }
+
+    #[test]
+    fn emulation_menu_has_independent_and_combined_controls() {
+        let (actions, receiver) = mpsc::channel();
+        let mut tray = Tray {
+            actions,
+            state: TrayState {
+                status: Status::parse(
+                    "version=1\ncontroller=waiting\nvirtual_gamepad_enabled=true\ngyro_mouse_enabled=false",
+                ),
+                ..TrayState::default()
+            },
+        };
+        let controls = |tray: &Tray| {
+            tray.menu()
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    MenuItem::Checkmark(item) if item.label != "Start with system" => Some(item),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for (item, (text, flag, checked)) in controls(&tray).into_iter().zip([
+            ("Gamepad emulation", "--set-gamepad", true),
+            ("Gyro mouse", "--set-gyro-mouse", false),
+            ("Gamepad and gyro mouse", "--set-emulation", false),
+        ]) {
+            assert_eq!(item.label, text);
+            assert_eq!(item.checked, checked);
+            assert!(item.enabled);
+            (item.activate)(&mut tray);
+            assert!(
+                matches!(receiver.try_recv().unwrap(), Action::SetEmulation(command, enabled)
+                if command == flag && enabled != checked)
+            );
+        }
+        let status = tray.state.status.as_mut().unwrap();
+        status.gyro_mouse_enabled = Some(true);
+        let items = controls(&tray);
+        assert_eq!(items.len(), 3);
+        assert!(items[2].checked);
+        (items[2].activate)(&mut tray);
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            Action::SetEmulation("--set-emulation", false)
+        ));
+        tray.state.status.as_mut().unwrap().outputs_paused = true;
+        assert!(controls(&tray).iter().all(|item| !item.enabled));
     }
 
     #[test]
