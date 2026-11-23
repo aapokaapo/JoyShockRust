@@ -767,6 +767,11 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     right click after the final lift. Swipe with two fingers and confirm
     scrolling produces no click. Turn off `tap_to_click` and confirm
     the right click still works.
+25. In `[keyboard.touch_scroll]`, set `invert_vertical = true` and
+    repeat the same vertical and horizontal swipes. Verify only vertical
+    wheel events change sign and button-bound wheel actions keep their
+    direction. Set `invert_vertical = false` and `invert_horizontal = true`
+    to check the other axis.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

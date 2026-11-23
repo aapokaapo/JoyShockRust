@@ -1986,6 +1986,73 @@ mod tests {
     }
 
     #[test]
+    fn touch_scroll_inverts_only_the_selected_axis_and_preserves_button_scroll() {
+        let v = RelativeAxisCode::REL_WHEEL.0;
+        let h = RelativeAxisCode::REL_HWHEEL.0;
+        for (fingers, invert_vertical, invert_horizontal, swipe) in [
+            (1, true, false, [(v, -2), (h, 2)]),
+            (2, false, true, [(v, 2), (h, -2)]),
+        ] {
+            let config = config(&format!(
+                r#"
+                [[keyboard.bindings]]
+                button = "cross"
+                hold = {{ scroll = "up" }}
+                [keyboard.touch_scroll]
+                fingers = {fingers}
+                vertical_step = 10
+                horizontal_step = 10
+                invert_vertical = {invert_vertical}
+                invert_horizontal = {invert_horizontal}
+                "#
+            ));
+            let mut state = State::new(&config);
+            let now = Instant::now();
+            let contacts = |x, y| {
+                [
+                    Some(TouchContact { id: 1, x, y }),
+                    (fingers == 2).then_some(TouchContact {
+                        id: 2,
+                        x: x + 100,
+                        y,
+                    }),
+                ]
+            };
+            let mut pressed = Input::default();
+            pressed.controls.buttons.insert(Button::South);
+            for (input, expected) in [
+                (
+                    Input {
+                        contacts: contacts(100, 100),
+                        ..Input::default()
+                    },
+                    &[][..],
+                ),
+                (
+                    Input {
+                        contacts: contacts(120, 80),
+                        ..Input::default()
+                    },
+                    &swipe[..],
+                ),
+                (pressed, &[(v, 1)][..]),
+            ] {
+                let mut observed = Vec::with_capacity(2);
+                state
+                    .update(input, now, |events| {
+                        for event in events {
+                            assert_eq!(event.event_type(), EventType::RELATIVE);
+                            observed.push((event.code(), event.value()));
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                assert_eq!(observed, expected);
+            }
+        }
+    }
+
+    #[test]
     fn touch_scroll_settings_require_a_valid_step_for_at_least_one_axis() {
         for settings in [
             "",

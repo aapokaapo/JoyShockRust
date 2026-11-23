@@ -429,6 +429,9 @@ The mapper retains partial wheel distances in each configured axis and
 resets them as soon as the tracked contact or pair changes. Two-finger
 tracking identifies contacts independently of their report slot order.
 The feature shares the virtual wheel with mapped gestures.
+Each axis can invert its emitted touch scroll steps independently.
+The setting applies to both finger counts and leaves mapped wheel
+actions in their configured directions.
 
 Touchpad pointer motion uses one tracked contact and preserves fractional
 counts independently per axis. Adding a second contact clears its baseline,

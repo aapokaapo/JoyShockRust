@@ -12,6 +12,10 @@ const TAP_TRAVEL_SQUARED: i64 = 40 * 40;
 pub(super) struct ScrollSettings {
     vertical_step: Option<NonZeroU16>,
     horizontal_step: Option<NonZeroU16>,
+    #[serde(default)]
+    invert_vertical: bool,
+    #[serde(default)]
+    invert_horizontal: bool,
     #[serde(default = "default_fingers")]
     fingers: u8,
 }
@@ -71,6 +75,10 @@ impl ScrollState {
         };
         let delta = [-dy, dx];
         let steps = [self.settings.vertical_step, self.settings.horizontal_step];
+        let inverted = [
+            self.settings.invert_vertical,
+            self.settings.invert_horizontal,
+        ];
         std::array::from_fn(|axis| {
             let Some(step) = steps[axis] else {
                 return 0;
@@ -78,7 +86,8 @@ impl ScrollState {
             let step = i32::from(step.get()) * i32::from(self.settings.fingers);
             let total = self.remainder[axis] + delta[axis];
             self.remainder[axis] = total % step;
-            total / step
+            let ticks = total / step;
+            if inverted[axis] { -ticks } else { ticks }
         })
     }
 }

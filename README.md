@@ -296,12 +296,16 @@ coordinate units. Omit an axis to disable it. In one-finger mode, the
 bridge follows the same finger until it lifts.
 Set `fingers = 2` to scroll from the midpoint between two touches. Lifting
 either finger ends the swipe. The default is `fingers = 1`.
+Use `invert_vertical` and `invert_horizontal` to reverse the corresponding
+touch swipe direction. Both default to `false`. Button-bound wheel actions
+keep their configured directions.
 
 ```toml
 [keyboard.touch_scroll]
 fingers = 2
 vertical_step = 120
 horizontal_step = 180
+invert_vertical = true
 ```
 
 Use `[keyboard.touch_pointer]` to move the virtual pointer with one
