@@ -1,7 +1,10 @@
 use eframe::egui::{self, Color32, Rect, Stroke, vec2};
 use toml_edit::DocumentMut;
 
-use crate::bindings::{self, Gesture};
+use crate::{
+    adwaita,
+    bindings::{self, Gesture},
+};
 
 struct Control {
     id: &'static str,
@@ -120,8 +123,6 @@ fn mapped(doc: &DocumentMut, id: &str) -> bool {
         || matches!(bindings::gamepad_target(doc, id), Ok(Some(_)))
 }
 
-const HIGHLIGHT: Color32 = Color32::from_rgb(112, 83, 202);
-
 pub fn layout(ui: &mut egui::Ui, doc: &DocumentMut, selected: &mut &'static str) {
     ui.heading("DualSense controller");
     ui.label("Select a control to see or change its actions.");
@@ -130,6 +131,7 @@ pub fn layout(ui: &mut egui::Ui, doc: &DocumentMut, selected: &mut &'static str)
     let (rect, _) = ui.allocate_exact_size(vec2(width, 318.0 * scale), egui::Sense::hover());
     let origin = rect.min + vec2((width - 520.0 * scale) * 0.5, 0.0);
     let at = |x, y| origin + vec2(x, y) * scale;
+    let colors = adwaita::palette(ui);
     let painter = ui.painter();
     for (left, right, grip) in [(65., 178., 102.), (342., 455., 418.)] {
         painter.add(egui::Shape::convex_polygon(
@@ -139,28 +141,24 @@ pub fn layout(ui: &mut egui::Ui, doc: &DocumentMut, selected: &mut &'static str)
                 at(grip + 49., 257.),
                 at(grip - 49., 257.),
             ],
-            Color32::from_rgb(222, 223, 237),
+            colors.shell,
             Stroke::NONE,
         ));
-        painter.circle_filled(
-            at(grip, 251.),
-            49.0 * scale,
-            Color32::from_rgb(222, 223, 237),
-        );
+        painter.circle_filled(at(grip, 251.), 49.0 * scale, colors.shell);
     }
     painter.rect_filled(
         Rect::from_min_max(at(55., 46.), at(465., 251.)),
         65.0 * scale,
-        Color32::from_rgb(222, 223, 237),
+        colors.shell,
     );
     painter.rect_filled(
         Rect::from_min_max(at(173., 79.), at(347., 180.)),
         22.0 * scale,
-        Color32::from_rgb(197, 198, 221),
+        colors.touchpad,
     );
     painter.line_segment(
         [at(224., 150.), at(296., 150.)],
-        Stroke::new(2.0_f32, HIGHLIGHT.gamma_multiply(0.62)),
+        Stroke::new(2.0_f32, colors.accent),
     );
 
     let mut controls_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
@@ -175,13 +173,9 @@ pub fn layout(ui: &mut egui::Ui, doc: &DocumentMut, selected: &mut &'static str)
         let button = egui::Button::new(egui::RichText::new(label).size((13.5 * scale).max(10.0)))
             .min_size(bounds.size())
             .wrap_mode(egui::TextWrapMode::Extend)
-            .fill(if active {
-                Color32::from_rgb(224, 213, 249)
-            } else {
-                Color32::from_rgb(248, 247, 253)
-            })
+            .fill(if active { colors.selected } else { colors.card })
             .stroke(if active || bound {
-                Stroke::new(if active { 2.0_f32 } else { 1.0 }, HIGHLIGHT)
+                Stroke::new(if active { 2.0_f32 } else { 1.0 }, colors.accent)
             } else {
                 Stroke::NONE
             })
@@ -205,6 +199,7 @@ pub fn layout(ui: &mut egui::Ui, doc: &DocumentMut, selected: &mut &'static str)
                 response.rect.center(),
                 6.0 * scale,
                 control.glyph,
+                colors.foreground,
             );
         }
         if response.clicked() {
@@ -217,7 +212,7 @@ pub fn layout(ui: &mut egui::Ui, doc: &DocumentMut, selected: &mut &'static str)
         for (id, label) in EDGE {
             let button = egui::Button::selectable(*selected == id, label);
             let button = if mapped(doc, id) {
-                button.stroke(Stroke::new(1.0_f32, HIGHLIGHT))
+                button.stroke(Stroke::new(1.0_f32, colors.accent))
             } else {
                 button
             };
@@ -230,9 +225,15 @@ pub fn layout(ui: &mut egui::Ui, doc: &DocumentMut, selected: &mut &'static str)
     ui.label(egui::RichText::new("Thin outlines mark assigned controls.").weak());
 }
 
-fn draw_icon(painter: &egui::Painter, center: egui::Pos2, radius: f32, glyph: &str) {
+fn draw_icon(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    glyph: &str,
+    foreground: Color32,
+) {
     let at = |x, y| center + vec2(x, y) * radius;
-    let stroke = Stroke::new(1.65_f32, Color32::from_rgb(64, 53, 99));
+    let stroke = Stroke::new(1.65_f32, foreground);
     match glyph {
         "○" => {
             painter.circle_stroke(center, radius, stroke);

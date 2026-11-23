@@ -8,6 +8,7 @@ use std::{
 use eframe::egui;
 use toml_edit::DocumentMut;
 
+mod adwaita;
 mod bindings;
 mod controller;
 mod sensitivity;
@@ -193,7 +194,15 @@ impl eframe::App for Editor {
                 if ui.button("Save").clicked() {
                     self.notice = Some(self.save_and_apply(false));
                 }
-                if ui.button("Save and apply").clicked() {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("Save and apply").color(egui::Color32::WHITE),
+                        )
+                        .fill(adwaita::BLUE),
+                    )
+                    .clicked()
+                {
                     self.notice = Some(self.save_and_apply(true));
                 }
             });
@@ -325,17 +334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "JoyShockRust Profile Editor",
         options,
         Box::new(move |context| {
-            let mut visuals = egui::Visuals::light();
-            visuals.panel_fill = egui::Color32::from_rgb(247, 246, 252);
-            visuals.selection.bg_fill = egui::Color32::from_rgb(231, 224, 250);
-            visuals.selection.stroke.color = egui::Color32::from_rgb(78, 52, 158);
-            visuals.widgets.active.bg_fill = egui::Color32::from_rgb(235, 228, 252);
-            visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(241, 233, 252);
-            context.egui_ctx.set_visuals(visuals);
-            context.egui_ctx.style_mut(|style| {
-                style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-                style.spacing.button_padding = egui::vec2(9.0, 5.0);
-            });
+            adwaita::configure(&context.egui_ctx);
             Ok(Box::new(editor))
         }),
     )?;

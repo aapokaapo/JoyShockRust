@@ -256,11 +256,12 @@ saves and applies TOML profiles. Its visual controller layout selects
 physical controls and shows their keyboard, mouse and base gamepad
 bindings in an inspector. Advanced TOML covers the full profile schema.
 The Sticks and Gyro pages expose stepped sensitivity controls, radial
-response previews and editable game calibration values.
+response previews and editable game calibration values. The editor has
+light and dark Adwaita styling. The tray shows the active profile's
+filename for startup profiles and successful live loads.
 
-Next, extend structured editing to other inputs and display the active
-profile's name even when it was loaded outside the tray. A dedicated
-calibration dialog can eventually replace the terminal prompts.
+Next, extend structured editing to other inputs. A dedicated calibration
+dialog can eventually replace the terminal prompts.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

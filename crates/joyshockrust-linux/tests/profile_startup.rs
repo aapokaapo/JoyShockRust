@@ -157,7 +157,7 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
     )
     .unwrap();
     let startup = directory.0.join("profile.toml");
-    let preset = directory.0.join("preset.toml");
+    let preset = directory.0.join("gyro preset\nβ.toml");
     let status = directory.0.join("status");
     let reload = directory.0.join("reload");
     let notify = directory.0.join("notify");
@@ -204,6 +204,14 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
             format!("selected_model={model}"),
             format!("gyro_configured={gyro}"),
             format!("profile_source={source}"),
+            format!(
+                "profile_name={}",
+                match source {
+                    "startup" => "profile.toml",
+                    "loaded" => r"gyro preset\nβ.toml",
+                    _ => "",
+                }
+            ),
             format!("native_touchpad_grab_requested={}", source == "startup"),
             "native_touchpad_grabbed=false".to_owned(),
             "controller_id_configured=true".to_owned(),
@@ -237,6 +245,16 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
     };
     let result = load();
     assert!(result.status.success(), "{result:?}");
+    check("auto", "dualsense-edge", false, "loaded");
+    let invalid = directory.0.join("rejected.toml");
+    fs::write(&invalid, "version = 2\n").unwrap();
+    let rejected = Command::new(binary)
+        .arg("--load-profile")
+        .arg(invalid)
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success(), "{rejected:?}");
     check("auto", "dualsense-edge", false, "loaded");
 
     let result = Command::new(binary)

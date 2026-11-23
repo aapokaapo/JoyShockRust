@@ -649,10 +649,13 @@ and battery state, and shows the charge percentage while discharging.
 Use **Active controller** to choose a connected controller with an HID ID,
 or select **Automatic**. Place named TOML profiles in
 `$config_dir/joyshockrust/profiles/` for the **Profiles** submenu.
+The tray shows the active profile's filename, including profiles loaded
+from the command line.
 **Default mappings** unloads the profile. **Quit JoyShockRust** stops the
 bridge and closes the tray.
 
 Use **Profile editor** to open a named profile or choose **New profile**.
+The editor uses the Adwaita palette with light and dark variants.
 Select a physical control on the DualSense diagram or choose a DualSense
 Edge control below it. The inspector shows the selected control's tap,
 hold and double-tap keyboard or mouse actions, along with its base virtual

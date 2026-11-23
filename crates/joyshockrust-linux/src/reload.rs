@@ -1,5 +1,6 @@
 use std::{
     cell::Cell,
+    ffi::OsStr,
     fmt::Display,
     fs::OpenOptions,
     io::{self, Read, Write},
@@ -7,6 +8,7 @@ use std::{
         fd::{AsFd, BorrowedFd},
         linux::net::SocketAddrExt,
         unix::{
+            ffi::OsStrExt,
             fs::OpenOptionsExt,
             net::{SocketAddr, UnixDatagram, UnixListener, UnixStream},
         },
@@ -33,6 +35,8 @@ use crate::{
 };
 
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
+const MAX_PROFILE_NAME_BYTES: usize = 4096;
+const LOAD_PROFILE_PREFIX: &[u8] = b"\0load-profile\n";
 const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
 const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
 const SET_GAMEPAD_PREFIX: &[u8] = b"\0set-gamepad\n";
@@ -141,6 +145,11 @@ pub enum Update {
     OutputsPaused(bool),
 }
 
+struct InlineProfile<'a> {
+    name: Option<&'a OsStr>,
+    contents: &'a [u8],
+}
+
 impl Request<'_> {
     fn is_unload(&self) -> bool {
         matches!(&self.client, Some(Client::Load(_, data)) if data == UNLOAD_PROFILE_REQUEST)
@@ -155,6 +164,31 @@ impl Request<'_> {
             Some(Client::Load(_, data)) => data.strip_prefix(prefix),
             _ => None,
         }
+    }
+
+    fn inline_profile(&self) -> Result<Option<InlineProfile<'_>>, &'static str> {
+        let Some(Client::Load(_, data)) = &self.client else {
+            return Ok(None);
+        };
+        let Some(data) = data.strip_prefix(LOAD_PROFILE_PREFIX) else {
+            // Older clients send only the TOML bytes.
+            return Ok(Some(InlineProfile {
+                name: None,
+                contents: data,
+            }));
+        };
+        let end = data
+            .iter()
+            .position(|&byte| byte == 0)
+            .ok_or("named profile request needs a filename and profile")?;
+        let name = &data[..end];
+        if name.is_empty() || name.len() > MAX_PROFILE_NAME_BYTES || name.contains(&b'/') {
+            return Err("invalid profile filename");
+        }
+        Ok(Some(InlineProfile {
+            name: Some(OsStr::from_bytes(name)),
+            contents: &data[end + 1..],
+        }))
     }
 
     pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
@@ -203,11 +237,14 @@ impl Request<'_> {
     }
 
     fn load(&self) -> Option<RuntimeOptions> {
-        let inline = match &self.client {
-            Some(Client::Load(_, data)) => Some(data.as_slice()),
-            _ => None,
+        let inline = match self.inline_profile() {
+            Ok(inline) => inline,
+            Err(error) => {
+                self.rejected(error);
+                return None;
+            }
         };
-        let profile = if let Some(data) = inline {
+        let profile = if let Some(InlineProfile { contents: data, .. }) = inline {
             if data.len() > MAX_PROFILE_BYTES {
                 self.rejected("profile exceeds 64 KiB");
                 return None;
@@ -262,20 +299,28 @@ impl Request<'_> {
             return;
         }
         self.reload.outcome.set(Outcome::Applied);
-        let source = if self.is_unload() {
+        let (source, name) = if self.is_unload() {
             eprintln!("Profile unloaded from CLI");
-            ProfileSource::Defaults
+            (ProfileSource::Defaults, None)
         } else if matches!(self.client, Some(Client::Load(_, _))) {
             eprintln!("Profile loaded from CLI");
-            ProfileSource::Loaded
+            let name = self
+                .inline_profile()
+                .ok()
+                .flatten()
+                .and_then(|profile| profile.name);
+            (ProfileSource::Loaded, name)
         } else {
             if let Some(path) = &self.reload.path {
                 eprintln!("Profile reloaded: {}", path.display());
             }
-            ProfileSource::Startup
+            (
+                ProfileSource::Startup,
+                self.reload.path.as_deref().and_then(Path::file_name),
+            )
         };
         if let Some(status) = status {
-            status.set_profile_source(source);
+            status.set_profile(source, name);
         }
         self.reply(b"applied\n");
     }
@@ -367,7 +412,23 @@ pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<(
         ));
     }
 
-    send_update(&profile, reload_socket, "profile reload")
+    let name = source
+        .file_name()
+        .map(OsStr::as_bytes)
+        .filter(|name| name.len() <= MAX_PROFILE_NAME_BYTES)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "expected a valid profile filename",
+            )
+        })?;
+    let mut payload =
+        Vec::with_capacity(LOAD_PROFILE_PREFIX.len() + name.len() + 1 + profile.len());
+    payload.extend_from_slice(LOAD_PROFILE_PREFIX);
+    payload.extend_from_slice(name);
+    payload.push(0);
+    payload.extend_from_slice(&profile);
+    send_update(&payload, reload_socket, "profile reload")
 }
 
 pub fn unload_profile(reload_socket: Option<&Path>) -> io::Result<()> {
@@ -568,7 +629,11 @@ pub fn wait<'a>(
             return Err(io::Error::other("profile load socket lost"));
         }
         if !requested && client.is_none() && flags.contains(PollFlags::POLLIN) {
-            let mut data = vec![0; MAX_PROFILE_BYTES + 1];
+            let mut data =
+                vec![
+                    0;
+                    LOAD_PROFILE_PREFIX.len() + MAX_PROFILE_NAME_BYTES + 1 + MAX_PROFILE_BYTES + 1
+                ];
             match socket.recv_from(&mut data) {
                 Ok((len, address)) if !address.is_unnamed() => {
                     data.truncate(len);

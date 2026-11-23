@@ -1,10 +1,11 @@
-use eframe::egui::{self, Color32, Stroke, vec2};
+use eframe::egui::{self, Stroke, vec2};
+
+use crate::adwaita;
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
 const GYRO_FIELDS: [&str; 2] = ["sensitivity_x", "sensitivity_y"];
 const CALIBRATION_FIELDS: [&str; 2] = ["real_world_calibration", "in_game_sens"];
 const STICK_FIELDS: [&str; 2] = ["stick_curve_left", "stick_curve_right"];
-const ACCENT: Color32 = Color32::from_rgb(102, 77, 196);
 
 #[derive(Default)]
 pub struct CalibrationDraft {
@@ -57,9 +58,10 @@ fn calibration_values(drafts: &[String; 2]) -> Result<[f64; 2], &'static str> {
 }
 
 pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let colors = adwaita::palette(ui);
     egui::Frame::new()
-        .fill(Color32::WHITE)
-        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(225, 222, 236)))
+        .fill(colors.card)
+        .stroke(Stroke::new(1.0_f32, colors.border))
         .corner_radius(12)
         .inner_margin(egui::Margin::same(16))
         .show(ui, add)
@@ -122,7 +124,7 @@ pub fn gyro(ui: &mut egui::Ui, doc: &mut DocumentMut, draft: &mut CalibrationDra
                         .add(
                             egui::TextEdit::singleline(text)
                                 .desired_width(155.0)
-                                .background_color(Color32::from_rgb(242, 238, 251)),
+                                .background_color(adwaita::palette(ui).entry),
                         )
                         .changed();
                     ui.end_row();
@@ -200,17 +202,18 @@ fn curve_preview(ui: &mut egui::Ui, exponent: f64) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 174.0), egui::Sense::hover());
     let plot = rect.shrink(12.0);
     let at = |x: f32, y: f32| plot.left_bottom() + vec2(x * plot.width(), -y * plot.height());
+    let colors = adwaita::palette(ui);
     let painter = ui.painter();
-    painter.rect_filled(rect, 8, Color32::from_rgb(246, 244, 252));
+    painter.rect_filled(rect, 8, colors.entry);
     for tick in 0..=4 {
         let step = tick as f32 / 4.0;
-        let grid = Stroke::new(1.0_f32, Color32::from_rgb(225, 221, 239));
+        let grid = Stroke::new(1.0_f32, colors.border);
         painter.line_segment([at(step, 0.0), at(step, 1.0)], grid);
         painter.line_segment([at(0.0, step), at(1.0, step)], grid);
     }
     painter.line_segment(
         [at(0.0, 0.0), at(1.0, 1.0)],
-        Stroke::new(1.0_f32, Color32::from_gray(158)),
+        Stroke::new(1.0_f32, colors.neutral_line),
     );
     let points = (0..=64)
         .map(|i| {
@@ -218,7 +221,10 @@ fn curve_preview(ui: &mut egui::Ui, exponent: f64) {
             at(x, x.powf(exponent.clamp(0.25, 4.0) as f32))
         })
         .collect();
-    painter.add(egui::Shape::line(points, Stroke::new(2.5_f32, ACCENT)));
+    painter.add(egui::Shape::line(
+        points,
+        Stroke::new(2.5_f32, colors.accent),
+    ));
 }
 
 #[cfg(test)]

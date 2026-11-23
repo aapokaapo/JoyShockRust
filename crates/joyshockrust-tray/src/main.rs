@@ -75,12 +75,13 @@ struct Status {
 
 impl Status {
     fn parse(reply: &str) -> Option<Self> {
-        let field = |key| {
+        let raw_field = |key| {
             reply
                 .lines()
                 .filter_map(|line| line.split_once('='))
-                .find_map(|(name, value)| (name == key && value != "none").then_some(value))
+                .find_map(|(name, value)| (name == key).then_some(value))
         };
+        let field = |key| raw_field(key).filter(|&value| value != "none");
         if field("version") != Some("1") {
             return None;
         }
@@ -122,12 +123,15 @@ impl Status {
             Some("not_charging") => "Not charging".into(),
             _ => "—".into(),
         };
-        let profile = match field("profile_source") {
+        let fallback_profile = match field("profile_source") {
             Some("loaded") => "Loaded profile",
             Some("startup") => "Startup profile",
             Some("command_line") => "Command-line mappings",
             _ => "Default mappings",
         };
+        let profile = raw_field("profile_name")
+            .filter(|name| !name.is_empty())
+            .unwrap_or(fallback_profile);
         Some(Self {
             controller,
             rate,
@@ -173,7 +177,7 @@ struct Tray {
 
 fn item(label: impl Into<String>, action: Action) -> MenuItem<Tray> {
     StandardItem {
-        label: label.into(),
+        label: label.into().replace('_', "__"),
         activate: Box::new(move |tray: &mut Tray| {
             let _ = tray.actions.send(action.clone());
         }),
@@ -184,7 +188,7 @@ fn item(label: impl Into<String>, action: Action) -> MenuItem<Tray> {
 
 fn label(text: impl Into<String>) -> MenuItem<Tray> {
     StandardItem {
-        label: text.into(),
+        label: text.into().replace('_', "__"),
         enabled: false,
         ..Default::default()
     }
@@ -702,6 +706,12 @@ mod tests {
         assert_eq!(status.battery, "Discharging · 95%");
         assert_eq!(status.active_node.as_deref(), Some("/dev/hidraw6"));
         assert_eq!(status.profile, "Loaded profile");
+        assert_eq!(
+            Status::parse(&format!("{connected}\nprofile_name=gyro_profile.toml"))
+                .unwrap()
+                .profile,
+            "gyro_profile.toml"
+        );
         assert_eq!(
             Status::parse(&connected.replace("discharging", "charging"))
                 .unwrap()
