@@ -525,6 +525,13 @@ binding. Moving a simple touch binding keeps the existing sensitivity
 and calibration settings. Button, trigger and chord bindings remain
 editable in Advanced TOML. Saving uses the bridge's existing validation.
 
+The stick keyboard dialog writes into the existing `keyboard.sticks`
+records and validates the proposed profile through the bridge. Direction
+keys and both zone radii are edited together. The bridge is responsible
+for enforcing radius ordering and the requirement for a movement key
+when a zone uses keep sprint. The dialog keeps existing deadzone and
+direction hysteresis settings.
+
 The status reply includes the filename of the last applied profile,
 without its directory. Named live loads carry the filename with the
 TOML bytes. The bridge accepts legacy name-free loads and preserves

@@ -686,7 +686,13 @@ The **Sticks** page previews each virtual stick's response curve. Each
 exponent ranges from 0.25 to 4.00 in 0.05 increments. An exponent of 1.00
 is linear. A lower exponent increases response near the center. The
 profile keys are `stick_curve_left` and `stick_curve_right` and each
-falls back to the existing `stick_curve` when omitted.
+falls back to the existing `stick_curve` when omitted. Under each stick,
+open **Keyboard mapping** to assign direction keys and configure the
+inner and outer zones. Each zone offers **Hold**, **Toggle** and **Keep
+sprint**. Set the engage radius as a fraction of full deflection and
+leave the release radius empty to use the bridge default. Select
+**Update Mapping** to validate the settings and return to the profile,
+then **Save & Apply** to load them into the running bridge.
 
 The **Gyro** page has separate horizontal and vertical sensitivity
 sliders, from 0 to 100 counts per degree in 0.1 increments. Edit RWC

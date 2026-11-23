@@ -205,7 +205,11 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
     };
     let page = adw::PreferencesPage::new();
     let fallback = number(doc.as_table(), "stick_curve", 1.0);
-    for (key, title) in STICK_FIELDS.into_iter().zip(["Left stick", "Right stick"]) {
+    for ((key, title), side) in STICK_FIELDS
+        .into_iter()
+        .zip(["Left stick", "Right stick"])
+        .zip(["left", "right"])
+    {
         let group = adw::PreferencesGroup::builder()
             .title(title)
             .description("Lower exponents give more response near the center. 1.00 is linear.")
@@ -225,19 +229,20 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
             draw_curve(area, cr, width, height, plot_state.get())
         });
         let plot_ref = plot.downgrade();
-        let ctx = ctx.clone();
+        let curve_ctx = ctx.clone();
         let row = scale_row("Response exponent", initial, 0.25, 4.0, 20, move |value| {
             exponent.set(value);
             if let Some(plot) = plot_ref.upgrade() {
                 plot.queue_draw();
             }
-            ctx.edit(|doc| {
+            curve_ctx.edit(|doc| {
                 set_number(doc.as_table_mut(), key, value);
                 Ok(())
             });
         });
         group.add(&plot);
         group.add(&row);
+        group.add(&crate::stick_keys::editor_row(ctx, side, title));
         page.add(&group);
     }
     page.upcast()

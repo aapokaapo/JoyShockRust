@@ -265,8 +265,11 @@ and mouse actions for contact and click independently. It also lets a
 cell serve as the gyro input. Resizing checks cell references in gamepad,
 gyro and keyboard bindings.
 
-Next, extend structured editing to keyboard stick directions and zones.
-A dedicated calibration dialog can eventually replace the terminal prompts.
+The Sticks page edits keyboard direction keys and inner and outer zones
+independently for each stick. The mapping dialog validates the draft with
+the bridge before returning to the profile.
+
+Next, start a dedicated calibration dialog that can replace the terminal prompts.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

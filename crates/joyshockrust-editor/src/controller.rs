@@ -357,7 +357,7 @@ pub(crate) fn message_row(title: &str, detail: &str) -> adw::ActionRow {
         .build()
 }
 
-fn key_choices() -> impl Iterator<Item = (String, String)> {
+pub(crate) fn key_choices() -> impl Iterator<Item = (String, String)> {
     KEYS.iter()
         .map(|&(key, label)| (key.into(), label.into()))
         .chain(

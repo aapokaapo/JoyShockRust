@@ -37,7 +37,7 @@ impl Context {
         true
     }
 
-    fn report(&self, result: Result<String, String>) {
+    pub(crate) fn report(&self, result: Result<String, String>) {
         match result {
             Ok(message) => {
                 if let Some(overlay) = self.overlay.upgrade() {
@@ -339,5 +339,81 @@ mod tests {
         assert_eq!(keyboard["tap"].as_str(), Some("KEY_SPACE"));
         assert_eq!(doc["gyro"]["binding"]["input"].as_str(), Some("touch:1:3"));
         assert_eq!(doc["gyro"]["binding"]["mode"].as_str(), Some("hold"));
+    }
+
+    #[test]
+    #[ignore = "requires a Wayland compositor and the built bridge"]
+    fn stick_keyboard_dialog_validates_and_updates_the_profile() {
+        gtk::gdk::set_allowed_backends("wayland");
+        adw::init().unwrap();
+        let bridge = PathBuf::from(
+            std::env::var_os("JOYSHOCKRUST_TEST_BRIDGE")
+                .expect("set JOYSHOCKRUST_TEST_BRIDGE to the built joyshockrust-linux binary"),
+        );
+        let editor = Editor::open(bridge, PathBuf::new(), None).unwrap();
+        let app = adw::Application::builder()
+            .flags(gio::ApplicationFlags::NON_UNIQUE)
+            .build();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let window = adw::ApplicationWindow::builder().application(&app).build();
+        let ctx = Context {
+            editor: Rc::new(RefCell::new(editor)),
+            window: window.downgrade(),
+            overlay: glib::WeakRef::new(),
+        };
+        window.present();
+        let dialog = crate::stick_keys::mapping_dialog(&ctx, "left", "Left stick", None).unwrap();
+        dialog.present(Some(&window));
+        let content = dialog.child().unwrap();
+        let pick = |group_title: &str, row_title: &str, label: &str| {
+            let group = descendants::<adw::PreferencesGroup>(&content)
+                .into_iter()
+                .find(|group| group.title() == group_title)
+                .unwrap();
+            let row = descendants::<adw::ComboRow>(group.upcast_ref())
+                .into_iter()
+                .find(|row| row.title() == row_title)
+                .unwrap();
+            let model = row.model().unwrap().downcast::<gtk::StringList>().unwrap();
+            let index = (0..model.n_items())
+                .find(|&index| model.string(index).as_deref() == Some(label))
+                .unwrap();
+            row.set_selected(index);
+        };
+        pick("Directions", "Up", "W");
+        pick("Directions", "Left", "A");
+        pick("Inner zone", "Key", "Left Shift");
+        pick("Outer zone", "Key", "R");
+        pick("Outer zone", "Mode", "Keep sprint");
+        let threshold = descendants::<adw::PreferencesGroup>(&content)
+            .into_iter()
+            .find(|group| group.title() == "Inner zone")
+            .and_then(|group| {
+                descendants::<adw::EntryRow>(group.upcast_ref())
+                    .into_iter()
+                    .find(|row| row.title() == "Engage radius")
+            })
+            .unwrap();
+        let update = descendants::<gtk::Button>(&content)
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some("Update Mapping"))
+            .unwrap();
+        threshold.set_text("0.1");
+        update.emit_clicked();
+        assert!(ctx.document().unwrap().get("keyboard").is_none());
+        assert!(
+            descendants::<gtk::Label>(&content)
+                .iter()
+                .any(|label| label.is_visible() && label.text().contains("inner zone requires"))
+        );
+        threshold.set_text("0,5");
+        update.emit_clicked();
+        let doc = ctx.document().unwrap();
+        let stick = &doc["keyboard"]["sticks"][0];
+        assert_eq!(stick["up"].as_str(), Some("KEY_W"));
+        assert_eq!(stick["left"].as_str(), Some("KEY_A"));
+        assert_eq!(stick["inner"]["key"].as_str(), Some("KEY_LEFTSHIFT"));
+        assert_eq!(stick["outer"]["mode"].as_str(), Some("keep_sprint"));
+        window.close();
     }
 }

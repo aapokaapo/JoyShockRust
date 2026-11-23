@@ -858,6 +858,23 @@ preview updates. Save and check the two per-stick values in
 in-game sensitivity, verify the values round-trip through saving and
 reopening, and confirm an invalid value prevents saving.
 
+For the left stick, open **Keyboard mapping**. Bind Up, Left, Down and
+Right to W, A, S and D. Set inner **Key** to **Left Shift** in **Hold**
+mode at 0.5 and outer **Key** to **R** in **Keep sprint** mode at 0.8.
+Leave the release fields empty. Use **Update Mapping** and **Save &
+Apply**. Verify diagonal motion sends two keys, Shift is held only near
+the center while moving, and R pulses once per continuous movement.
+Try an inner radius below the deadzone and confirm **Update Mapping**
+shows a validation error while the dialog stays open.
+
+Run the GTK dialog test with a built bridge from a Wayland session.
+
+```sh
+cargo build --locked -p joyshockrust-linux
+JOYSHOCKRUST_TEST_BRIDGE="$PWD/target/debug/joyshockrust-linux" \
+  cargo test --locked -p joyshockrust-editor stick_keyboard_dialog_validates_and_updates_the_profile -- --ignored
+```
+
 In **Touchpad**, set a grid with one row and two columns. Select the
 right cell and assign **Touch** to Cross and **Click** to Square. Try
 reducing the grid to one column and confirm the editor rejects the change.

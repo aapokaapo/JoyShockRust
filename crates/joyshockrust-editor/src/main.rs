@@ -10,6 +10,7 @@ use adw::{gtk, prelude::*};
 mod bindings;
 mod controller;
 mod sensitivity;
+mod stick_keys;
 mod touchpad;
 mod ui;
 
@@ -91,9 +92,13 @@ impl Editor {
         if let Some(error) = self.calibration.error {
             return Err(error.into());
         }
-        let staged = stage(None, &self.text).map_err(|error| error.to_string())?;
-        run_bridge(&self.bridge, &[Path::new("--check-profile"), staged.path()])?;
+        self.validate_profile_text(&self.text)?;
         Ok("Profile is valid.".into())
+    }
+
+    fn validate_profile_text(&self, text: &str) -> Result<(), String> {
+        let staged = stage(None, text).map_err(|error| error.to_string())?;
+        run_bridge(&self.bridge, &[Path::new("--check-profile"), staged.path()])
     }
 
     fn save(&mut self) -> Result<PathBuf, String> {
