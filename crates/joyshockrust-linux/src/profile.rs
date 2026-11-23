@@ -110,6 +110,7 @@ impl BridgeFile {
     }
 }
 
+#[derive(Default)]
 pub struct RuntimeOptions {
     pub bridge: Option<BridgeOptions>,
     pub stick_curve: Option<StickCurve>,

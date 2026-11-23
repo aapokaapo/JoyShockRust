@@ -34,6 +34,7 @@ use crate::{
 
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
 const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
+const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
 
 pub struct Reload {
     path: Option<PathBuf>,
@@ -137,6 +138,10 @@ pub enum Update {
 }
 
 impl Request<'_> {
+    fn is_unload(&self) -> bool {
+        matches!(&self.client, Some(Client::Load(_, data)) if data == UNLOAD_PROFILE_REQUEST)
+    }
+
     fn selection_payload(&self) -> Option<&[u8]> {
         match &self.client {
             Some(Client::Load(_, data)) => data.strip_prefix(SELECT_CONTROLLER_PREFIX),
@@ -145,6 +150,9 @@ impl Request<'_> {
     }
 
     pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
+        if self.is_unload() {
+            return Some(Update::Profile(Box::default()));
+        }
         if let Some(payload) = self.selection_payload() {
             if !self.reload.allow_controller_switch {
                 self.rejected("controller selection changes require automatic discovery");
@@ -213,7 +221,9 @@ impl Request<'_> {
             return;
         }
         self.reload.outcome.set(Outcome::Applied);
-        if matches!(self.client, Some(Client::Load(_, _))) {
+        if self.is_unload() {
+            eprintln!("Profile unloaded from CLI");
+        } else if matches!(self.client, Some(Client::Load(_, _))) {
             eprintln!("Profile loaded from CLI");
         } else if let Some(path) = &self.reload.path {
             eprintln!("Profile reloaded: {}", path.display());
@@ -304,6 +314,10 @@ pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<(
     }
 
     send_update(&profile, reload_socket, "profile reload")
+}
+
+pub fn unload_profile(reload_socket: Option<&Path>) -> io::Result<()> {
+    send_update(UNLOAD_PROFILE_REQUEST, reload_socket, "profile unload")
 }
 
 pub fn parse_controller_selection(value: &str) -> Result<Option<ControllerId>, &'static str> {

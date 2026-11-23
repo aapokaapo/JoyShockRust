@@ -342,6 +342,10 @@ The control socket also accepts selections and inline presets when no
 startup profile path is configured. The systemd unit treats a missing
 startup file as default mappings and still reports an invalid file as a
 configuration error.
+
+Profile unload applies default mappings using the existing live update
+path. It releases held keyboard and mouse buttons and leaves the startup
+virtual gamepad configuration and current controller filter in effect.
 [Live controller selection acceptance](TESTING_AND_PERFORMANCE.md#live-controller-selection-acceptance)
 
 Updated 2026-11-22. Keyboard bindings consume physical button states

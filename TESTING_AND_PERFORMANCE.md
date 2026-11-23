@@ -602,6 +602,10 @@ stay the same through both kinds of profile updates. Use
 On a fresh user configuration without a startup profile, start the user
 service. Confirm `--select-controller` works before loading a profile.
 Then load a preset and check that the selected controller stays active.
+Run `--unload-profile` while a mapped key is held. Verify that the key
+releases, gyro output ends, and the same controller remains selected.
+If a startup profile is configured, run `--reload-profile` and verify
+the profile's mappings work again.
 
 To verify automatic startup selection, select a controller with both
 connected and restart the service. Confirm it chooses the same controller.

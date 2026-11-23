@@ -246,7 +246,23 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
         "{stdout}"
     );
     assert!(!stdout.contains("ff:ff:ff:ff:ff:fe"), "{stdout}");
+    for _ in 0..2 {
+        let result = Command::new(binary)
+            .arg("--unload-profile")
+            .arg(&reload)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        check("bluetooth", "dualsense", false);
+    }
     assert_eq!(fs::read_to_string(&startup).unwrap(), startup_contents);
+    let result = Command::new(binary)
+        .arg("--reload-profile")
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    check("bluetooth", "dualsense", true);
 }
 
 #[test]
@@ -324,4 +340,12 @@ fn controller_can_be_selected_and_a_preset_loaded_without_a_startup_profile() {
     assert!(!result.status.success(), "{result:?}");
     assert!(String::from_utf8_lossy(&result.stderr).contains("no startup profile configured"));
     check(true, "applied");
+    let result = Command::new(binary)
+        .arg("--unload-profile")
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    check(false, "applied");
+    assert_eq!(fs::read_to_string(preset).unwrap(), "version = 1\n[gyro]\n");
 }

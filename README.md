@@ -134,8 +134,11 @@ This replaces the live mappings and gyro settings as a complete profile.
 The service replies after applying or rejecting it. Loading a preset or
 reloading the startup profile keeps the current controller selection.
 The profile can omit `[bridge]` to retain the running output settings.
-The loaded preset remains active
-until another load, a reload of the startup profile or a service restart.
+The loaded preset remains active until another profile command or a
+service restart. Use `--unload-profile` to restore default mappings and
+turn off profile-driven gyro and keyboard or mouse button output. The
+service keeps the selected controller and startup virtual gamepad settings.
+Use `--reload-profile` to restore the startup profile from disk.
 Use `--install-profile` to persist a preset for the next start.
 
 Use `[bridge]` for virtual output settings such as Xbox Series output

@@ -183,6 +183,8 @@ selection changes and profile loads take effect independently.
 The user service starts without a profile file and exposes controller
 selection and preset loading immediately. A manually started bridge can
 enable the same control socket without a startup profile.
+The CLI also supports unloading a profile to restore default mappings
+during the current session.
 
 Keyboard profiles map digital buttons and D-pad directions to tap, hold
 and double-tap keys. Analog trigger travel can drive the same gestures

@@ -58,6 +58,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --status [SOCKET]\n",
         "       joyshockrust-linux --reload-profile [SOCKET]\n",
         "       joyshockrust-linux --load-profile PATH [RELOAD_SOCKET]\n",
+        "       joyshockrust-linux --unload-profile [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --select-controller ID|any [--controller-model MODEL] [--usb|--bluetooth|--auto-transport] [RELOAD_SOCKET]\n",
         "       joyshockrust-linux --launch-sdl -- COMMAND [ARGS...]\n",
         "       joyshockrust-linux --calibrate-game --profile PATH [/dev/hidrawN]\n",
@@ -90,6 +91,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut status_query = false;
     let mut reload_query = false;
     let mut load_profile_path = None;
+    let mut unload_profile = false;
     let mut controller_selection = None;
     let mut reload_path = None;
     let mut status_path = None;
@@ -197,6 +199,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 args.next()
                     .ok_or("expected a profile path after --load-profile")?,
             ));
+        } else if arg == "--unload-profile" && !unload_profile {
+            unload_profile = true;
         } else if arg == "--select-controller" && controller_selection.is_none() {
             let value = args.next().ok_or("expected a controller HID ID or any")?;
             controller_selection = Some(reload::parse_controller_selection(
@@ -316,6 +320,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let socket_commands = u8::from(status_query)
         + u8::from(reload_query)
         + u8::from(load_profile_path.is_some())
+        + u8::from(unload_profile)
         + u8::from(controller_selection.is_some());
     if show_controller_id && !diagnose {
         return Err("--show-controller-id requires --diagnose".into());
@@ -348,6 +353,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         } else {
             let result = if let Some(source) = load_profile_path.as_deref() {
                 reload::load_profile(source, path.as_deref())
+            } else if unload_profile {
+                reload::unload_profile(path.as_deref())
             } else if let Some(selection) = controller_selection {
                 reload::select_controller(selection, controller_model, transport, path.as_deref())
             } else {
@@ -359,6 +366,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             }
             if let Some(source) = load_profile_path {
                 println!("Loaded profile: {}", source.display());
+            } else if unload_profile {
+                println!("Profile unloaded");
             } else if controller_selection.is_some() {
                 println!("Controller selection updated");
             }
@@ -401,12 +410,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         return Ok(ExitCode::SUCCESS);
     }
     let default_runtime = || profile::RuntimeOptions {
-        bridge: None,
         gyro: gyro_mouse.then_some(options),
         stick_curve,
         remaps,
-        touchpad: None,
-        keyboard: None,
+        ..profile::RuntimeOptions::default()
     };
     let (mut runtime, startup_profile) = if let Some((profile_path, mode)) = profile_path {
         if mapping_options {
