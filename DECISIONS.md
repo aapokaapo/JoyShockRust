@@ -497,8 +497,13 @@ session. The separate tray process owns the StatusNotifierItem menu and
 uses the bridge's existing control and status interfaces. Put the login
 preference in XDG autostart, which launches the same tray unit as the
 application menu. Systemd serializes launches of the tray unit. The
-tray's Quit action stops the bridge before its menu disappears. Desktop
-polling and command execution stay outside the input process.
+tray's Quit action stops the bridge before its menu disappears. Both
+services stop with the graphical session. A tray restart is ordered
+after a simultaneous bridge restart, so the tray can start the bridge
+when opened without propagating a stop job during a tray restart.
+Desktop polling and command execution stay outside the input process.
+[systemd.unit](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
+· [graphical-session.target](https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html#graphical-session.target)
 [XDG Autostart](https://specifications.freedesktop.org/autostart-spec/latest/)
 · [StatusNotifierItem](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/)
 

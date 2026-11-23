@@ -658,6 +658,8 @@ systemctl --user daemon-reload
 Open **JoyShockRust** from the application menu or run
 `systemctl --user start joyshockrust-tray.service`. The tray starts the
 bridge and shows the connection icon and decoded report rate in Hz.
+After updating an existing installation, reinstall both user unit files
+and run `systemctl --user daemon-reload` before restarting the services.
 On Bluetooth, the same row shows the battery icon and the percentage
 while discharging. Under **Active controller**, open the submenu to
 choose a connected controller with an HID ID or select **Automatic**.

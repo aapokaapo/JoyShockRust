@@ -870,7 +870,10 @@ connection icon and decoded report rate match `joyshockrust-linux
 Under **Active controller**, open the submenu and check its title updates
 after selection. Under **Active profile**, load another profile and check
 that its name updates while the selected controller stays active.
-Restart the bridge and verify that the same profile comes back. Repeat
+Restart both services with `systemctl --user restart joyshockrust.service
+joyshockrust-tray.service` and verify that both are active and the same
+profile comes back. Restart the tray alone and verify the bridge
+keeps its PID. Repeat the combined restart
 with **Default mappings** selected. Toggle **Gamepad emulation** and
 **Gyro mouse** separately, then turn off **Gamepad and gyro mouse**.
 Check both outputs stop and the two selections are grayed out. Turn on

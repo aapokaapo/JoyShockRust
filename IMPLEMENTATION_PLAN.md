@@ -274,7 +274,9 @@ summarizes controller telemetry on one row, omits USB battery status,
 and labels the active controller and profile submenus. It can enable and
 disable gamepad and gyro mouse individually, with a master switch
 that retains both selections. The
-bridge restores the previous active profile on service startup. The Gyro page
+bridge restores the previous active profile on service startup. The
+user units order a simultaneous restart and tie desktop shutdown to
+the graphical session. The Gyro page
 supports separate or linked sensitivity adjustment. The editor has a separate
 picker for opening and creating profile drafts.
 
