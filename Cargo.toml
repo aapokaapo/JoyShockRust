@@ -5,6 +5,7 @@ members = [
     "crates/joyshockrust-linux",
     "crates/joyshockrust-motion",
     "crates/joyshockrust-tray",
+    "crates/joyshockrust-editor",
 ]
 resolver = "3"
 

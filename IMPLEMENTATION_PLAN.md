@@ -251,10 +251,16 @@ profile. The bridge releases its virtual outputs during calibration
 while retaining the live profile and controller selection. The tray
 resumes the bridge after the terminal exits.
 
-Next, add a profile editor for creating, validating, saving and
-applying controller bindings. A dedicated calibration dialog can
-eventually replace the terminal prompts. Display the active profile's
-name even when it was loaded outside the tray.
+The tray launches a native profile editor. The editor creates, validates,
+saves and applies TOML profiles. Its visual controller layout selects
+physical controls and shows their keyboard, mouse and base gamepad
+bindings in an inspector. Advanced TOML covers the full profile schema.
+The Sticks and Gyro pages expose stepped sensitivity controls, radial
+response previews and editable game calibration values.
+
+Next, extend structured editing to other inputs and display the active
+profile's name even when it was loaded outside the tray. A dedicated
+calibration dialog can eventually replace the terminal prompts.
 
 ## Change control
 Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

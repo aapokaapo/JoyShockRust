@@ -146,6 +146,7 @@ enum Action {
     Select(Controller),
     AutoSelect,
     Load(PathBuf),
+    Edit(Option<PathBuf>),
     Calibrate(PathBuf),
     Unload,
     ResumeOutputs,
@@ -161,6 +162,7 @@ struct TrayState {
     profiles: Vec<PathBuf>,
     autostart: bool,
     calibrating: bool,
+    editor_open: bool,
     error: Option<String>,
 }
 
@@ -303,6 +305,24 @@ impl ksni::Tray for Tray {
             }
             .into(),
         );
+        let mut editors = vec![item("New profile", Action::Edit(None))];
+        for path in &state.profiles {
+            if let Some(name) = path.file_stem() {
+                editors.push(item(
+                    name.to_string_lossy(),
+                    Action::Edit(Some(path.clone())),
+                ));
+            }
+        }
+        menu.push(
+            SubMenu {
+                label: "Profile editor".into(),
+                enabled: !state.editor_open,
+                submenu: editors,
+                ..Default::default()
+            }
+            .into(),
+        );
         menu.push(MenuItem::Separator);
         menu.push(
             CheckmarkItem {
@@ -315,7 +335,11 @@ impl ksni::Tray for Tray {
             }
             .into(),
         );
-        menu.push(item("Quit JoyShockRust", Action::Quit));
+        if state.editor_open {
+            menu.push(label("Close the profile editor before quitting"));
+        } else {
+            menu.push(item("Quit JoyShockRust", Action::Quit));
+        }
         menu
     }
 }
@@ -423,6 +447,7 @@ impl Desktop {
             Action::Load(path) => {
                 output(Command::new(&self.bridge).arg("--load-profile").arg(path))?;
             }
+            Action::Edit(_) => unreachable!("the editor is handled by the tray loop"),
             Action::Unload => {
                 self.command(&["--unload-profile"])?;
             }
@@ -461,7 +486,7 @@ exit "$result""#;
     for (program, args) in [
         ("konsole", &["--separate", "-e"][..]),
         ("gnome-terminal", &["--wait", "--"][..]),
-        ("xterm", &["-e"][..]),
+        ("foot", &["--"][..]),
     ] {
         let Some(path) = env::var_os("PATH").and_then(|paths| {
             env::split_paths(&paths)
@@ -471,6 +496,16 @@ exit "$result""#;
             continue;
         };
         let mut command = Command::new(path);
+        command.env_remove("DISPLAY");
+        match program {
+            "konsole" => {
+                command.env("QT_QPA_PLATFORM", "wayland");
+            }
+            "gnome-terminal" => {
+                command.env("GDK_BACKEND", "wayland");
+            }
+            _ => {}
+        }
         command
             .args(args)
             .args(["/bin/sh", "-c", HOLD_TERMINAL, "joyshockrust-calibration"])
@@ -482,7 +517,7 @@ exit "$result""#;
     }
     Err(io::Error::new(
         io::ErrorKind::NotFound,
-        "calibration needs Konsole, GNOME Terminal or xterm",
+        "calibration needs Konsole, GNOME Terminal or foot on Wayland",
     ))
 }
 
@@ -542,7 +577,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut published = TrayState::default();
     let mut last_inventory = None;
     let mut calibration: Option<Child> = None;
+    let mut editor: Option<Child> = None;
     while !tray.is_closed() || calibration.is_some() {
+        match editor.as_mut().map(Child::try_wait) {
+            Some(Ok(Some(status))) => {
+                editor = None;
+                if !status.success() {
+                    state.error = Some(format!("Profile editor exited with {status}"));
+                }
+            }
+            Some(Err(error)) => {
+                editor = None;
+                state.error = Some(format!("Could not wait for the profile editor: {error}"));
+            }
+            _ => {}
+        }
+        state.editor_open = editor.is_some();
         let finished = match calibration.as_mut().map(Child::try_wait) {
             Some(Ok(Some(result))) => Some(if result.success() {
                 None
@@ -589,6 +639,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         match receiver.recv_timeout(REFRESH) {
             Ok(_) if calibration.is_some() => {}
+            Ok(Action::Edit(path)) if editor.is_none() => {
+                match Command::new(desktop.bridge.with_file_name("joyshockrust-editor"))
+                    .args(path)
+                    .spawn()
+                {
+                    Ok(child) => {
+                        editor = Some(child);
+                        state.error = None;
+                    }
+                    Err(error) => {
+                        state.error = Some(format!("Could not open the profile editor: {error}"))
+                    }
+                }
+            }
+            Ok(Action::Edit(_) | Action::Quit) if editor.is_some() => {}
             Ok(Action::Calibrate(path)) => {
                 let result = state
                     .status
@@ -692,6 +757,9 @@ mod tests {
         );
         assert!(
             matches!(receiver.try_recv().unwrap(), Action::Load(selected) if selected == profile)
+        );
+        assert!(
+            matches!(receiver.try_recv().unwrap(), Action::Edit(Some(selected)) if selected == profile)
         );
     }
 }

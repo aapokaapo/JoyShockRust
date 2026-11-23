@@ -26,6 +26,8 @@ struct Profile {
     version: u32,
     bridge: Option<BridgeFile>,
     stick_curve: Option<f32>,
+    stick_curve_left: Option<f32>,
+    stick_curve_right: Option<f32>,
     #[serde(default)]
     remap_buttons: Vec<String>,
     #[serde(default)]
@@ -258,7 +260,11 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         )
         .into());
     }
-    let stick_curve = profile.stick_curve.map(StickCurve::new).transpose()?;
+    let stick_curve = StickCurve::from_profile(
+        profile.stick_curve,
+        profile.stick_curve_left,
+        profile.stick_curve_right,
+    )?;
     let mut remaps = ButtonRemaps::default();
     for rule in &profile.remap_buttons {
         remaps.add(rule)?;
@@ -517,6 +523,40 @@ mod tests {
                 let profile = format!("version = 1\n[gyro]\n{field} = {value}");
                 assert!(parse(&profile).is_err(), "{profile}");
             }
+        }
+    }
+
+    #[test]
+    fn per_stick_response_overrides_use_the_shared_curve_as_fallback() {
+        use joyshockrust_core::{Controls, Stick};
+
+        let controls = Controls {
+            left_stick: Stick { x: 0.5, y: 0.0 },
+            right_stick: Stick { x: 0.5, y: 0.0 },
+            ..Controls::default()
+        };
+        for (settings, expected) in [
+            ("stick_curve = 2", [0.25, 0.25]),
+            ("stick_curve_left = 2", [0.25, 0.5]),
+            ("stick_curve = 2\nstick_curve_right = 1", [0.25, 0.5]),
+            ("stick_curve_left = 1\nstick_curve_right = 2", [0.5, 0.25]),
+        ] {
+            let curve = parse(&format!("version = 1\n{settings}"))
+                .unwrap()
+                .stick_curve
+                .unwrap();
+            let shaped = curve.apply(controls);
+            assert_eq!([shaped.left_stick.x, shaped.right_stick.x], expected);
+        }
+        for setting in [
+            "stick_curve_left = nan",
+            "stick_curve_right = 4.01",
+            "stick_curve_left = 0.24",
+        ] {
+            assert!(
+                parse(&format!("version = 1\n{setting}")).is_err(),
+                "{setting}"
+            );
         }
     }
 

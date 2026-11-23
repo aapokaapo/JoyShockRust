@@ -493,3 +493,21 @@ before acknowledging the pause and keeps serving control requests.
 Discovery resumes with the existing profile and controller filter.
 The tray waits for the interactive calibration terminal, then resumes
 the bridge. The calibration CLI owns the profile write.
+
+The editor is a separate native window. Its controller diagram
+selects a physical input, and the inspector edits keyboard and mouse
+gestures and base gamepad remaps. Advanced TOML preserves access to
+the rest of the profile schema. The editor uses the bridge CLI for
+validation and applying profiles. New profiles use a no-clobber save.
+Existing profiles use the bridge's validated atomic replacement.
+The desktop editor uses the native Wayland window backend.
+2026-11-23. The physical-control selection and target-picker pattern
+was inspired by the DualSense Tester profile page.
+[DualSense Tester mapping page](https://github.com/daidr/dualsense-tester/blob/5bc7ecee9f9bd09c7a562b5f0f2cbc0c35c710f9/src/router/DualSenseEdge/views/_Profile/pages/CustomButtonMapping.vue)
+
+The editor groups buttons, stick response and gyro aim into separate
+pages. The visual response preview shows the same radial power curve
+that the bridge uses for virtual gamepad axes. Each stick may override
+the shared profile exponent. The game calibration fields write only
+when both values and their ratio pass validation.
+[DualSense Tester stick settings](https://github.com/daidr/dualsense-tester/blob/5bc7ecee9f9bd09c7a562b5f0f2cbc0c35c710f9/src/router/DualSenseEdge/views/_Profile/pages/JoystickSensitivity.vue)

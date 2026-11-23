@@ -832,12 +832,27 @@ an in-game landmark.
 ## Desktop tray acceptance
 
 Install the tray and bridge using the [desktop tray instructions](README.md#desktop-tray).
-Run JoyShockRust from the applications menu on a desktop with a
+Run JoyShockRust from the applications menu in a Wayland session with a
 StatusNotifierItem host. Verify the menu with no controller connected,
 then connect a supported controller over USB and Bluetooth. Check the
 reported transport, decoded report rate and battery state against
 `joyshockrust-linux --status`. Select a controller and then a profile.
 Confirm the profile load keeps the selected controller active.
+
+Under **Profile editor**, open **New profile** and name it. Select Cross
+on the controller diagram, choose **Space** for tap, then choose **Left
+Shift** for hold. Select another control and return to Cross to verify
+both choices remain visible. Choose a virtual gamepad target, then use
+**Save and apply**. Reopen the profile and check those settings. Select
+**No action** for a gesture and confirm the other action remains. In
+**Advanced TOML**, enter invalid syntax and check that validation or
+saving displays an error while the saved profile remains usable.
+
+In **Sticks**, move each response slider one step and verify its own
+preview updates. Save and check the two per-stick values in
+**Advanced TOML**. In **Gyro**, move X and Y separately. Enter RWC and
+in-game sensitivity, verify the values round-trip through saving and
+reopening, and confirm an invalid value prevents saving.
 
 Choose **Calibrate game sensitivity (RWC)** and a profile. While the
 terminal is open, check `outputs_paused=true` and verify the regular

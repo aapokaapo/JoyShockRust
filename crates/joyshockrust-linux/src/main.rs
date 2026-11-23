@@ -488,7 +488,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 Some(path) => path,
                 None => profile::default_path()?,
             };
-            profile::install(&profile_path, &destination)?;
+            if let Err(err) = profile::install(&profile_path, &destination) {
+                eprintln!("{err}");
+                return Ok(ExitCode::FAILURE);
+            }
             println!("Installed profile: {}", destination.display());
             return Ok(ExitCode::SUCCESS);
         }

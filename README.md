@@ -627,11 +627,14 @@ The service needs the same hidraw and uinput access as a manual run.
 
 ### Desktop tray
 
+Use the desktop tray and its native profile editor from a Wayland session.
+
 Install the tray beside the bridge binary and its launcher beside the
 desktop's other applications. Keep the bridge user unit installed.
 
 ```sh
 cargo install --locked --path crates/joyshockrust-tray --root "$HOME/.local"
+cargo install --locked --path crates/joyshockrust-editor --root "$HOME/.local"
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
 install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
@@ -649,9 +652,32 @@ or select **Automatic**. Place named TOML profiles in
 **Default mappings** unloads the profile. **Quit JoyShockRust** stops the
 bridge and closes the tray.
 
+Use **Profile editor** to open a named profile or choose **New profile**.
+Select a physical control on the DualSense diagram or choose a DualSense
+Edge control below it. The inspector shows the selected control's tap,
+hold and double-tap keyboard or mouse actions, along with its base virtual
+gamepad remap when available. Choose **No action** to clear a gesture or
+**Same as controller** to remove the base remap. Use **Advanced TOML** for
+chords, layers, and other settings.
+
+The **Sticks** page previews each virtual stick's response curve. Each
+exponent ranges from 0.25 to 4.00 in 0.05 increments. An exponent of 1.00
+is linear. A lower exponent increases response near the center. The
+profile keys are `stick_curve_left` and `stick_curve_right` and each
+falls back to the existing `stick_curve` when omitted.
+
+The **Gyro** page has separate horizontal and vertical sensitivity
+sliders, from 0 to 100 counts per degree in 0.1 increments. Edit RWC
+and in-game sensitivity in the **Game calibration** text fields.
+Changing these settings creates a `[gyro]` section if needed, which
+enables the profile's gyro mouse.
+
+Use **Validate** to check the profile, **Save** to write it to disk, or
+**Save and apply** to write it and load it into the running bridge.
+
 Choose a file under **Calibrate game sensitivity (RWC)** while a controller
 is connected. The tray pauses virtual outputs and opens Konsole, GNOME
-Terminal or xterm for the existing whole-turn calibration. When the
+Terminal or foot on Wayland for the existing whole-turn calibration. When the
 terminal closes, the bridge resumes with the same in-memory profile and
 controller selection. To apply the saved calibration, select the
 updated profile in **Profiles**. If the tray was interrupted and the
