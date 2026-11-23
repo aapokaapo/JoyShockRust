@@ -434,6 +434,12 @@ Touchpad pointer motion uses one tracked contact and preserves fractional
 counts independently per axis. Adding a second contact clears its baseline,
 so two-finger scrolling and single-finger pointing can share the pad.
 
+Updated 2026-11-23. The opt-in native touchpad grab is scoped to an evdev
+node under the active hidraw device's HID parent. The opened node must
+have the driver touchpad name, button-pad property and both multitouch
+axes. The session owns the grab and closing the descriptor releases it.
+[Linux touchpad registration](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L930-L950) · [evdev grab lifetime](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/evdev.c)
+
 Keyboard bindings can override hold and double-tap deadlines independently.
 Both timers use the existing monotonic report and readiness clock. The
 default timings and immediate behavior of hold-only bindings are retained.

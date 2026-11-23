@@ -1,4 +1,13 @@
-use std::{fmt, fs::File, io, os::fd::AsRawFd};
+use std::{
+    fmt,
+    fs::File,
+    io,
+    os::{
+        fd::{AsFd, AsRawFd},
+        unix::fs::MetadataExt,
+    },
+    time::{Duration, Instant},
+};
 
 use joyshockrust_input::{
     DUALSENSE_USB_CALIBRATION_REPORT_ID, DUALSENSE_USB_CALIBRATION_REPORT_LEN, DeviceModel,
@@ -16,6 +25,61 @@ struct HidrawDevInfo {
 nix::ioctl_read!(hid_get_raw_info, b'H', 0x03, HidrawDevInfo);
 nix::ioctl_readwrite_buf!(hid_get_feature, b'H', 0x07, u8);
 nix::ioctl_read_buf!(hid_get_raw_unique, b'H', 0x08, u8);
+
+pub(crate) fn hid_parent(node: &File) -> io::Result<udev::Device> {
+    udev::Device::from_devnum(udev::DeviceType::Character, node.metadata()?.rdev())?
+        .parent_with_subsystem("hid")?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "could not find the controller's HID parent",
+            )
+        })
+}
+
+pub(crate) fn wait_for_evdev<T>(
+    hidraw: &File,
+    probe: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    use nix::poll::{PollFd, PollFlags, poll};
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    open_when_ready(probe, || {
+        let delay = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(25));
+        if delay.is_zero() {
+            return Ok(false);
+        }
+        // Watch for a detach without consuming queued HID reports.
+        let mut fds = [PollFd::new(hidraw.as_fd(), PollFlags::empty())];
+        poll(&mut fds, delay.as_millis().max(1) as u16)?;
+        let flags = fds[0].revents().unwrap_or_else(PollFlags::empty);
+        if flags.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "controller detached before its evdev node was ready",
+            ));
+        }
+        Ok(true)
+    })
+}
+
+pub(crate) fn open_when_ready<T>(
+    mut probe: impl FnMut() -> io::Result<T>,
+    mut wait: impl FnMut() -> io::Result<bool>,
+) -> io::Result<T> {
+    loop {
+        match probe() {
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                ) && wait()? => {}
+            result => return result,
+        }
+    }
+}
 
 /// Controller address exposed by the Linux DualSense driver as HID unique ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

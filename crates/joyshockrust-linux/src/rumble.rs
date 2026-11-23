@@ -3,24 +3,17 @@ use std::{
     ffi::OsStr,
     fs::{File, OpenOptions},
     io,
-    os::{
-        fd::AsFd,
-        unix::fs::{MetadataExt, OpenOptionsExt},
-    },
-    time::{Duration, Instant},
+    os::unix::fs::OpenOptionsExt,
 };
 
 use evdev::{
     Device, EventSummary, FFEffect, FFEffectCode, FFEffectKind, UInputCode, uinput::VirtualDevice,
 };
-use nix::{
-    libc,
-    poll::{PollFd, PollFlags, poll},
-};
+use nix::libc;
+
+use crate::hidraw;
 
 pub const EFFECT_SLOTS: usize = 16;
-const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
-const PROBE_INTERVAL: Duration = Duration::from_millis(25);
 
 pub struct Rumble {
     physical: Device,
@@ -30,41 +23,11 @@ pub struct Rumble {
 
 impl Rumble {
     pub fn open(hidraw: &File) -> io::Result<Self> {
-        let node =
-            udev::Device::from_devnum(udev::DeviceType::Character, hidraw.metadata()?.rdev())?;
-        let hid = node.parent_with_subsystem("hid")?.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "could not find the controller's HID parent",
-            )
-        })?;
+        let hid = hidraw::hid_parent(hidraw)?;
         // hidraw can be ready before the evdev node and its active-seat ACL.
         // Resolve that race before creating the virtual device, whose force
         // feedback capabilities are fixed for the rest of this session.
-        let deadline = Instant::now() + PROBE_TIMEOUT;
-        open_when_ready(
-            || Self::probe(&hid),
-            || {
-                let delay = deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(PROBE_INTERVAL);
-                if delay.is_zero() {
-                    return Ok(false);
-                }
-
-                // Observe hangups without consuming queued HID reports.
-                let mut fds = [PollFd::new(hidraw.as_fd(), PollFlags::empty())];
-                poll(&mut fds, delay.as_millis().max(1) as u16)?;
-                let flags = fds[0].revents().unwrap_or_else(PollFlags::empty);
-                if flags.intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::NotConnected,
-                        "controller detached before force feedback was ready",
-                    ));
-                }
-                Ok(true)
-            },
-        )
+        hidraw::wait_for_evdev(hidraw, || Self::probe(&hid))
     }
 
     fn probe(hid: &udev::Device) -> io::Result<Self> {
@@ -226,22 +189,6 @@ impl Rumble {
     }
 }
 
-fn open_when_ready<T>(
-    mut probe: impl FnMut() -> io::Result<T>,
-    mut wait: impl FnMut() -> io::Result<bool>,
-) -> io::Result<T> {
-    loop {
-        match probe() {
-            Err(err)
-                if matches!(
-                    err.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
-                ) && wait()? => {}
-            result => return result,
-        }
-    }
-}
-
 fn has_force_feedback(capabilities: Option<&OsStr>) -> bool {
     // Sysfs prints a whitespace-separated set of hexadecimal bitmap words.
     // Test for a nonzero bitmap independent of the kernel's word size.
@@ -256,6 +203,7 @@ fn has_force_feedback(capabilities: Option<&OsStr>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hidraw::open_when_ready;
 
     #[test]
     fn rumble_probe_skips_event_nodes_without_force_feedback() {

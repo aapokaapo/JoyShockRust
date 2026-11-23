@@ -11,6 +11,7 @@ use evdev::{Device, KeyCode};
 use joyshockrust_input::{DeviceModel, Transport};
 
 use crate::{
+    SessionDevice,
     discovery::ControllerFilter,
     hidraw::Identity,
     profile::{BridgeOptions, RuntimeOptions},
@@ -177,15 +178,16 @@ fn uinput_live_gamepad_toggle() {
             &mut RuntimeOptions::default(),
             Some(&reload),
             Some(&status),
-            Identity {
-                model: DeviceModel::DualSenseEdge,
-                transport: Transport::Usb,
+            SessionDevice {
+                identity: Identity {
+                    model: DeviceModel::DualSenseEdge,
+                    transport: Transport::Usb,
+                },
+                filter: ControllerFilter::default(),
+                path: Path::new("/dev/hidraw-test"),
+                grab_touchpad: false,
             },
-            (
-                &mut bridge,
-                ControllerFilter::default(),
-                Path::new("/dev/hidraw-test"),
-            ),
+            &mut bridge,
             None,
         )
         .unwrap();

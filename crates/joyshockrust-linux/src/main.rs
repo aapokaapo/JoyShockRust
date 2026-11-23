@@ -69,7 +69,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "       joyshockrust-linux --calibrate-game COUNTS IN_GAME_SENS [MEASURED_TURNS]\n",
         "       joyshockrust-linux --benchmark-reports COUNT [--benchmark-timeout SECONDS] [--profile PATH] [--bluetooth|--auto-transport] [/dev/hidrawN]\n",
         "bridge options: [--usb|--bluetooth|--auto-transport] [--controller-model any|dualsense|dualsense-edge] [--controller-id ID|any]\n",
-        "                [--gamepad generic|xbox360|xbox-series] [--rumble] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
+        "                [--gamepad generic|xbox360|xbox-series] [--rumble] [--grab-touchpad] [--status-socket SOCKET] [--reload-socket SOCKET]\n",
         "usage: joyshockrust-linux [--stick-curve EXPONENT] [--remap-button SOURCE=TARGET]... [--layer-remap MODIFIER:SOURCE=TARGET]... ",
         "[--gyro-mouse [--calibrate-gyro] [--flick-stick COUNTS_PER_DEGREE] [BINDING]] [/dev/hidrawN]\n",
         "BINDING: --gyro-hold BUTTON | --gyro-toggle BUTTON | --gyro-tap-hold BUTTON | ",
@@ -103,6 +103,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut status_path = None;
     let mut gamepad_kind = None;
     let mut rumble_enabled = false;
+    let mut grab_touchpad = false;
     let mut transport = None;
     let mut controller_model = None;
     let mut controller_id = None;
@@ -273,6 +274,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             )?);
         } else if arg == "--rumble" && !rumble_enabled {
             rumble_enabled = true;
+        } else if arg == "--grab-touchpad" && !grab_touchpad {
+            grab_touchpad = true;
         } else if arg == "--gamepad" && gamepad_kind.is_none() {
             let value = args
                 .next()
@@ -329,8 +332,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         return Err("gyro options require --gyro-mouse".into());
     }
     let mapping_options = gyro_mouse || stick_curve.is_some() || !remaps.is_empty();
-    let bridge_options =
-        status_path.is_some() || reload_path.is_some() || gamepad_kind.is_some() || rumble_enabled;
+    let bridge_options = status_path.is_some()
+        || reload_path.is_some()
+        || gamepad_kind.is_some()
+        || rumble_enabled
+        || grab_touchpad;
     let selection_options =
         transport.is_some() || controller_model.is_some() || controller_id.is_some();
     let socket_commands = u8::from(status_query)
@@ -564,8 +570,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             &mut runtime,
             reload,
             status,
-            identity,
-            (&mut bridge, filter, &path),
+            SessionDevice {
+                identity,
+                filter,
+                path: &path,
+                grab_touchpad,
+            },
+            &mut bridge,
             Some(&mut measurement),
         );
         measurement.write(identity, result.is_err(), std::io::stdout().lock())?;
@@ -589,8 +600,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             &mut runtime,
             reload,
             status,
-            identity,
-            (&mut bridge, filter, &path),
+            SessionDevice {
+                identity,
+                filter,
+                path: &path,
+                grab_touchpad,
+            },
+            &mut bridge,
             None,
         )?;
     } else {
@@ -605,8 +621,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     &mut runtime,
                     reload,
                     status,
-                    identity,
-                    (&mut bridge, filter, path),
+                    SessionDevice {
+                        identity,
+                        filter,
+                        path,
+                        grab_touchpad,
+                    },
+                    &mut bridge,
                     None,
                 ),
                 discovery::Event::Reload(reload, current_filter) => {
@@ -694,17 +715,26 @@ fn open_gamepad(
 }
 
 #[cfg(target_os = "linux")]
+struct SessionDevice<'a> {
+    identity: Identity,
+    filter: discovery::ControllerFilter,
+    path: &'a std::path::Path,
+    grab_touchpad: bool,
+}
+
+#[cfg(target_os = "linux")]
 fn serve_session(
     input: &mut std::fs::File,
     runtime: &mut profile::RuntimeOptions,
     reload: Option<&reload::Reload>,
     status: Option<&status::StatusSocket>,
-    identity: Identity,
-    (bridge, filter, path): (
-        &mut profile::BridgeOptions,
-        discovery::ControllerFilter,
-        &std::path::Path,
-    ),
+    SessionDevice {
+        identity,
+        filter,
+        path,
+        grab_touchpad,
+    }: SessionDevice<'_>,
+    bridge: &mut profile::BridgeOptions,
     mut measurement: Option<&mut benchmark::Benchmark>,
 ) -> std::io::Result<Option<discovery::ControllerFilter>> {
     use std::{
@@ -730,10 +760,22 @@ fn serve_session(
     let mut state = gamepad::GamepadState::new(bridge.gamepad);
     let mut layer_state = gamepad::RemapState::default();
     let mut touch_click = touchpad::ClickState::default();
+    let native_touchpad = if grab_touchpad {
+        match touchpad::grab_native(input) {
+            Ok(device) => Some(device),
+            Err(err) => {
+                eprintln!("Native touchpad grab unavailable: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());
         status.set_active_hidraw(path);
         status.set_gamepad_device(output.as_mut());
+        status.set_touchpad_grabbed(native_touchpad.is_some());
     }
     let resource_start = measurement
         .as_ref()
@@ -932,6 +974,7 @@ fn serve_session(
         Ok(())
     };
     let result = result.and(release_gamepad).and(release_keyboard);
+    drop(native_touchpad);
     if let Some((selection, request)) = switch {
         if let Err(err) = &result {
             request.rejected(err);

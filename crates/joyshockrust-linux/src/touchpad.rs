@@ -1,6 +1,95 @@
+use std::{
+    fs::{File, OpenOptions},
+    io,
+    os::unix::fs::OpenOptionsExt,
+};
+
+use evdev::{AbsoluteAxisCode, AttributeSetRef, PropType, raw_stream::RawDevice};
 use joyshockrust_core::{Button, Buttons};
 use joyshockrust_input::{DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH, TouchContact};
 use serde::Deserialize;
+
+use crate::hidraw;
+
+pub fn grab_native(hidraw: &File) -> io::Result<RawDevice> {
+    let hid = hidraw::hid_parent(hidraw)?;
+    hidraw::wait_for_evdev(hidraw, || probe_native(&hid))
+}
+
+fn probe_native(hid: &udev::Device) -> io::Result<RawDevice> {
+    let mut devices = udev::Enumerator::new()?;
+    devices.match_parent(hid)?;
+    devices.match_subsystem("input")?;
+    let mut last_error = None;
+    for node in devices.scan_devices()? {
+        if !node.sysname().as_encoded_bytes().starts_with(b"event") {
+            continue;
+        }
+        let Some(path) = node.devnode() else {
+            continue;
+        };
+        let Some(parent) = node.parent_with_subsystem("input")? else {
+            continue;
+        };
+        if !parent
+            .attribute_value("name")
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|name| name.ends_with(" Touchpad"))
+        {
+            continue;
+        }
+        match open_native(path, hid) {
+            Ok(Some(device)) => return Ok(device),
+            Ok(None) => {}
+            Err(err) => {
+                last_error = Some(io::Error::new(
+                    err.kind(),
+                    format!("{}: {err}", path.display()),
+                ))
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "no matching native touchpad evdev node",
+        )
+    }))
+}
+
+fn open_native(path: &std::path::Path, hid: &udev::Device) -> io::Result<Option<RawDevice>> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(path)?;
+    // Recheck parent and capabilities on the opened descriptor before grabbing.
+    if hidraw::hid_parent(&file)?.syspath() != hid.syspath() {
+        return Ok(None);
+    }
+    let mut device = RawDevice::from_fd(file.into())?;
+    if !matches_touchpad(
+        device.name(),
+        device.properties(),
+        device.supported_absolute_axes(),
+    ) {
+        return Ok(None);
+    }
+    device.grab()?;
+    Ok(Some(device))
+}
+
+fn matches_touchpad(
+    name: Option<&str>,
+    properties: &AttributeSetRef<PropType>,
+    axes: Option<&AttributeSetRef<AbsoluteAxisCode>>,
+) -> bool {
+    name.is_some_and(|name| name.ends_with(" Touchpad"))
+        && properties.contains(PropType::BUTTONPAD)
+        && axes.is_some_and(|axes| {
+            axes.contains(AbsoluteAxisCode::ABS_MT_POSITION_X)
+                && axes.contains(AbsoluteAxisCode::ABS_MT_POSITION_Y)
+        })
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -170,6 +259,32 @@ mod tests {
     use crate::{gamepad::GamepadState, profile};
     use evdev::KeyCode;
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+    #[test]
+    fn native_grab_requires_the_touchpad_name_and_capabilities() {
+        use evdev::AttributeSet;
+
+        let properties: AttributeSet<_> = [PropType::BUTTONPAD].into_iter().collect();
+        let axes: AttributeSet<_> = [
+            AbsoluteAxisCode::ABS_MT_POSITION_X,
+            AbsoluteAxisCode::ABS_MT_POSITION_Y,
+        ]
+        .into_iter()
+        .collect();
+        let sensor_axes: AttributeSet<_> = [AbsoluteAxisCode::ABS_X, AbsoluteAxisCode::ABS_Y]
+            .into_iter()
+            .collect();
+        let name = Some("DualSense Edge Wireless Controller Touchpad");
+        assert!(matches_touchpad(name, &properties, Some(&axes)));
+        assert!(!matches_touchpad(
+            Some("DualSense Edge Wireless Controller Motion Sensors"),
+            &properties,
+            Some(&axes)
+        ));
+        assert!(!matches_touchpad(name, &AttributeSet::new(), Some(&axes)));
+        assert!(!matches_touchpad(name, &properties, Some(&sensor_axes)));
+        assert!(!matches_touchpad(name, &properties, None));
+    }
 
     const PROFILE: &str = r#"
         version = 1

@@ -316,8 +316,12 @@ sensitivity_x = 0.5
 sensitivity_y = 0.5
 ```
 
-The desktop may also use the physical controller touchpad. Check the
-**JoyShockRust Button Mouse** event stream to verify this mapping separately.
+If the desktop also uses the physical controller touchpad, launch the
+bridge with `--grab-touchpad`. The flag reserves the active controller's
+native touchpad evdev node for the duration of its session. Touch input
+still reaches the profile through hidraw. With a status socket,
+`native_touchpad_grabbed=true` confirms the grab. If access fails, the
+bridge logs the reason and continues serving the profile.
 
 Use `chord` in place of `button` or `trigger` to require two active
 inputs. Either press order works. The second input completes the chord,

@@ -207,6 +207,8 @@ One- or two-finger touchpad swipes can emit wheel steps at independent axis
 distances.
 One-finger swipes can also drive relative pointer motion with separate axis
 sensitivity, yielding to two-finger scrolling.
+An opt-in session grab can suppress native evdev touchpad events from the
+active controller while HID mappings continue. Hardware validation is pending.
 An opt-in uinput test covers the timed mouse tap and held-key cleanup with
 both virtual devices and synthetic USB reports.
 Deadline and output handling have synthetic coverage. The bridge supports

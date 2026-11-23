@@ -747,6 +747,12 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     finger emits pointer movement and two fingers emit wheel steps. Lift
     one finger, then continue moving the other. Pointer motion should
     resume from the remaining finger's new baseline without a jump.
+21. Run the bridge with the touch pointer profile and `--grab-touchpad`.
+    Verify that the native touchpad event stream is quiet while the
+    JoyShockRust pointer still moves. Check the physical gamepad buttons
+    still work. With a status socket, check `native_touchpad_grabbed=true`.
+    Stop the bridge, confirm native touchpad input resumes, and repeat
+    on Bluetooth.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a
