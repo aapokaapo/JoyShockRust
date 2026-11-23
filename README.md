@@ -251,7 +251,9 @@ thresholds can overlap, so a deeper pull can add a second key. For a
 partial-only binding, add a second pair of thresholds, for example
 `l2:0.45:0.35:0.95:0.85`. It uses the first pair for the lower edge and
 the second pair to switch to the full stage. A full pull suppresses the
-partial tap during that pull.
+partial tap during that pull by default. To keep the partial stage
+active through full travel, set `l2 = true` or `r2 = true` under
+`[keyboard.keep_partial]` for the relevant trigger.
 
 ```toml
 [[keyboard.bindings]]
@@ -679,6 +681,9 @@ At the top of **Buttons**, choose the **Virtual gamepad type**. Selecting
 L2 or R2 shows **Partial pull** and **Full pull** keyboard and mouse
 actions in addition to the digital button. A partial pull engages at
 45%, and a full pull at 95%. The release thresholds are 35% and 85%.
+Turn on **Keep partial action at full pull** to hold both assigned keys
+at full travel. The switch is off by default, so the full action takes
+over. L2 and R2 have separate switches.
 Choose **Save & Apply** to use the new settings.
 
 In **Touchpad**, set the number of rows and columns, select a grid

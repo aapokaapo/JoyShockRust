@@ -212,6 +212,45 @@ pub fn set_action(
     Ok(())
 }
 
+const KEEP_PARTIAL_ERROR: &str = "Edit this trigger setting in Advanced TOML.";
+
+pub fn keep_partial(doc: &DocumentMut, trigger: &str) -> Result<bool, &'static str> {
+    let Some(keyboard) = doc.get("keyboard") else {
+        return Ok(false);
+    };
+    let keyboard = keyboard.as_table_like().ok_or(KEEP_PARTIAL_ERROR)?;
+    let Some(modes) = keyboard.get("keep_partial") else {
+        return Ok(false);
+    };
+    let modes = modes.as_table_like().ok_or(KEEP_PARTIAL_ERROR)?;
+    modes
+        .get(trigger)
+        .map_or(Ok(false), |item| item.as_bool().ok_or(KEEP_PARTIAL_ERROR))
+}
+
+pub fn set_keep_partial(
+    doc: &mut DocumentMut,
+    trigger: &str,
+    enabled: bool,
+) -> Result<(), &'static str> {
+    let keyboard = doc
+        .entry("keyboard")
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_like_mut()
+        .ok_or(KEEP_PARTIAL_ERROR)?;
+    let modes = keyboard
+        .entry("keep_partial")
+        .or_insert_with(|| value(toml_edit::InlineTable::new()))
+        .as_table_like_mut()
+        .ok_or(KEEP_PARTIAL_ERROR)?;
+    if let Some(previous) = modes.get_mut(trigger).and_then(Item::as_value_mut) {
+        replace_value(previous, Value::from(enabled));
+    } else {
+        modes.insert(trigger, value(enabled));
+    }
+    Ok(())
+}
+
 pub fn set_output_kind(doc: &mut DocumentMut, kind: Option<&str>) -> Result<(), &'static str> {
     if kind.is_none() && !doc.contains_key("bridge") {
         return Ok(());

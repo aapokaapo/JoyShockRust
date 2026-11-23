@@ -131,7 +131,7 @@ fn trigger_stages(id: &str) -> [(&'static str, &'static str, String); 2] {
     [
         (
             "Partial pull",
-            "Engages at 45%. Releases at 35% or when the full stage activates.",
+            "Engages at 45% and releases at 35% travel.",
             format!("{id}:0.45:0.35:0.95:0.85"),
         ),
         (
@@ -340,6 +340,9 @@ fn show_bindings(
                 .title(title)
                 .description(description)
                 .build();
+            if title == "Partial pull" {
+                add_keep_partial_row(&group, ctx, &doc, selected);
+            }
             let key_ctx = ctx.clone();
             let key_button = button.clone();
             let binding = bindings::binding(&doc, BindingInput::Trigger(&spec));
@@ -378,6 +381,31 @@ fn show_bindings(
             Err(error) => unavailable(&gamepad, "Output button", error),
         }
     }
+}
+
+fn add_keep_partial_row(
+    group: &adw::PreferencesGroup,
+    ctx: &Context,
+    doc: &DocumentMut,
+    trigger: &'static str,
+) {
+    let enabled = match bindings::keep_partial(doc, trigger) {
+        Ok(enabled) => enabled,
+        Err(error) => {
+            group.add(&message_row("Keep partial action at full pull", error));
+            return;
+        }
+    };
+    let row = adw::SwitchRow::builder()
+        .title("Keep partial action at full pull")
+        .subtitle("On keeps both stages active at full pull. Off switches to the full stage.")
+        .active(enabled)
+        .build();
+    let ctx = ctx.clone();
+    row.connect_active_notify(move |row| {
+        ctx.edit(|doc| bindings::set_keep_partial(doc, trigger, row.is_active()));
+    });
+    group.add(&row);
 }
 
 pub(crate) fn keyboard_rows(

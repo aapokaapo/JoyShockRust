@@ -857,7 +857,10 @@ then check `virtual_gamepad_kind=xbox-series` and the replacement device
 in Steam. In the L2 inspector set **Partial pull → Hold** to Q and
 **Full pull → Hold** to E. Check that Q is held partway and E takes over
 at full travel. With partial **Tap** configured, check that a full pull
-and release does not emit that partial tap.
+and release does not emit that partial tap. Enable **Keep partial action
+at full pull** for L2 and save. Verify Q stays held when E engages, then
+ease off until E releases at 85% and Q releases at 35%. Check that R2
+still switches stages with its default setting.
 
 In **Sticks**, move each response slider one step and verify its own
 preview updates. Save and check the two per-stick values in

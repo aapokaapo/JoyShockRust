@@ -11,7 +11,7 @@ use joyshockrust_core::{Button, Controls, DPad};
 use joyshockrust_input::{InputReport, TouchContact};
 use serde::Deserialize;
 
-use crate::gyro_gate::{self, DOUBLE_TAP_WINDOW, HOLD_TIME, TriggerGate};
+use crate::gyro_gate::{self, DOUBLE_TAP_WINDOW, HOLD_TIME, TriggerGate, TriggerSide};
 use crate::status::StatusSocket;
 use crate::touchpad::{Grid, TouchRegion};
 
@@ -32,9 +32,27 @@ pub struct Settings {
     #[serde(default)]
     bindings: Vec<RawBinding>,
     #[serde(default)]
+    keep_partial: KeepPartial,
+    #[serde(default)]
     sticks: Vec<stick::Settings>,
     touch_scroll: Option<touch_motion::ScrollSettings>,
     touch_pointer: Option<touch_motion::PointerSettings>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct KeepPartial {
+    l2: bool,
+    r2: bool,
+}
+
+impl KeepPartial {
+    fn for_side(&self, side: TriggerSide) -> bool {
+        match side {
+            TriggerSide::Left => self.l2,
+            TriggerSide::Right => self.r2,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -238,14 +256,29 @@ impl Binding {
 enum BindingSource {
     Single(Source),
     Chord(Source, Source),
-    PartialTrigger(TriggerGate, TriggerGate),
+    PartialTrigger {
+        lower: TriggerGate,
+        upper: TriggerGate,
+        keep_partial: bool,
+    },
 }
 
 impl PartialEq for BindingSource {
     fn eq(&self, other: &Self) -> bool {
         match (*self, *other) {
             (Self::Single(a), Self::Single(b)) => a == b,
-            (Self::PartialTrigger(a, b), Self::PartialTrigger(c, d)) => a == c && b == d,
+            (
+                Self::PartialTrigger {
+                    lower: a,
+                    upper: b,
+                    keep_partial: keep_a,
+                },
+                Self::PartialTrigger {
+                    lower: c,
+                    upper: d,
+                    keep_partial: keep_b,
+                },
+            ) => a == c && b == d && keep_a == keep_b,
             (Self::Chord(a, b), Self::Chord(c, d)) => (a == c && b == d) || (a == d && b == c),
             _ => false,
         }
@@ -324,7 +357,11 @@ impl Settings {
                 }
                 (None, Some(spec), None) => {
                     let source = match TriggerGate::partial(&spec)? {
-                        Some((lower, upper)) => BindingSource::PartialTrigger(lower, upper),
+                        Some((lower, upper)) => BindingSource::PartialTrigger {
+                            lower,
+                            upper,
+                            keep_partial: self.keep_partial.for_side(lower.side()),
+                        },
                         None => BindingSource::Single(Source::trigger(&spec)?),
                     };
                     (source, spec)
@@ -441,7 +478,19 @@ impl Gesture {
                 self.source_pressed[0] = source.pressed(input, click, self.source_pressed[0]);
                 self.source_pressed[0]
             }
-            BindingSource::PartialTrigger(lower, upper) => {
+            BindingSource::PartialTrigger {
+                lower,
+                keep_partial: true,
+                ..
+            } => {
+                self.source_pressed[0] = lower.pressed(&input.controls, self.source_pressed[0]);
+                self.source_pressed[0]
+            }
+            BindingSource::PartialTrigger {
+                lower,
+                upper,
+                keep_partial: false,
+            } => {
                 self.source_pressed[0] = lower.pressed(&input.controls, self.source_pressed[0]);
                 self.source_pressed[1] = upper.pressed(&input.controls, self.source_pressed[1]);
                 if self.source_pressed[1] {
@@ -1913,6 +1962,60 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
+                expected,
+                "{travel}"
+            );
+        }
+    }
+
+    #[test]
+    fn keeping_partial_holds_applies_only_to_the_configured_trigger() {
+        let config = config(
+            r#"
+            [keyboard.keep_partial]
+            l2 = true
+            [[keyboard.bindings]]
+            trigger = "l2:0.45:0.35:0.95:0.85"
+            hold = "KEY_Q"
+            [[keyboard.bindings]]
+            trigger = "l2:0.95:0.85"
+            hold = "KEY_E"
+            [[keyboard.bindings]]
+            trigger = "r2:0.45:0.35:0.95:0.85"
+            hold = "KEY_A"
+            [[keyboard.bindings]]
+            trigger = "r2:0.95:0.85"
+            hold = "KEY_D"
+        "#,
+        );
+        let mut state = State::new(&config);
+        for (travel, expected) in [
+            (0.35, [false, false, false, false]),
+            (0.50, [true, false, true, false]),
+            (0.95, [true, true, false, true]),
+            (0.90, [true, true, false, true]),
+            (0.85, [true, false, true, false]),
+            (0.40, [true, false, true, false]),
+            (0.35, [false, false, false, false]),
+            (1.00, [true, true, false, true]),
+            (0.00, [false, false, false, false]),
+        ] {
+            let controls = Controls {
+                left_trigger: travel,
+                right_trigger: travel,
+                ..Default::default()
+            };
+            state
+                .update(input(controls), Instant::now(), |_| Ok(()))
+                .unwrap();
+            let keys = [
+                KeyCode::KEY_Q,
+                KeyCode::KEY_E,
+                KeyCode::KEY_A,
+                KeyCode::KEY_D,
+            ];
+            assert_eq!(
+                keys.map(|key| state.held.contains(key)),
                 expected,
                 "{travel}"
             );

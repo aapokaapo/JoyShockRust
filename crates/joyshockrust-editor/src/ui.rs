@@ -567,7 +567,25 @@ pub(crate) mod tests {
                 .unwrap();
             select(&row, key);
         }
+        let keep_partial = |page: &gtk::Widget| {
+            descendants::<adw::SwitchRow>(page)
+                .into_iter()
+                .find(|row| row.title() == "Keep partial action at full pull")
+                .unwrap()
+        };
+        let l2 = keep_partial(&page);
+        assert!(!l2.is_active());
+        l2.set_active(true);
+        ctx.editor.borrow_mut().selected = "r2";
+        let r2_page = controller::page(&ctx);
+        let r2 = keep_partial(&r2_page);
+        assert!(!r2.is_active());
+        r2.set_active(true);
+        l2.set_active(false);
+
         let doc = ctx.document().unwrap();
+        assert_eq!(doc["keyboard"]["keep_partial"]["l2"].as_bool(), Some(false));
+        assert_eq!(doc["keyboard"]["keep_partial"]["r2"].as_bool(), Some(true));
         assert_eq!(doc["bridge"]["gamepad"].as_str(), Some("xbox-series"));
         assert_eq!(doc["bridge"]["rumble"].as_bool(), Some(true));
         let bindings = doc["keyboard"]["bindings"].as_array_of_tables().unwrap();

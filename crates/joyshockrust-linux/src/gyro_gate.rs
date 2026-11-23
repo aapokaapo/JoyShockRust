@@ -41,7 +41,7 @@ pub struct TriggerGate {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum TriggerSide {
+pub(crate) enum TriggerSide {
     Left,
     Right,
 }
@@ -87,6 +87,10 @@ impl TriggerGate {
             return Err("partial trigger thresholds must satisfy partial press < full release");
         }
         Ok(Some((lower, upper)))
+    }
+
+    pub(crate) fn side(self) -> TriggerSide {
+        self.side
     }
 
     pub(crate) fn pressed(self, controls: &Controls, was_pressed: bool) -> bool {
