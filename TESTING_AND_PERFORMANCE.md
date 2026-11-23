@@ -742,6 +742,11 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     that it produces no wheel steps. Add a second finger, move both in the
     same direction and check scrolling. Lift one finger and reposition it
     before swiping again. The new pair should start without a jump.
+20. Add `[keyboard.touch_pointer]` while two-finger scrolling is enabled.
+    In the **JoyShockRust Button Mouse** event stream, verify that one
+    finger emits pointer movement and two fingers emit wheel steps. Lift
+    one finger, then continue moving the other. Pointer motion should
+    resume from the remaining finger's new baseline without a jump.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

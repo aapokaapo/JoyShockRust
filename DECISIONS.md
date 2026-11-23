@@ -430,6 +430,10 @@ resets them as soon as the tracked contact or pair changes. Two-finger
 tracking identifies contacts independently of their report slot order.
 The feature shares the virtual wheel with mapped gestures.
 
+Touchpad pointer motion uses one tracked contact and preserves fractional
+counts independently per axis. Adding a second contact clears its baseline,
+so two-finger scrolling and single-finger pointing can share the pad.
+
 Keyboard bindings can override hold and double-tap deadlines independently.
 Both timers use the existing monotonic report and readiness clock. The
 default timings and immediate behavior of hold-only bindings are retained.

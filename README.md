@@ -304,6 +304,21 @@ vertical_step = 120
 horizontal_step = 180
 ```
 
+Use `[keyboard.touch_pointer]` to move the virtual pointer with one
+finger. The sensitivity on each axis defaults to 0.5 counts per touchpad
+unit. Allowed values are 0–100, and 0 disables movement on that axis.
+Combine this with `fingers = 2` under `[keyboard.touch_scroll]` to move
+the pointer with one finger and scroll with two.
+
+```toml
+[keyboard.touch_pointer]
+sensitivity_x = 0.5
+sensitivity_y = 0.5
+```
+
+The desktop may also use the physical controller touchpad. Check the
+**JoyShockRust Button Mouse** event stream to verify this mapping separately.
+
 Use `chord` in place of `button` or `trigger` to require two active
 inputs. Either press order works. The second input completes the chord,
 and releasing either input ends it. Separate bindings for the member

@@ -16,12 +16,13 @@ use crate::status::StatusSocket;
 use crate::touchpad::{Grid, TouchRegion};
 
 mod stick;
-mod touch_scroll;
+mod touch_motion;
 
 const TAP_KEY_TIME: Duration = Duration::from_millis(30);
 const SCROLL_REPEAT_TIME: Duration = Duration::from_millis(100);
 const WHEEL_AXES: [RelativeAxisCode; 2] =
     [RelativeAxisCode::REL_WHEEL, RelativeAxisCode::REL_HWHEEL];
+const POINTER_AXES: [RelativeAxisCode; 2] = [RelativeAxisCode::REL_X, RelativeAxisCode::REL_Y];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,7 +31,8 @@ pub struct Settings {
     bindings: Vec<RawBinding>,
     #[serde(default)]
     sticks: Vec<stick::Settings>,
-    touch_scroll: Option<touch_scroll::Settings>,
+    touch_scroll: Option<touch_motion::ScrollSettings>,
+    touch_pointer: Option<touch_motion::PointerSettings>,
 }
 
 #[derive(Deserialize)]
@@ -101,7 +103,8 @@ impl Action {
 pub struct Config {
     buttons: Vec<Binding>,
     sticks: Vec<stick::Binding>,
-    touch_scroll: Option<touch_scroll::Settings>,
+    touch_scroll: Option<touch_motion::ScrollSettings>,
+    touch_pointer: Option<touch_motion::PointerSettings>,
 }
 
 impl Config {
@@ -120,6 +123,11 @@ impl Config {
                 .iter()
                 .flat_map(Binding::actions)
                 .any(|action| matches!(action, Action::Scroll(_)))
+    }
+
+    fn relative_event_capacity(&self) -> usize {
+        usize::from(self.has_scroll()) * WHEEL_AXES.len()
+            + usize::from(self.touch_pointer.is_some()) * POINTER_AXES.len()
     }
 }
 
@@ -360,7 +368,11 @@ impl Settings {
             sticks: stick::Settings::resolve_all(self.sticks)?,
             touch_scroll: self
                 .touch_scroll
-                .map(touch_scroll::Settings::validate)
+                .map(touch_motion::ScrollSettings::validate)
+                .transpose()?,
+            touch_pointer: self
+                .touch_pointer
+                .map(touch_motion::PointerSettings::validate)
                 .transpose()?,
         };
         for key in config
@@ -506,7 +518,8 @@ impl From<InputReport> for Input {
 struct State {
     gestures: Vec<Gesture>,
     sticks: Vec<stick::State>,
-    touch_scroll: Option<touch_scroll::State>,
+    touch_scroll: Option<touch_motion::ScrollState>,
+    touch_pointer: Option<touch_motion::PointerState>,
     pulses: Vec<(KeyCode, Instant)>,
     mapped_keys: AttributeSet<KeyCode>,
     outer_keys: AttributeSet<KeyCode>,
@@ -542,7 +555,8 @@ impl State {
                 .copied()
                 .map(stick::State::new)
                 .collect(),
-            touch_scroll: config.touch_scroll.map(touch_scroll::State::new),
+            touch_scroll: config.touch_scroll.map(touch_motion::ScrollState::new),
+            touch_pointer: config.touch_pointer.map(touch_motion::PointerState::new),
             // At most one pulse deadline per mapped key.
             pulses: Vec::with_capacity(key_count),
             mapped_keys,
@@ -558,9 +572,7 @@ impl State {
                 .collect(),
             held: AttributeSet::new(),
             next_held: AttributeSet::new(),
-            events: Vec::with_capacity(
-                key_count + usize::from(config.has_scroll()) * WHEEL_AXES.len(),
-            ),
+            events: Vec::with_capacity(key_count + config.relative_event_capacity()),
             input: Input::default(),
             click: None,
         }
@@ -656,7 +668,17 @@ impl State {
             };
             (order, key.0)
         });
-        for (axis, delta) in WHEEL_AXES.into_iter().zip(scroll) {
+        let movement = self
+            .touch_pointer
+            .as_mut()
+            .map_or([0; POINTER_AXES.len()], |pointer| {
+                pointer.advance(input.contacts)
+            });
+        for (axis, delta) in WHEEL_AXES
+            .into_iter()
+            .zip(scroll)
+            .chain(POINTER_AXES.into_iter().zip(movement))
+        {
             if delta != 0 {
                 self.events
                     .push(InputEvent::new(EventType::RELATIVE.0, axis.0, delta));
@@ -764,7 +786,10 @@ impl<'a> Keyboard<'a> {
         status: Option<&'a StatusSocket>,
     ) -> io::Result<Option<Self>> {
         let Some(config) = config.filter(|config| {
-            !config.buttons.is_empty() || !config.sticks.is_empty() || config.touch_scroll.is_some()
+            !config.buttons.is_empty()
+                || !config.sticks.is_empty()
+                || config.touch_scroll.is_some()
+                || config.touch_pointer.is_some()
         }) else {
             return Ok(None);
         };
@@ -794,7 +819,7 @@ impl<'a> Keyboard<'a> {
         } else {
             None
         };
-        let mouse = (button_count > 0 || scroll)
+        let mouse = (button_count > 0 || scroll || config.touch_pointer.is_some())
             .then(|| {
                 crate::gyro_mouse::open_output_with_buttons(
                     "JoyShockRust Button Mouse",
@@ -809,7 +834,7 @@ impl<'a> Keyboard<'a> {
                 keyboard,
                 mouse,
                 keys: Vec::with_capacity(key_count),
-                buttons: Vec::with_capacity(button_count + usize::from(scroll) * WHEEL_AXES.len()),
+                buttons: Vec::with_capacity(button_count + config.relative_event_capacity()),
                 status,
             },
         }))
@@ -1983,6 +2008,83 @@ mod tests {
                 None
             );
             assert_eq!(observed, expected, "{contacts:?}");
+        }
+    }
+
+    #[test]
+    fn touch_pointer_yields_to_two_finger_scroll_and_resumes_without_a_jump() {
+        let config = config(
+            r#"
+            [keyboard.touch_pointer]
+            sensitivity_x = 0.5
+            sensitivity_y = 2.0
+            [keyboard.touch_scroll]
+            fingers = 2
+            vertical_step = 10
+            horizontal_step = 10
+        "#,
+        );
+        let mut state = State::new(&config);
+        let now = Instant::now();
+        let contact = |id, x, y| Some(TouchContact { id, x, y });
+        let x = RelativeAxisCode::REL_X.0;
+        let y = RelativeAxisCode::REL_Y.0;
+        let v = RelativeAxisCode::REL_WHEEL.0;
+        let h = RelativeAxisCode::REL_HWHEEL.0;
+        let mut observed = Vec::with_capacity(4);
+        let allocations = allocation_counter::measure(|| {
+            for (contacts, expected) in [
+                ([contact(1, 100, 500), None], &[][..]),
+                ([contact(1, 101, 501), None], &[(y, 2)][..]),
+                ([None, contact(1, 102, 501)], &[(x, 1)][..]),
+                ([contact(1, 103, 500), None], &[(y, -2)][..]),
+                ([contact(1, 103, 500), contact(2, 200, 500)], &[][..]),
+                (
+                    [contact(2, 220, 480), contact(1, 123, 480)],
+                    &[(v, 2), (h, 2)][..],
+                ),
+                ([contact(1, 400, 600), None], &[][..]),
+                ([contact(1, 401, 600), None], &[][..]),
+                ([contact(1, 400, 599), None], &[(y, -2)][..]),
+                ([None, None], &[][..]),
+                ([contact(3, 800, 900), None], &[][..]),
+            ] {
+                observed.clear();
+                let input = Input {
+                    contacts,
+                    ..Input::default()
+                };
+                assert_eq!(
+                    state
+                        .update(input, now, |events| {
+                            for event in events {
+                                assert_eq!(event.event_type(), EventType::RELATIVE);
+                                observed.push((event.code(), event.value()));
+                            }
+                            Ok(())
+                        })
+                        .unwrap(),
+                    None
+                );
+                assert_eq!(observed, expected, "{contacts:?}");
+            }
+        });
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn touch_pointer_profile_validates_both_sensitivities() {
+        let settings = "version = 1\n[keyboard.touch_pointer]\n";
+        assert!(crate::profile::parse(settings).is_ok());
+        for invalid in [
+            "sensitivity_x = -1",
+            "sensitivity_y = nan",
+            "sensitivity_y = 101",
+        ] {
+            assert!(
+                crate::profile::parse(&format!("{settings}{invalid}\n")).is_err(),
+                "{invalid}"
+            );
         }
     }
 
