@@ -1026,12 +1026,15 @@ hold_ms = 1500
 ```
 
 For advanced haptics, connect the controller by USB and install
-`alsa-utils` for `aplay`. The controller's four-channel ALSA playback
-device must be available. A single pulse marks the start and a double
-pulse marks completion. During RWC measurement, sweeping the stick
-produces short tactile detents every 15 degrees of relative stick
-rotation. Camera movement remains continuous. Bluetooth calibration
-is available with visual status or bridge logs.
+`alsa-utils` for `aplay`. A single pulse marks the start of gyro
+calibration and a stronger, longer double pulse marks completion.
+A separate single pulse marks when the virtual gamepad and gyro mouse
+are both ready, including after reconnecting or enabling the second
+output. If startup requires gyro calibration, the completion pulse
+marks readiness. On Bluetooth or when USB PCM playback is unavailable,
+these cues use the controller’s evdev rumble if accessible. During USB
+RWC measurement, sweeping the stick produces short tactile detents every
+15 degrees of relative stick rotation.
 
 ### Test USB actuator haptics from the command line
 
@@ -1042,9 +1045,9 @@ joyshockrust-linux --test-haptics
 joyshockrust-linux --test-haptics --pattern sweep
 ```
 
-The first command plays the start pulse, completion double pulse and a
-series of detents. Use `--pattern start`, `done` or `detent` to isolate an
-effect. The sweep command runs for 12 seconds and counts detents as you
+The first command plays the calibration start and completion cues, the
+outputs-ready pulse and a series of detents. Use `--pattern start`,
+`done`, `ready` or `detent` to isolate an effect. The sweep command runs for 12 seconds and counts detents as you
 rotate the right stick. Add the controller's `/dev/hidrawN` path to select
 it explicitly. The commands report the ALSA device and playback errors.
 Playback success reports what ALSA accepted. Check the tactile feedback

@@ -1001,8 +1001,11 @@ then turn it slowly to confirm that deliberate aim still moves it.
 
 Bind **Gyro → Controller gyro calibration → Hold button** to PS. Verify
 a tap leaves calibration idle. Hold PS for 1.5 seconds, then release it
-and set the controller down. On USB with `aplay`, verify the single
-start and double completion pulses. Repeat while moving for 15 seconds
+and set the controller down. Verify the single start pulse and the
+stronger, longer double completion pulse on USB and Bluetooth. Toggle
+one output off and back on and verify that the single ready pulse occurs
+when both outputs are available. Repeat over USB with the controller’s
+audio device occupied to check the evdev fallback. Repeat while moving for 15 seconds
 and verify the previous correction remains active. Run RWC over USB and
 rotate slowly around the right stick edge. Check that tactile steps
 follow rotation in either direction and cease when the stick centers.

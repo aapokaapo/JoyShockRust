@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use evdev::{FFEffectData, FFEffectKind, FFReplay, FFTrigger};
 use joyshockrust_input::Transport;
 
 use crate::{
@@ -20,12 +21,15 @@ use crate::{
     forward_reports,
     game_calibration::Dial,
     hidraw::{self, Identity},
+    rumble::Rumble,
 };
 
 #[derive(Clone, Copy)]
 pub enum Cue {
     CalibrationStart,
     CalibrationDone,
+    GyroCalibrationDone,
+    OutputsReady,
     Detent,
 }
 
@@ -48,23 +52,60 @@ impl Haptics {
         }
     }
 
+    pub fn open_controller(input: &File, transport: Transport) -> Option<Self> {
+        let result = input.try_clone().and_then(|input| {
+            Self::spawn(move |receiver, waveforms| {
+                let mut pcm = None;
+                while let Ok(cue) = receiver.recv() {
+                    if transport == Transport::Usb {
+                        if pcm.is_none() {
+                            pcm = playback_device(&input).ok();
+                        }
+                        if let Some(device) = pcm.as_deref()
+                            && play(device, receiver, waveforms, cue).is_ok()
+                        {
+                            continue;
+                        }
+                    }
+                    play_rumble(&input, cue)?;
+                }
+                Ok(())
+            })
+        });
+        match result {
+            Ok(haptics) => Some(haptics),
+            Err(error) => {
+                eprintln!("Controller haptics unavailable: {error}");
+                None
+            }
+        }
+    }
+
     fn open_usb(input: &File) -> io::Result<Self> {
         Self::open_pcm(playback_device(input)?)
     }
 
     fn open_pcm(device: String) -> io::Result<Self> {
+        Self::spawn(move |receiver, waveforms| {
+            while let Ok(cue) = receiver.recv() {
+                play(&device, receiver, waveforms, cue)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn spawn(
+        playback: impl FnOnce(&Receiver<Cue>, &Waveforms) -> io::Result<()> + Send + 'static,
+    ) -> io::Result<Self> {
         let (sender, receiver) = sync_channel(1);
         let worker = thread::Builder::new()
-            .name("calibration-haptics".into())
+            .name("controller-haptics".into())
             .spawn(move || {
-                let waveforms = Waveforms::new();
-                while let Ok(cue) = receiver.recv() {
-                    if let Err(error) = play(&device, &receiver, &waveforms, cue) {
-                        eprintln!("DualSense USB calibration haptics unavailable: {error}");
-                        return Err(error);
-                    }
+                let result = playback(&receiver, &Waveforms::new());
+                if let Err(error) = &result {
+                    eprintln!("Controller haptics unavailable: {error}");
                 }
-                Ok(())
+                result
             })?;
         Ok(Self { sender, worker })
     }
@@ -88,7 +129,37 @@ impl Haptics {
     }
 }
 
-const TEST_USAGE: &str = "usage: joyshockrust-linux --test-haptics [--pattern all|start|done|detent|sweep] [--pcm ALSA_DEVICE] [/dev/hidrawN]";
+fn play_rumble(input: &File, cue: Cue) -> io::Result<()> {
+    let (length, strong, weak, pulses): (u16, u16, u16, u8) = match cue {
+        Cue::CalibrationStart => (85, 26_000, 20_000, 1),
+        Cue::GyroCalibrationDone => (150, 52_000, 46_000, 2),
+        Cue::OutputsReady => (110, 35_000, 30_000, 1),
+        Cue::CalibrationDone | Cue::Detent => return Ok(()),
+    };
+    let (mut device, _) = Rumble::open_physical(input)?;
+    let mut effect = device.upload_ff_effect(FFEffectData {
+        direction: 0,
+        trigger: FFTrigger {
+            button: 0,
+            interval: 0,
+        },
+        replay: FFReplay { length, delay: 0 },
+        kind: FFEffectKind::Rumble {
+            strong_magnitude: strong,
+            weak_magnitude: weak,
+        },
+    })?;
+    for pulse in 0..pulses {
+        if pulse != 0 {
+            thread::sleep(Duration::from_millis(65));
+        }
+        effect.play(1)?;
+        thread::sleep(Duration::from_millis(u64::from(length)));
+    }
+    Ok(())
+}
+
+const TEST_USAGE: &str = "usage: joyshockrust-linux --test-haptics [--pattern all|start|done|ready|detent|sweep] [--pcm ALSA_DEVICE] [/dev/hidrawN]";
 
 pub fn test_cli(mut args: impl Iterator<Item = OsString>) -> io::Result<()> {
     let mut pattern = String::from("all");
@@ -122,11 +193,19 @@ pub fn test_cli(mut args: impl Iterator<Item = OsString>) -> io::Result<()> {
     }
     let cues: &[(&str, Cue)] = match pattern.as_str() {
         "start" => &[("Start pulse", Cue::CalibrationStart)],
-        "done" => &[("Completion double pulse", Cue::CalibrationDone)],
+        "done" => &[(
+            "Gyro calibration completion double pulse",
+            Cue::GyroCalibrationDone,
+        )],
+        "ready" => &[("Outputs ready pulse", Cue::OutputsReady)],
         "detent" => &[("Detent clicks", Cue::Detent)],
         "all" => &[
             ("Start pulse", Cue::CalibrationStart),
-            ("Completion double pulse", Cue::CalibrationDone),
+            (
+                "Gyro calibration completion double pulse",
+                Cue::GyroCalibrationDone,
+            ),
+            ("Outputs ready pulse", Cue::OutputsReady),
             ("Detent clicks", Cue::Detent),
         ],
         "sweep" => &[],
@@ -276,6 +355,8 @@ fn pcm_address(name: &str) -> Option<String> {
 struct Waveforms {
     start: Vec<u8>,
     done: Vec<u8>,
+    gyro_done: Vec<u8>,
+    ready: Vec<u8>,
     detent: Vec<u8>,
 }
 
@@ -284,6 +365,8 @@ impl Waveforms {
         Self {
             start: waveform(Cue::CalibrationStart),
             done: waveform(Cue::CalibrationDone),
+            gyro_done: waveform(Cue::GyroCalibrationDone),
+            ready: waveform(Cue::OutputsReady),
             detent: waveform(Cue::Detent),
         }
     }
@@ -292,6 +375,8 @@ impl Waveforms {
         match cue {
             Cue::CalibrationStart => &self.start,
             Cue::CalibrationDone => &self.done,
+            Cue::GyroCalibrationDone => &self.gyro_done,
+            Cue::OutputsReady => &self.ready,
             Cue::Detent => &self.detent,
         }
     }
@@ -384,6 +469,8 @@ fn waveform(cue: Cue) -> Vec<u8> {
     let (length_ms, frequency, level) = match cue {
         Cue::CalibrationStart => (86, 125.0, 0.42),
         Cue::CalibrationDone => (150, 180.0, 0.44),
+        Cue::GyroCalibrationDone => (360, 155.0, 0.78),
+        Cue::OutputsReady => (135, 110.0, 0.55),
         Cue::Detent => (15, 210.0, 0.36),
     };
     let frames = length_ms * SAMPLE_RATE / 1000;
@@ -392,7 +479,9 @@ fn waveform(cue: Cue) -> Vec<u8> {
         let time = frame as f64 / SAMPLE_RATE as f64;
         let progress = frame as f64 / frames as f64;
         let envelope = match cue {
-            Cue::CalibrationDone => (std::f64::consts::TAU * progress).sin().powi(2),
+            Cue::CalibrationDone | Cue::GyroCalibrationDone => {
+                (std::f64::consts::TAU * progress).sin().powi(2)
+            }
             _ => (std::f64::consts::PI * progress).sin().powi(2),
         };
         let signal = (std::f64::consts::TAU * frequency * time).sin() * envelope * level;
@@ -411,7 +500,13 @@ mod tests {
 
     #[test]
     fn calibration_cues_use_only_the_actuator_channels() {
-        for cue in [Cue::CalibrationStart, Cue::CalibrationDone, Cue::Detent] {
+        for cue in [
+            Cue::CalibrationStart,
+            Cue::CalibrationDone,
+            Cue::GyroCalibrationDone,
+            Cue::OutputsReady,
+            Cue::Detent,
+        ] {
             let pcm = waveform(cue);
             let (frames, remaining) = pcm.as_chunks::<8>();
             assert!(remaining.is_empty());
@@ -423,12 +518,34 @@ mod tests {
     }
 
     #[test]
+    fn gyro_completion_is_stronger_and_longer_than_the_other_cues() {
+        let start = waveform(Cue::CalibrationStart);
+        let done = waveform(Cue::GyroCalibrationDone);
+        let ready = waveform(Cue::OutputsReady);
+        let previous_done = waveform(Cue::CalibrationDone);
+        let peak = |pcm: &[u8]| {
+            pcm.as_chunks::<8>()
+                .0
+                .iter()
+                .map(|frame| i16::from_le_bytes([frame[4], frame[5]]).unsigned_abs())
+                .max()
+                .unwrap()
+        };
+        assert!(done.len() > previous_done.len() * 2);
+        assert!(peak(&done) > peak(&previous_done) * 3 / 2);
+        assert!(peak(&done) > peak(&start));
+        assert!(done.len() > ready.len() && peak(&done) > peak(&ready));
+    }
+
+    #[test]
     fn pcm_stream_drains_the_final_cue_and_pads_the_last_period() {
         let (sender, receiver) = sync_channel(1);
         drop(sender);
         let waveforms = Waveforms {
             start: Vec::new(),
             done: Vec::new(),
+            gyro_done: Vec::new(),
+            ready: Vec::new(),
             detent: waveform(Cue::Detent),
         };
         let mut output = Vec::new();

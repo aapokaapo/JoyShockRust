@@ -59,7 +59,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     const USAGE: &str = concat!(
         "usage: joyshockrust-linux [--profile PATH|--profile-if-present PATH] [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
-        "       joyshockrust-linux --test-haptics [--pattern all|start|done|detent|sweep] [--pcm ALSA_DEVICE] [/dev/hidrawN]\n",
+        "       joyshockrust-linux --test-haptics [--pattern all|start|done|ready|detent|sweep] [--pcm ALSA_DEVICE] [/dev/hidrawN]\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
         "       joyshockrust-linux --diagnose [--profile PATH] [--show-controller-id] [CONTROLLER_OPTIONS] [/dev/hidrawN]\n",
         "       joyshockrust-linux --list-controllers [--show-controller-id] [CONTROLLER_OPTIONS]\n",
@@ -960,6 +960,11 @@ fn serve_session(
         status.set_gamepad_device(output.as_mut());
         status.set_touchpad_policy(touchpad_requested, native_touchpad.is_some());
     }
+    if output.is_some()
+        && let Some(mouse) = &mouse
+    {
+        mouse.signal_outputs_ready();
+    }
     let resource_start = measurement
         .as_ref()
         .and_then(|_| benchmark::ResourceSnapshot::capture());
@@ -992,6 +997,7 @@ fn serve_session(
                     return Ok(ControlFlow::Continue(()));
                 }
                 SessionEvent::Reload(reload) => {
+                    let both_ready = output.is_some() && mouse.is_some();
                     let current_filter = filter;
                     let next = match reload.resolve(current_filter) {
                         Some(reload::Update::Profile(next)) => next,
@@ -1074,6 +1080,12 @@ fn serve_session(
                             emulation.publish(status, gamepad_selection);
                             if let Some(status) = status {
                                 status.set_gamepad_device(output.as_mut());
+                            }
+                            if !both_ready
+                                && output.is_some()
+                                && let Some(mouse) = &mouse
+                            {
+                                mouse.signal_outputs_ready();
                             }
                             reload.applied(status);
                             return Ok(ControlFlow::Continue(()));
@@ -1185,6 +1197,12 @@ fn serve_session(
                     if let Some(status) = status {
                         status.update(Some(identity), runtime.gyro.is_some());
                         status.set_touchpad_policy(touchpad_requested, native_touchpad.is_some());
+                    }
+                    if !both_ready
+                        && output.is_some()
+                        && let Some(mouse) = &mouse
+                    {
+                        mouse.signal_outputs_ready();
                     }
                     reload.applied(status);
                     return Ok(ControlFlow::Continue(()));

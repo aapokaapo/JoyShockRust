@@ -198,9 +198,7 @@ impl GyroMouse {
             output,
             hold: options.calibration_hold.map(HoldDetector::new),
             shortcut: None,
-            haptics: options
-                .calibration_hold
-                .and_then(|_| Haptics::open(input, transport)),
+            haptics: Haptics::open_controller(input, transport),
             bias_writer,
             gate: GyroGate::new(options.binding),
             flick: options.flick_scale().map(|scale| {
@@ -209,6 +207,15 @@ impl GyroMouse {
                     .with_steering_sensitivity(options.flick_steering_sensitivity())
             }),
         })
+    }
+
+    pub fn signal_outputs_ready(&self) {
+        // A startup calibration announces readiness with its completion cue.
+        if self.aim.calibration.is_none()
+            && let Some(haptics) = &self.haptics
+        {
+            haptics.send(Cue::OutputsReady);
+        }
     }
 
     pub fn set_scaling(&mut self, options: Options) {
@@ -275,13 +282,13 @@ impl GyroMouse {
             movement[0] += flick.advance(report.controls.right_stick, report.imu.device_ticks);
         }
         if let Some(bias) = self.aim.completed_bias.take() {
-            if self.shortcut.take().is_some() {
-                if let Some(writer) = &self.bias_writer {
-                    writer.send(bias);
-                }
-                if let Some(haptics) = &self.haptics {
-                    haptics.send(Cue::CalibrationDone);
-                }
+            if self.shortcut.take().is_some()
+                && let Some(writer) = &self.bias_writer
+            {
+                writer.send(bias);
+            }
+            if let Some(haptics) = &self.haptics {
+                haptics.send(Cue::GyroCalibrationDone);
             }
             eprintln!("Gyro rest calibration complete");
         }

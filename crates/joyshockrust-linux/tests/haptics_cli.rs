@@ -26,12 +26,12 @@ fi
 /bin/cat > "$CAPTURE"
 "#).unwrap();
     fs::set_permissions(&player, fs::Permissions::from_mode(0o700)).unwrap();
-    let run = |fail| {
+    let run = |pattern, fail| {
         Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
             .args([
                 "--test-haptics",
                 "--pattern",
-                "detent",
+                pattern,
                 "--pcm",
                 "test-device",
             ])
@@ -41,9 +41,13 @@ fi
             .output()
             .unwrap()
     };
-    let success = run("no");
+    let success = run("detent", "no");
     let pcm = fs::read(&capture).unwrap();
-    let failed = run("yes");
+    let ready = run("ready", "no");
+    let ready_pcm = fs::read(&capture).unwrap();
+    let done = run("done", "no");
+    let done_pcm = fs::read(&capture).unwrap();
+    let failed = run("detent", "yes");
     fs::remove_dir_all(&directory).unwrap();
 
     assert!(success.status.success(), "{success:?}");
@@ -52,6 +56,11 @@ fi
     assert!(remainder.is_empty());
     assert!(frames.iter().all(|frame| frame[..4] == [0; 4]));
     assert!(frames.iter().any(|frame| frame[4..] != [0; 4]));
+    assert!(ready.status.success(), "{ready:?}");
+    assert!(done.status.success(), "{done:?}");
+    assert!(String::from_utf8_lossy(&ready.stdout).contains("Outputs ready pulse"));
+    assert!(String::from_utf8_lossy(&done.stdout).contains("Gyro calibration completion"));
+    assert!(done_pcm.len() > ready_pcm.len());
     assert!(!failed.status.success(), "{failed:?}");
     let error = String::from_utf8_lossy(&failed.stderr);
     assert!(error.contains("simulated ALSA device busy"), "{error}");

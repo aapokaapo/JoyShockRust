@@ -549,6 +549,11 @@ PCM and keeps the audible channels silent. Bluetooth actuator streaming
 is pending hardware validation. RWC detents use the angular sweep
 before conversion to mouse counts. The diagnostic command uses the same
 PCM player and angular detector for standalone testing.
+Gyro calibration completion uses a longer, higher-amplitude double pulse.
+A separate ready cue follows activation of both virtual outputs. A worker
+handles these cues using USB PCM or evdev rumble so playback stays outside
+report processing.
+
 [USB audio descriptor](https://github.com/nondebug/dualsense/blob/02338358b6b4be2d64dbf661ae2a47842156cfcf/lsusb-descriptor-info.txt#L143-L156) · [Actuator channel routing](https://github.com/nondebug/dualsense/blob/02338358b6b4be2d64dbf661ae2a47842156cfcf/web-haptics-polyfill/README.md#L19-L24)
 
 The editor is a separate native window. Its controller diagram
