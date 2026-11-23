@@ -203,6 +203,7 @@ Each gesture can emit a keyboard shortcut or a modified mouse click. Profiles ca
 set the hold threshold and double-tap window per binding.
 Tap and double-tap can emit a one-step vertical or horizontal mouse scroll.
 Hold actions can repeat wheel steps at a configurable rate.
+Touchpad swipes can also emit wheel steps at independent axis distances.
 An opt-in uinput test covers the timed mouse tap and held-key cleanup with
 both virtual devices and synthetic USB reports.
 Deadline and output handling have synthetic coverage. The bridge supports

@@ -16,6 +16,7 @@ use crate::status::StatusSocket;
 use crate::touchpad::{Grid, TouchRegion};
 
 mod stick;
+mod touch_scroll;
 
 const TAP_KEY_TIME: Duration = Duration::from_millis(30);
 const SCROLL_REPEAT_TIME: Duration = Duration::from_millis(100);
@@ -29,6 +30,7 @@ pub struct Settings {
     bindings: Vec<RawBinding>,
     #[serde(default)]
     sticks: Vec<stick::Settings>,
+    touch_scroll: Option<touch_scroll::Settings>,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +101,7 @@ impl Action {
 pub struct Config {
     buttons: Vec<Binding>,
     sticks: Vec<stick::Binding>,
+    touch_scroll: Option<touch_scroll::Settings>,
 }
 
 impl Config {
@@ -111,10 +114,12 @@ impl Config {
     }
 
     fn has_scroll(&self) -> bool {
-        self.buttons
-            .iter()
-            .flat_map(Binding::actions)
-            .any(|action| matches!(action, Action::Scroll(_)))
+        self.touch_scroll.is_some()
+            || self
+                .buttons
+                .iter()
+                .flat_map(Binding::actions)
+                .any(|action| matches!(action, Action::Scroll(_)))
     }
 }
 
@@ -353,6 +358,10 @@ impl Settings {
         let config = Config {
             buttons: bindings,
             sticks: stick::Settings::resolve_all(self.sticks)?,
+            touch_scroll: self
+                .touch_scroll
+                .map(touch_scroll::Settings::validate)
+                .transpose()?,
         };
         for key in config
             .sticks
@@ -497,6 +506,7 @@ impl From<InputReport> for Input {
 struct State {
     gestures: Vec<Gesture>,
     sticks: Vec<stick::State>,
+    touch_scroll: Option<touch_scroll::State>,
     pulses: Vec<(KeyCode, Instant)>,
     mapped_keys: AttributeSet<KeyCode>,
     outer_keys: AttributeSet<KeyCode>,
@@ -532,6 +542,7 @@ impl State {
                 .copied()
                 .map(stick::State::new)
                 .collect(),
+            touch_scroll: config.touch_scroll.map(touch_scroll::State::new),
             // At most one pulse deadline per mapped key.
             pulses: Vec::with_capacity(key_count),
             mapped_keys,
@@ -574,7 +585,12 @@ impl State {
             held.remove(key);
         }
         let mut deadline = None;
-        let mut scroll = [0_i32; WHEEL_AXES.len()];
+        let mut scroll = self
+            .touch_scroll
+            .as_mut()
+            .map_or([0; WHEEL_AXES.len()], |scroll| {
+                scroll.advance(input.contacts)
+            });
         self.pulses.retain(|&(_, until)| until > now);
         for gesture in &mut self.gestures {
             match gesture.update(&input, self.click, now) {
@@ -747,9 +763,9 @@ impl<'a> Keyboard<'a> {
         config: Option<&Config>,
         status: Option<&'a StatusSocket>,
     ) -> io::Result<Option<Self>> {
-        let Some(config) =
-            config.filter(|config| !config.buttons.is_empty() || !config.sticks.is_empty())
-        else {
+        let Some(config) = config.filter(|config| {
+            !config.buttons.is_empty() || !config.sticks.is_empty() || config.touch_scroll.is_some()
+        }) else {
             return Ok(None);
         };
         let mut keys = AttributeSet::<KeyCode>::new();
@@ -1861,6 +1877,65 @@ mod tests {
             }
         });
         assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn touch_swipe_preserves_remainders_and_tracks_the_contact_across_slots() {
+        let config =
+            config("[keyboard.touch_scroll]\nvertical_step = 100\nhorizontal_step = 100\n");
+        let mut state = State::new(&config);
+        let now = Instant::now();
+        let mut observed = Vec::with_capacity(2);
+        let contact = |id, x, y| Some(TouchContact { id, x, y });
+        let v = RelativeAxisCode::REL_WHEEL.0;
+        let h = RelativeAxisCode::REL_HWHEEL.0;
+        let other = contact(2, 900, 90);
+        let frames = [
+            ([contact(1, 100, 500), None], &[][..]),
+            ([contact(1, 150, 440), other], &[][..]),
+            ([other, contact(1, 210, 370)], &[(v, 1), (h, 1)][..]),
+            ([other, contact(1, 210, 370)], &[][..]),
+            ([other, contact(1, 430, 410)], &[(h, 2)][..]),
+            ([other, None], &[][..]), // Rebaseline to the remaining finger.
+            ([contact(2, 1000, 400), None], &[(v, -3), (h, 1)][..]),
+            ([None, None], &[][..]),
+            ([contact(2, 60, 100), None], &[][..]),
+        ];
+        let allocations = allocation_counter::measure(|| {
+            for (contacts, expected) in frames {
+                observed.clear();
+                let input = Input {
+                    contacts,
+                    ..Input::default()
+                };
+                let deadline = state
+                    .update(input, now, |events| {
+                        for event in events {
+                            assert_eq!(event.event_type(), EventType::RELATIVE);
+                            observed.push((event.code(), event.value()));
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                assert_eq!(observed, expected, "{contacts:?}");
+                assert_eq!(deadline, None);
+            }
+        });
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn touch_scroll_settings_require_a_valid_step_for_at_least_one_axis() {
+        for settings in [
+            "",
+            "vertical_step = 0",
+            "vertical_step = 1080",
+            "horizontal_step = 1920",
+        ] {
+            let profile = format!("version = 1\n[keyboard.touch_scroll]\n{settings}\n");
+            assert!(crate::profile::parse(&profile).is_err(), "{settings}");
+        }
+        assert!(config("[keyboard.touch_scroll]\nvertical_step = 120\n").has_scroll());
     }
 
     #[test]

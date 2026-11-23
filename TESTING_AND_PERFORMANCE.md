@@ -734,6 +734,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     spare input. Hold it still and verify wheel steps continue until
     release. Add a tap action and verify short taps send that action
     while repeat scrolling starts after the hold threshold.
+18. Set `vertical_step = 120` and `horizontal_step = 180` under
+    `[keyboard.touch_scroll]`. Swipe slowly in each direction and verify
+    wheel events arrive after the configured travel. Lift and reposition
+    the finger and verify scrolling resumes only after a new swipe.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

@@ -290,6 +290,17 @@ hold = { scroll = "right" }
 scroll_repeat_ms = 80
 ```
 
+Use `[keyboard.touch_scroll]` to scroll by swiping the touchpad. Each
+configured axis emits one wheel step per specified distance in touchpad
+coordinate units. Omit an axis to disable it. The bridge follows the
+same finger until it lifts, then starts a new swipe from the next contact.
+
+```toml
+[keyboard.touch_scroll]
+vertical_step = 120
+horizontal_step = 180
+```
+
 Use `chord` in place of `button` or `trigger` to require two active
 inputs. Either press order works. The second input completes the chord,
 and releasing either input ends it. Separate bindings for the member

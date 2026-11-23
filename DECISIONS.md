@@ -423,6 +423,11 @@ Hold scroll actions reuse the gesture deadline loop. Each wake can deliver
 one step for the binding and schedules the next step from the current
 time. A release cancels its deadline.
 
+Touchpad swipe scrolling uses relative motion of one tracked contact.
+The mapper retains partial wheel distances in each configured axis and
+resets them when the tracked contact leaves, even if another remains.
+The feature shares the virtual wheel with mapped gestures.
+
 Keyboard bindings can override hold and double-tap deadlines independently.
 Both timers use the existing monotonic report and readiness clock. The
 default timings and immediate behavior of hold-only bindings are retained.
