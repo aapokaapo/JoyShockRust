@@ -2,6 +2,12 @@
 
 JoyShockRust is a **new Linux-first Rust controller mapper**, inspired by the behavior of [JoyShockMapper-systemd](https://github.com/aapokaapo/JoyShockMapper-systemd) and [upstream JoyShockMapper](https://github.com/Electronicks/JoyShockMapper). The initial workspace provides a pure DualSense Edge USB report parser and device timebase.
 
+## License
+
+JoyShockRust’s original source and documentation are available under the
+[MIT License](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
+for JoyShockMapper attribution and dependency licensing.
+
 ## Mission
 Correct controller behavior first; then low input-to-output latency, low jitter, low CPU/memory overhead, maintainability, and feature parity. Prefer a small working vertical slice to a broad unfinished rewrite.
 

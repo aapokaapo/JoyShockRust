@@ -36,6 +36,12 @@ Reviewed 2026-11-22. The existing ADRs stand. Source revisions and physical vali
 
 For changes, add a dated ADR with context, alternatives, consequences and validation plan.
 
+## Project license
+
+2026-11-23. JoyShockRust uses MIT for its own source and documentation.
+Retain upstream notices for any reused material and document its source
+before importing it. [Project license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
 ## Phase 1 implementation notes
 
 Recorded 2026-11-22. The two library crates use `no_std` and forbid unsafe code. The parser accepts recognized Edge USB frames, reports a structured error for reserved D-pad values, and preserves raw IMU counts, device ticks and the counter byte. Button and stick decoding is independent of sensor time classification. The report layout and calibration questions are documented in the [reference analysis](docs/REFERENCE_ANALYSIS.md#dualsense-edge-usb-input).
