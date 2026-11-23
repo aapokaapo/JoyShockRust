@@ -204,6 +204,8 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
             format!("selected_model={model}"),
             format!("gyro_configured={gyro}"),
             format!("profile_source={source}"),
+            format!("native_touchpad_grab_requested={}", source == "startup"),
+            "native_touchpad_grabbed=false".to_owned(),
             "controller_id_configured=true".to_owned(),
         ] {
             assert!(stdout.lines().any(|entry| entry == line), "{stdout}");
@@ -211,7 +213,10 @@ fn live_profiles_and_controller_selection_change_independently_while_waiting() {
         assert!(!stdout.contains("ff:ff:ff:ff:ff:ff"), "{stdout}");
     };
     check("auto", "dualsense-edge", false, "defaults");
-    let startup_contents = format!("{}[gyro]\n", settings("usb", "dualsense"));
+    let startup_contents = format!(
+        "{}[gyro]\n[keyboard]\ngrab_touchpad = true\n",
+        settings("usb", "dualsense")
+    );
     fs::write(&startup, &startup_contents).unwrap();
     let result = Command::new(binary)
         .arg("--reload-profile")

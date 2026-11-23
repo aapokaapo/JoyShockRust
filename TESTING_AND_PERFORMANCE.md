@@ -753,6 +753,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     still work. With a status socket, check `native_touchpad_grabbed=true`.
     Stop the bridge, confirm native touchpad input resumes, and repeat
     on Bluetooth.
+22. Start the service without the CLI grab flag. Load a profile with
+    `[keyboard].grab_touchpad = true` and confirm both touchpad grab fields
+    in `--status` become true. Unload the profile and confirm both clear,
+    native touchpad events resume, and the same controller stays active.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

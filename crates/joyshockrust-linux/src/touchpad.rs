@@ -11,9 +11,16 @@ use serde::Deserialize;
 
 use crate::hidraw;
 
-pub fn grab_native(hidraw: &File) -> io::Result<RawDevice> {
-    let hid = hidraw::hid_parent(hidraw)?;
-    hidraw::wait_for_evdev(hidraw, || probe_native(&hid))
+pub fn try_grab_native(hidraw: &File) -> Option<RawDevice> {
+    let result = hidraw::hid_parent(hidraw)
+        .and_then(|hid| hidraw::wait_for_evdev(hidraw, || probe_native(&hid)));
+    match result {
+        Ok(device) => Some(device),
+        Err(err) => {
+            eprintln!("Native touchpad grab unavailable: {err}");
+            None
+        }
+    }
 }
 
 fn probe_native(hid: &udev::Device) -> io::Result<RawDevice> {

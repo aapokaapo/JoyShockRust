@@ -118,6 +118,7 @@ pub struct RuntimeOptions {
     pub gyro: Option<gyro_mouse::Options>,
     pub touchpad: Option<touchpad::Grid>,
     pub keyboard: Option<keyboard::Config>,
+    pub grab_touchpad: bool,
 }
 
 pub fn load(path: &Path) -> Result<RuntimeOptions, Box<dyn Error>> {
@@ -273,6 +274,10 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         .gyro
         .map(|gyro| gyro.resolve(touchpad.as_ref()))
         .transpose()?;
+    let grab_touchpad = profile
+        .keyboard
+        .as_ref()
+        .is_some_and(|keyboard| keyboard.grab_touchpad);
     let keyboard = profile
         .keyboard
         .map(|keyboard| keyboard.resolve(touchpad.as_ref()))
@@ -284,6 +289,7 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         gyro,
         touchpad,
         keyboard,
+        grab_touchpad,
     })
 }
 

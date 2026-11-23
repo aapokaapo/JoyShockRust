@@ -438,6 +438,9 @@ Updated 2026-11-23. The opt-in native touchpad grab is scoped to an evdev
 node under the active hidraw device's HID parent. The opened node must
 have the driver touchpad name, button-pad property and both multitouch
 axes. The session owns the grab and closing the descriptor releases it.
+The keyboard profile can request the grab independently of its mappings.
+Loading or unloading a profile applies its request between report batches.
+The CLI flag keeps the grab requested across profile changes.
 [Linux touchpad registration](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L930-L950) · [evdev grab lifetime](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/input/evdev.c)
 
 Keyboard bindings can override hold and double-tap deadlines independently.

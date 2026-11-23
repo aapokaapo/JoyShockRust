@@ -208,7 +208,8 @@ distances.
 One-finger swipes can also drive relative pointer motion with separate axis
 sensitivity, yielding to two-finger scrolling.
 An opt-in session grab can suppress native evdev touchpad events from the
-active controller while HID mappings continue. Hardware validation is pending.
+active controller while HID mappings continue. The grab can follow the
+active profile or be requested at startup. Hardware validation is pending.
 An opt-in uinput test covers the timed mouse tap and held-key cleanup with
 both virtual devices and synthetic USB reports.
 Deadline and output handling have synthetic coverage. The bridge supports

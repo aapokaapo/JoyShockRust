@@ -28,6 +28,8 @@ const POINTER_AXES: [RelativeAxisCode; 2] = [RelativeAxisCode::REL_X, RelativeAx
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     #[serde(default)]
+    pub grab_touchpad: bool,
+    #[serde(default)]
     bindings: Vec<RawBinding>,
     #[serde(default)]
     sticks: Vec<stick::Settings>,

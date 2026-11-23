@@ -316,12 +316,23 @@ sensitivity_x = 0.5
 sensitivity_y = 0.5
 ```
 
-If the desktop also uses the physical controller touchpad, launch the
-bridge with `--grab-touchpad`. The flag reserves the active controller's
-native touchpad evdev node for the duration of its session. Touch input
-still reaches the profile through hidraw. With a status socket,
-`native_touchpad_grabbed=true` confirms the grab. If access fails, the
-bridge logs the reason and continues serving the profile.
+If the desktop also uses the physical controller touchpad, set
+`grab_touchpad = true` under `[keyboard]` in the profile. Loading or
+unloading the profile updates the reservation immediately. The CLI flag
+`--grab-touchpad` requests the reservation for the entire run. The bridge
+reserves only the active controller's native touchpad evdev node. Touch
+input still reaches the profile through hidraw.
+
+```toml
+[keyboard]
+grab_touchpad = true
+
+[keyboard.touch_pointer]
+```
+
+`native_touchpad_grab_requested` shows the effective request and
+`native_touchpad_grabbed=true` confirms the reservation. If access fails,
+the bridge logs the reason and continues serving the profile.
 
 Use `chord` in place of `button` or `trigger` to require two active
 inputs. Either press order works. The second input completes the chord,

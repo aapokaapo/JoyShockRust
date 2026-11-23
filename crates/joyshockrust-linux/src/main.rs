@@ -522,6 +522,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     if let Some(status) = status {
         status.update(None, runtime.gyro.is_some());
         status.set_profile_source(profile_source);
+        status.set_touchpad_policy(grab_touchpad || runtime.grab_touchpad, false);
     }
     let mut controller_config = controller_config::ControllerConfig::load();
     let controller_defaults = controller_config.filter();
@@ -636,6 +637,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             runtime = *next;
                             if let Some(status) = status {
                                 status.update(None, runtime.gyro.is_some());
+                                status.set_touchpad_policy(
+                                    grab_touchpad || runtime.grab_touchpad,
+                                    false,
+                                );
                             }
                             None
                         }
@@ -760,22 +765,15 @@ fn serve_session(
     let mut state = gamepad::GamepadState::new(bridge.gamepad);
     let mut layer_state = gamepad::RemapState::default();
     let mut touch_click = touchpad::ClickState::default();
-    let native_touchpad = if grab_touchpad {
-        match touchpad::grab_native(input) {
-            Ok(device) => Some(device),
-            Err(err) => {
-                eprintln!("Native touchpad grab unavailable: {err}");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let touchpad_requested = grab_touchpad || runtime.grab_touchpad;
+    let mut native_touchpad = touchpad_requested
+        .then(|| touchpad::try_grab_native(input))
+        .flatten();
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());
         status.set_active_hidraw(path);
         status.set_gamepad_device(output.as_mut());
-        status.set_touchpad_grabbed(native_touchpad.is_some());
+        status.set_touchpad_policy(touchpad_requested, native_touchpad.is_some());
     }
     let resource_start = measurement
         .as_ref()
@@ -915,8 +913,16 @@ fn serve_session(
                         keyboard_deadline.set(None);
                     }
                     *runtime = *next;
+                    let touchpad_requested = grab_touchpad || runtime.grab_touchpad;
+                    if !touchpad_requested {
+                        native_touchpad.take();
+                    } else if native_touchpad.is_none() {
+                        let input = reload_input.as_ref().expect("reload descriptor");
+                        native_touchpad = touchpad::try_grab_native(input);
+                    }
                     if let Some(status) = status {
                         status.update(Some(identity), runtime.gyro.is_some());
+                        status.set_touchpad_policy(touchpad_requested, native_touchpad.is_some());
                     }
                     reload.applied(status);
                     return Ok(ControlFlow::Continue(()));
