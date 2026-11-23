@@ -697,6 +697,86 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires writable /dev/uinput and readable virtual evdev nodes"]
+    fn uinput_keyboard_and_mouse_gestures() {
+        use crate::live_uinput_test::open_evdev;
+        use joyshockrust_input::{DeviceModel, Transport, parse_report};
+
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            button = "l1"
+            hold = "KEY_F13"
+            [[keyboard.bindings]]
+            button = "cross"
+            tap = "BTN_LEFT"
+            double_tap = "BTN_RIGHT"
+            double_tap_ms = 100
+        "#,
+        );
+        let mut output = Keyboard::open(Some(&config), None).unwrap().unwrap();
+        let keys = open_evdev(
+            &output
+                .outputs
+                .keyboard
+                .as_mut()
+                .unwrap()
+                .get_syspath()
+                .unwrap(),
+        );
+        let mouse = open_evdev(
+            &output
+                .outputs
+                .mouse
+                .as_mut()
+                .unwrap()
+                .get_syspath()
+                .unwrap(),
+        );
+        assert!(!keys.supported_keys().unwrap().contains(KeyCode::BTN_LEFT));
+        assert!(!mouse.supported_keys().unwrap().contains(KeyCode::KEY_F13));
+
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[1..=4].fill(128);
+        frame[9] = 1; // L1 remains held for the entire sequence.
+        frame[33] = 0x80;
+        frame[37] = 0x80;
+        let mut report = |cross| {
+            frame[8] = if cross { 0x28 } else { 8 };
+            parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap()
+        };
+        let start = Instant::now();
+        assert_eq!(output.publish(report(true), start).unwrap(), None);
+        assert!(keys.get_key_state().unwrap().contains(KeyCode::KEY_F13));
+        assert!(!mouse.get_key_state().unwrap().contains(KeyCode::BTN_LEFT));
+
+        let released = start + Duration::from_millis(10);
+        let click = released + Duration::from_millis(100);
+        assert_eq!(
+            output.publish(report(false), released).unwrap(),
+            Some(click)
+        );
+        assert_eq!(
+            output.tick(click - Duration::from_millis(1)).unwrap(),
+            Some(click)
+        );
+        assert!(!mouse.get_key_state().unwrap().contains(KeyCode::BTN_LEFT));
+
+        let click_up = click + TAP_KEY_TIME;
+        assert_eq!(output.tick(click).unwrap(), Some(click_up));
+        let mouse_state = mouse.get_key_state().unwrap();
+        assert!(mouse_state.contains(KeyCode::BTN_LEFT));
+        assert!(!mouse_state.contains(KeyCode::BTN_RIGHT));
+        assert_eq!(output.tick(click_up).unwrap(), None);
+        assert!(!mouse.get_key_state().unwrap().contains(KeyCode::BTN_LEFT));
+        assert!(keys.get_key_state().unwrap().contains(KeyCode::KEY_F13));
+
+        output.release().unwrap();
+        assert!(!keys.get_key_state().unwrap().contains(KeyCode::KEY_F13));
+    }
+
+    #[test]
     fn tap_hold_and_double_tap_emit_distinct_keys() {
         let config = config(
             r#"

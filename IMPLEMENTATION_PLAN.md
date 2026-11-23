@@ -201,6 +201,8 @@ also target mouse buttons through a dedicated virtual pointer. Touchpad
 grid contacts, region clicks, and two-input chords can feed these gestures.
 Each gesture can emit a shortcut with multiple keyboard keys. Profiles can
 set the hold threshold and double-tap window per binding.
+An opt-in uinput test covers the timed mouse tap and held-key cleanup with
+both virtual devices and synthetic USB reports.
 Deadline and output handling have synthetic coverage. The bridge supports
 keyboard and mouse profiles with the virtual gamepad disabled. Analog
 stick bindings support direction keys,

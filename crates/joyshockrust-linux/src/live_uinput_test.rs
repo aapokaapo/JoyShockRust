@@ -55,8 +55,8 @@ fn gamepad_path(response: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-fn open_evdev(sysfs: &Path) -> Device {
-    wait_for("readable virtual gamepad evdev node", || {
+pub(super) fn open_evdev(sysfs: &Path) -> Device {
+    wait_for("readable virtual evdev node", || {
         fs::read_dir(sysfs).ok()?.flatten().find_map(|entry| {
             let name = entry.file_name();
             if !name.as_encoded_bytes().starts_with(b"event") {

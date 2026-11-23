@@ -642,6 +642,15 @@ and connect a controller to verify activation without a service restart.
 
 ## Keyboard and mouse profile acceptance
 
+Run the kernel round-trip test with writable `/dev/uinput` and readable
+virtual evdev nodes. It feeds synthetic USB input to the keyboard and mouse
+mapper and checks that a tap waits for the double-tap window, that the
+mouse click reaches the correct device, and that cleanup clears a held key.
+
+```sh
+cargo test --locked -p joyshockrust-linux uinput_keyboard_and_mouse_gestures -- --ignored
+```
+
 Stop the user service while testing a standalone bridge.
 
 ```sh
