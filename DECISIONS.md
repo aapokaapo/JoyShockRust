@@ -78,7 +78,7 @@ Only one remap layer is active at a time. The selected layer remains active unti
 
 The generic uinput gamepad emits Linux `BTN_X` for physical Square and `BTN_Y` for Triangle. Linux aliases those codes to `BTN_NORTH` and `BTN_WEST` respectively. SDL's Linux fallback uses X/Y for generic devices and position names for Sony devices. The USB parser retains the physical face positions. Sources checked 2026-11-22. [Linux event codes](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/include/uapi/linux/input-event-codes.h#L380-L389) · [SDL mapping](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/src/joystick/linux/SDL_sysjoystick.c#L2342-L2374)
 
-Experimental Flick Stick uses physical right-stick direction and device report timing. It starts an initial 100 ms turn at 90% radial travel, follows the shortest angular change while held, and re-arms below 75%. It clears queued motion on timestamp gaps and keeps the virtual right stick centered. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
+Experimental Flick Stick uses physical right-stick direction and device report timing. It starts an initial 100 ms turn at 90% radial travel, follows the shortest angular change while held, and re-arms below 75%. It clears queued motion on timestamp gaps and keeps the virtual right stick centered. An angular axial threshold snaps directions close to each cardinal axis. The same threshold is used for the initial flick, steering, and calibration sweeps. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
 
 ## Phase 5 first increment
 
@@ -498,10 +498,11 @@ For tray RWC calibration, the bridge ends its active output session
 before acknowledging the pause and keeps serving control requests.
 Discovery resumes with the existing profile and controller filter.
 The tray waits for the GTK calibration window, then resumes the bridge.
-A read-only helper opens the selected hidraw node and publishes
-navigation presses to the calibration window while outputs are paused.
-The window handles those presses only while focused. Options remains
-available to the measurement worker.
+The calibration window opens the selected hidraw node read-only and
+watches it through a bounded nonblocking source on the GTK main loop.
+It handles navigation presses only while focused. Options remains
+available to the measurement worker. The review screen uses the same
+RWC calculation as the save command.
 The window runs the same Flick Stick sweep as the interactive CLI.
 Measurement emits line-delimited status on readiness and Options
 transitions. The GTK window drains these messages asynchronously before

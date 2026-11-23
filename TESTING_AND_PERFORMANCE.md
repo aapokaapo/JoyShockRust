@@ -205,6 +205,9 @@ recenter. Hold the stick near the outside and rotate it across the rear
 axis. Confirm the camera follows smoothly without a full-turn jump. Set
 the counts-per-degree value for the game's sensitivity before measuring
 the angles. Confirm the left stick still drives the virtual gamepad.
+Set the axial threshold to 12° and flick just left and right of forward.
+Verify both snap to forward. From a diagonal, steer back to forward.
+Set the threshold to 0° and repeat to compare the response.
 
 The user reported that Flick Stick worked as expected.
 
@@ -403,8 +406,10 @@ success response. Compare equal rotations on each axis. Change only the
 vertical sensitivity and load the preset again. Confirm that horizontal
 aim retains its sensitivity and that calibration continues. Check that a
 negative sensitivity is rejected and that the last valid profile remains
-active. Run `joyshockrust-linux --reload-profile` to restore the startup
-profile.
+active. Set a minimum speed and 2× acceleration in the editor. Compare
+slow turns below the cutoff, turns between the two acceleration
+thresholds, and fast turns above the upper threshold. Run
+`joyshockrust-linux --reload-profile` to restore the startup profile.
 
 A manual bridge needs `--profile PATH --reload-socket SOCKET`. Pass the same
 `SOCKET` as the optional final argument to `--load-profile`.
@@ -837,7 +842,9 @@ calibration, verify D-pad left/right changes sensitivity by 0.1,
 L1/R1 changes it by 0.01, and D-pad up/down moves focus. While the game
 has focus, verify Cross and Circle leave the calibration window alone
 and Options still controls measurement. Refocus calibration, change the
-whole-turn count with the D-pad, choose a profile and save with Cross.
+whole-turn count with the D-pad and check the RWC preview changes while
+the in-game sensitivity stays constant. Choose a profile and save with
+Cross.
 Check Circle cancels and the tray resumes the bridge.
 
 Install the tray and bridge using the [desktop tray instructions](README.md#desktop-tray).

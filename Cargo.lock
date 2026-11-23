@@ -756,7 +756,11 @@ version = "0.1.0"
 name = "joyshockrust-editor"
 version = "0.1.0"
 dependencies = [
+ "joyshockrust-core",
+ "joyshockrust-input",
+ "joyshockrust-motion",
  "libadwaita",
+ "libc",
  "tempfile",
  "toml_edit 0.24.1+spec-1.1.0",
 ]

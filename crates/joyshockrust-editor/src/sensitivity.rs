@@ -4,6 +4,10 @@ use std::{
 };
 
 use adw::{gtk, prelude::*};
+use joyshockrust_motion::aim_response::{
+    DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, GyroResponse, MAX_FLICK_AXIAL_THRESHOLD_DEG,
+    MAX_GYRO_ACCEL_MULTIPLIER, MAX_GYRO_RATE_DPS,
+};
 
 use crate::{
     bindings::replace_value,
@@ -16,6 +20,13 @@ const GYRO_FIELDS: [&str; 2] = ["sensitivity_x", "sensitivity_y"];
 const GYRO_SLIDER_MAX: f64 = 20.0;
 const GYRO_TEXT_MAX: f64 = 100.0;
 pub const GYRO_SENSITIVITY_ERROR: &str = "Enter a gyro sensitivity between 0 and 100.";
+const RESPONSE_FIELDS: [&str; 4] = [
+    "threshold_dps",
+    "accel_start_dps",
+    "accel_end_dps",
+    "accel_multiplier",
+];
+const FLICK_THRESHOLD: &str = "flick_axial_threshold_deg";
 const CALIBRATION_FIELDS: [&str; 2] = ["real_world_calibration", "in_game_sens"];
 const STICK_FIELDS: [&str; 2] = ["stick_curve_left", "stick_curve_right"];
 
@@ -81,6 +92,8 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     };
     let page = adw::PreferencesPage::new();
     page.add(&gyro_sensitivity_group(ctx, gyro));
+    page.add(&gyro_response_group(ctx, gyro));
+    page.add(&flick_threshold_group(ctx, gyro));
     page.add(&calibration_shortcut(ctx, gyro));
 
     let calibration = adw::PreferencesGroup::builder()
@@ -173,6 +186,106 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     });
     page.add(&calibration);
     page.upcast()
+}
+
+fn gyro_response_values(gyro: Option<&dyn TableLike>) -> [f64; 4] {
+    let defaults = GyroResponse::default().values();
+    std::array::from_fn(|i| {
+        gyro.map_or(defaults[i], |table| {
+            number(table, RESPONSE_FIELDS[i], defaults[i])
+        })
+    })
+}
+
+fn setting_row(title: &str, subtitle: &str, value: f64, lower: f64, upper: f64) -> adw::SpinRow {
+    adw::SpinRow::builder()
+        .title(title)
+        .subtitle(subtitle)
+        .adjustment(&gtk::Adjustment::new(value, lower, upper, 0.1, 1.0, 0.0))
+        .digits(2)
+        .build()
+}
+
+fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("Gyro response")
+        .build();
+    let values = gyro_response_values(gyro);
+    for (axis, (title, subtitle, lower, upper)) in [
+        (
+            "Minimum speed",
+            "Suppresses aim below this speed in °/s.",
+            0.0,
+            MAX_GYRO_RATE_DPS,
+        ),
+        (
+            "Acceleration start",
+            "Speed in °/s where the boost begins.",
+            0.0,
+            MAX_GYRO_RATE_DPS,
+        ),
+        (
+            "Acceleration end",
+            "Speed in °/s where the full boost applies.",
+            0.0,
+            MAX_GYRO_RATE_DPS,
+        ),
+        (
+            "Acceleration multiplier",
+            "Maximum boost to both axes. 1 disables acceleration.",
+            1.0,
+            MAX_GYRO_ACCEL_MULTIPLIER,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let row = setting_row(title, subtitle, values[axis], lower, upper);
+        group.add(&row);
+        let ctx = ctx.clone();
+        let reverting = Cell::new(false);
+        row.connect_value_notify(move |row| {
+            if reverting.get() {
+                return;
+            }
+            let Ok(doc) = ctx.document() else { return };
+            let mut values = gyro_response_values(doc.get("gyro").and_then(Item::as_table_like));
+            let old = values[axis];
+            values[axis] = row.value();
+            let [minimum, start, end, multiplier] = values;
+            if let Err(error) = GyroResponse::new(minimum, start, end, multiplier) {
+                reverting.set(true);
+                row.set_value(old);
+                reverting.set(false);
+                ctx.report(Err(error.into()));
+                return;
+            }
+            ctx.edit(|doc| set_gyro_numbers(doc, [(RESPONSE_FIELDS[axis], values[axis])]));
+        });
+    }
+    group
+}
+
+fn flick_threshold_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("Flick Stick")
+        .build();
+    let value = gyro.map_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, |table| {
+        number(table, FLICK_THRESHOLD, DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
+    });
+    let row = setting_row(
+        "Axial threshold",
+        "Snap to the nearest cardinal direction within this angle in degrees. 0 disables snapping.",
+        value,
+        0.0,
+        MAX_FLICK_AXIAL_THRESHOLD_DEG,
+    );
+    let ctx = ctx.clone();
+    row.connect_value_notify(move |row| {
+        ctx.edit(|doc| set_gyro_numbers(doc, [(FLICK_THRESHOLD, row.value())]));
+    });
+    group.add(&row);
+    group
 }
 
 fn gyro_values(gyro: Option<&dyn TableLike>) -> [f64; 2] {

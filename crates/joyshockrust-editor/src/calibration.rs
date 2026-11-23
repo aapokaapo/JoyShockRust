@@ -7,6 +7,10 @@ use std::{
 };
 
 use adw::{gio, glib, gtk, prelude::*};
+use joyshockrust_motion::{
+    aim_response::{DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, validate_flick_axial_threshold},
+    game_calibration::calculate,
+};
 
 use crate::calibration_navigation::{self, Control};
 
@@ -38,6 +42,21 @@ pub struct GameProfiles {
 }
 
 impl GameProfiles {
+    fn gyro_number(&self, key: &str) -> Option<f64> {
+        let text = std::fs::read_to_string(self.active.as_ref()?).ok()?;
+        let doc = text.parse::<toml_edit::DocumentMut>().ok()?;
+        let value = doc.get("gyro")?.get(key)?;
+        value
+            .as_float()
+            .or_else(|| value.as_integer().map(|number| number as f64))
+    }
+
+    fn axial_threshold(&self) -> f64 {
+        self.gyro_number("flick_axial_threshold_deg")
+            .and_then(|degrees| validate_flick_axial_threshold(degrees).ok())
+            .unwrap_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
+    }
+
     fn choices(&self, previous: Option<&Path>) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         for path in previous
@@ -128,18 +147,7 @@ fn open_window(
         glib::Propagation::Proceed
     });
     if let Some(game) = &session.game {
-        let sensitivity = game
-            .active
-            .as_ref()
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
-            .and_then(|doc| {
-                let value = doc.get("gyro")?.get("in_game_sens")?;
-                value
-                    .as_float()
-                    .or_else(|| value.as_integer().map(|number| number as f64))
-            })
-            .unwrap_or(1.0);
+        let sensitivity = game.gyro_number("in_game_sens").unwrap_or(1.0);
         session.setup(sensitivity, None);
     } else {
         session.setup_gyro(None);
@@ -150,48 +158,24 @@ fn open_window(
 
 impl Calibration {
     fn watch_controller(self: &Rc<Self>, window: &adw::ApplicationWindow) {
-        let parent = std::process::id().to_string();
-        let flags = gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_SILENCE;
-        let reader = gio::Subprocess::newv(
-            &[
-                self.bridge.as_os_str(),
-                OsStr::new("--calibration-navigation"),
-                self.node.as_os_str(),
-                OsStr::new(&parent),
-            ],
-            flags,
-        );
-        let reader = match reader {
-            Ok(reader) => reader,
-            Err(_) => {
-                self.controller_unavailable();
-                return;
+        let session = Rc::downgrade(self);
+        let hint = self.navigation_hint.clone();
+        let unavailable = move |error: &std::io::Error| {
+            if let Some(hint) = hint.upgrade() {
+                hint.set_text(&format!("Controller navigation unavailable. {error}"));
             }
         };
-        let stream = gio::DataInputStream::new(&reader.stdout_pipe().expect("piped stdout"));
-        let on_hide = reader.clone();
-        window.connect_hide(move |_| on_hide.force_exit());
-        let session = Rc::downgrade(self);
-        glib::MainContext::default().spawn_local(async move {
-            while let Ok(Some(command)) =
-                stream.read_line_utf8_future(glib::Priority::DEFAULT).await
-            {
-                let Some(session) = session.upgrade() else {
-                    break;
-                };
-                session.navigate(command.as_str());
-            }
-            reader.force_exit();
-            let _ = reader.wait_future().await;
-            if let Some(session) = session.upgrade() {
-                session.controller_unavailable();
-            }
-        });
-    }
-
-    fn controller_unavailable(&self) {
-        if let Some(hint) = self.navigation_hint.upgrade() {
-            hint.set_text("Controller navigation unavailable. Use the keyboard or mouse.");
+        if let Err(error) = calibration_navigation::watch(
+            window,
+            &self.node,
+            move |command| {
+                if let Some(session) = session.upgrade() {
+                    session.navigate(command);
+                }
+            },
+            unavailable.clone(),
+        ) {
+            unavailable(&error);
         }
     }
 
@@ -379,13 +363,21 @@ impl Calibration {
                 window.close();
             }
         });
-        let args = [
+        let mut args = vec![
             OsString::from("--calibrate-game"),
             "--measure-stick".into(),
             sensitivity.to_string().into(),
             self.node.as_os_str().to_owned(),
             std::process::id().to_string().into(),
         ];
+        let threshold = self
+            .game
+            .as_ref()
+            .expect("game calibration")
+            .axial_threshold();
+        if threshold != DEFAULT_FLICK_AXIAL_THRESHOLD_DEG {
+            args.push(threshold.to_string().into());
+        }
         let session = self.clone();
         self.launch(
             &args,
@@ -430,6 +422,31 @@ impl Calibration {
         self.controls
             .borrow_mut()
             .push(Control::Turns(entry.downgrade()));
+        let result = adw::ActionRow::builder()
+            .title("Real-world calibration")
+            .build();
+        let refresh_result = move |entry: &adw::EntryRow, result: &adw::ActionRow| {
+            let value = measured_calibration(counts, sensitivity, entry.text().as_str())
+                .map_or_else(
+                    |_| "—".to_owned(),
+                    |(_, calibration)| calibration.to_string(),
+                );
+            result.set_subtitle(&value);
+        };
+        refresh_result(&entry, &result);
+        group.add(&result);
+        let result = result.downgrade();
+        entry.connect_changed(move |entry| {
+            if let Some(result) = result.upgrade() {
+                refresh_result(entry, &result);
+            }
+        });
+        group.add(
+            &adw::ActionRow::builder()
+                .title("In-game mouse sensitivity")
+                .subtitle(sensitivity.to_string())
+                .build(),
+        );
         let game = self.game.as_ref().expect("game calibration");
         let profiles = game.choices(previous);
         let mut labels = vec!["Choose a profile".to_owned()];
@@ -480,10 +497,10 @@ impl Calibration {
                 save.set_sensitive(row.selected() != 0);
             }
         });
-        let confirm_turns = move || match entry.text().trim().parse::<u32>() {
-            Ok(turns) if turns > 0 => Some(turns),
-            _ => {
-                warning.set_text("Enter a positive whole number.");
+        let confirm_turns = move || match measured_calibration(counts, sensitivity, &entry.text()) {
+            Ok((turns, _)) => Some(turns),
+            Err(error) => {
+                warning.set_text(error);
                 warning.set_visible(true);
                 None
             }
@@ -698,6 +715,20 @@ fn parse_bias(reply: String) -> Result<[OsString; 4], String> {
     }
 }
 
+fn measured_calibration(
+    counts: i32,
+    sensitivity: f64,
+    text: &str,
+) -> Result<(u32, f64), &'static str> {
+    let turns = text
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|&turns| turns > 0)
+        .ok_or("Enter a positive whole number.")?;
+    Ok((turns, calculate(counts, sensitivity, f64::from(turns))?))
+}
+
 pub(crate) fn positive_decimal(text: &str) -> Option<f64> {
     text.parse::<f64>()
         .ok()
@@ -803,7 +834,7 @@ case "$1:$2" in
         ;;
     --calibrate-game:--measure-stick)
         shift
-        [ "$2" = 2 ] || exit 1
+        [ "$2" = 2 ] && [ "$5" = 12 ] || exit 1
         if [ "$3" = cancel ]; then exec sleep 60; fi
         printf 'ready\n'
         wait_for_gate "$3.ready"
@@ -828,7 +859,11 @@ esac
         .unwrap();
         fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
         let profile = directory.path().join("profile.toml");
-        fs::write(&profile, "version = 1\n[gyro]\nin_game_sens = 2.0\n").unwrap();
+        fs::write(
+            &profile,
+            "version = 1\n[gyro]\nin_game_sens = 2.0\nflick_axial_threshold_deg = 12\n",
+        )
+        .unwrap();
 
         let alternate_dir = directory.path().join("other");
         fs::create_dir(&alternate_dir).unwrap();
@@ -907,6 +942,16 @@ esac
                     session.navigate_window(window, "right");
                 }
                 assert_eq!(turns.text(), "4");
+                let value = |title| {
+                    descendants::<adw::ActionRow>(window.upcast_ref())
+                        .into_iter()
+                        .find(|row| row.title() == title)
+                        .unwrap()
+                        .subtitle()
+                        .unwrap()
+                };
+                assert_eq!(value("Real-world calibration"), "40");
+                assert_eq!(value("In-game mouse sensitivity"), "2");
                 session.navigate_window(window, "down");
                 if select_alternate {
                     session.navigate_window(window, "right");

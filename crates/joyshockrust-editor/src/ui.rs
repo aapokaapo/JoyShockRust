@@ -755,6 +755,30 @@ pub(crate) mod tests {
         let (entry, _) = controls(&reopened, "Vertical");
         entry.set_text("9.5");
         assert_axes(31.25, 9.5);
+        let settings = descendants::<adw::SpinRow>(&reopened);
+        for (title, value) in [
+            ("Minimum speed", 2.0),
+            ("Acceleration start", 25.0),
+            ("Acceleration end", 120.0),
+            ("Acceleration multiplier", 2.5),
+            ("Axial threshold", 12.0),
+        ] {
+            settings
+                .iter()
+                .find(|row| row.title() == title)
+                .unwrap()
+                .set_value(value);
+        }
+        let doc = ctx.document().unwrap();
+        for (key, value) in [
+            ("threshold_dps", 2.0),
+            ("accel_start_dps", 25.0),
+            ("accel_end_dps", 120.0),
+            ("accel_multiplier", 2.5),
+            ("flick_axial_threshold_deg", 12.0),
+        ] {
+            assert_eq!(doc["gyro"][key].as_float(), Some(value));
+        }
         window.close();
     }
 

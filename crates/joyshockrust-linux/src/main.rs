@@ -1,8 +1,6 @@
 #[cfg(target_os = "linux")]
 mod benchmark;
 #[cfg(target_os = "linux")]
-mod calibration_nav;
-#[cfg(target_os = "linux")]
 mod controller_config;
 #[cfg(target_os = "linux")]
 mod diagnostics;
@@ -125,13 +123,6 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     }
     if args.next_if(|arg| arg == "--test-haptics").is_some() {
         haptics::test_cli(args)?;
-        return Ok(ExitCode::SUCCESS);
-    }
-    if args
-        .next_if(|arg| arg == "--calibration-navigation")
-        .is_some()
-    {
-        calibration_nav::run(args)?;
         return Ok(ExitCode::SUCCESS);
     }
     if args.next_if(|arg| arg == "--gyro-calibration").is_some() {
@@ -977,6 +968,8 @@ fn serve_session(
                         (&mut mouse, runtime.gyro, next.gyro)
                         && (gyro_mouse::Options {
                             sensitivity: next.sensitivity,
+                            response: next.response,
+                            flick_axial_threshold_deg: next.flick_axial_threshold_deg,
                             game_calibration: next.game_calibration,
                             ..current
                         }) == next

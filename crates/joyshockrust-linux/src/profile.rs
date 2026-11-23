@@ -1,3 +1,5 @@
+use joyshockrust_motion::aim_response::{GyroResponse, validate_flick_axial_threshold};
+
 use std::{
     env,
     error::Error,
@@ -44,6 +46,11 @@ struct Gyro {
     calibrate: bool,
     calibration_hold: Option<CalibrationHold>,
     flick_stick: Option<f64>,
+    flick_axial_threshold_deg: Option<f64>,
+    threshold_dps: Option<f64>,
+    accel_start_dps: Option<f64>,
+    accel_end_dps: Option<f64>,
+    accel_multiplier: Option<f64>,
     sensitivity_x: Option<f32>,
     sensitivity_y: Option<f32>,
     real_world_calibration: Option<f64>,
@@ -371,6 +378,7 @@ impl Gyro {
             Some(GyroBinding::Chord(spec)) => gyro_gate::parse_chord(&spec, resolve_input)?,
             Some(GyroBinding::Trigger(spec)) => Binding::AnalogTrigger(TriggerGate::parse(&spec)?),
         };
+        let [threshold, start, end, multiplier] = GyroResponse::default().values();
         Ok(gyro_mouse::Options {
             calibrate: self.calibrate,
             calibration_hold: self
@@ -379,6 +387,16 @@ impl Gyro {
                 .transpose()?,
             binding,
             flick_stick,
+            flick_axial_threshold_deg: self
+                .flick_axial_threshold_deg
+                .map(validate_flick_axial_threshold)
+                .transpose()?,
+            response: GyroResponse::new(
+                self.threshold_dps.unwrap_or(threshold),
+                self.accel_start_dps.unwrap_or(start),
+                self.accel_end_dps.unwrap_or(end),
+                self.accel_multiplier.unwrap_or(multiplier),
+            )?,
             game_calibration: GameCalibration::new(
                 self.real_world_calibration.unwrap_or(1.0),
                 self.in_game_sens.unwrap_or(1.0),
@@ -571,6 +589,25 @@ mod tests {
         );
         assert!(render_game_calibration("version = 1", 40.0, 2.0).is_ok());
         assert!(render_game_calibration(source, 0.0, 2.0).is_err());
+    }
+
+    #[test]
+    fn aim_response_profile_validates_thresholds_and_acceleration() {
+        let valid = parse("version = 1\n[gyro]\nflick_axial_threshold_deg = 12\nthreshold_dps = 2\naccel_start_dps = 25\naccel_end_dps = 120\naccel_multiplier = 2.5").unwrap().gyro.unwrap();
+        assert_eq!(valid.flick_axial_threshold(), 12.0);
+        assert_eq!(valid.response.values(), [2.0, 25.0, 120.0, 2.5]);
+        for settings in [
+            "flick_axial_threshold_deg = -1",
+            "flick_axial_threshold_deg = 31",
+            "threshold_dps = -1",
+            "accel_multiplier = 0.5",
+            "accel_end_dps = 20",
+        ] {
+            assert!(
+                parse(&format!("version = 1\n[gyro]\n{settings}")).is_err(),
+                "{settings}"
+            );
+        }
     }
 
     #[test]

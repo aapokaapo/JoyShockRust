@@ -14,6 +14,7 @@ use joyshockrust_input::{
 };
 use joyshockrust_motion::{
     Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
+    aim_response::{DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, GyroResponse},
 };
 
 use super::{
@@ -41,6 +42,8 @@ pub struct Options {
     pub calibration_hold: Option<HoldBinding>,
     pub binding: Binding,
     pub flick_stick: Option<f64>,
+    pub flick_axial_threshold_deg: Option<f64>,
+    pub response: GyroResponse,
     pub sensitivity: Sensitivity,
     pub game_calibration: GameCalibration,
 }
@@ -119,6 +122,11 @@ impl Options {
             .map(|scale| self.game_calibration.scale(f64::from(scale)))
     }
 
+    pub fn flick_axial_threshold(self) -> f64 {
+        self.flick_axial_threshold_deg
+            .unwrap_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
+    }
+
     fn flick_scale(self) -> Option<f64> {
         self.flick_stick
             .map(|scale| self.game_calibration.scale(scale))
@@ -174,7 +182,8 @@ impl GyroMouse {
             None
         };
         Ok(Self {
-            aim: GyroAim::new(factory, options.calibrate, options.gyro_scale(), stored),
+            aim: GyroAim::new(factory, options.calibrate, options.gyro_scale(), stored)
+                .with_response(options.response),
             output,
             hold: options.calibration_hold.map(HoldDetector::new),
             shortcut: None,
@@ -183,14 +192,20 @@ impl GyroMouse {
                 .and_then(|_| Haptics::open(input, transport)),
             bias_writer,
             gate: GyroGate::new(options.binding),
-            flick: options.flick_scale().map(FlickStick::new),
+            flick: options.flick_scale().map(|scale| {
+                FlickStick::new(scale).with_axial_threshold(options.flick_axial_threshold())
+            }),
         })
     }
 
     pub fn set_scaling(&mut self, options: Options) {
         self.aim.set_sensitivity(options.gyro_scale());
+        if self.aim.response != options.response {
+            self.aim.set_response(options.response);
+        }
         if let (Some(flick), Some(scale)) = (&mut self.flick, options.flick_scale()) {
             flick.set_counts_per_degree(scale);
+            flick.set_axial_threshold(options.flick_axial_threshold());
         }
     }
 
@@ -285,6 +300,7 @@ struct GyroAim {
     completed_bias: Option<Calibration>,
     remainder: [f64; 2],
     sensitivity: [f64; 2],
+    response: GyroResponse,
     was_enabled: bool,
 }
 
@@ -307,8 +323,19 @@ impl GyroAim {
             completed_bias: None,
             remainder: [0.0; 2],
             sensitivity,
+            response: GyroResponse::default(),
             was_enabled: false,
         }
+    }
+
+    fn with_response(mut self, response: GyroResponse) -> Self {
+        self.set_response(response);
+        self
+    }
+
+    fn set_response(&mut self, response: GyroResponse) {
+        self.response = response;
+        self.remainder = [0.0; 2];
     }
 
     fn config() -> MotionConfig {
@@ -374,11 +401,17 @@ impl GyroAim {
             return [0; 2];
         }
 
+        let gain = self.response.gain(output.angular_velocity);
+        if gain == 0.0 {
+            self.remainder = [0.0; 2];
+            return [0; 2];
+        }
+
         // Retain fractional movement so repeated sub-count deltas still move
         // the pointer. Clear these fractions on discontinuities.
         std::array::from_fn(|axis| {
-            let total =
-                self.remainder[axis] + f64::from(output.aim_delta[axis]) * self.sensitivity[axis];
+            let total = self.remainder[axis]
+                + f64::from(output.aim_delta[axis]) * self.sensitivity[axis] * gain;
             let whole = total as i32;
             self.remainder[axis] = total - f64::from(whole);
             whole
@@ -515,6 +548,26 @@ mod tests {
             total[1] += delta[1];
         }
         assert_eq!(total, [-20, 5]);
+    }
+
+    #[test]
+    fn gyro_response_gates_small_motion_and_boosts_both_axes() {
+        let mut aim = aim(false).with_response(GyroResponse::new(4.0, 10.0, 100.0, 2.0).unwrap());
+        let mut slow = sample(0);
+        slow.gyro_counts = [0, 16, 0]; // 1 °/s yaw
+        for step in 0..=10 {
+            slow.device_ticks = step * 3000;
+            assert_eq!(aim.advance(slow, true), [0, 0]);
+        }
+        // A gap starts the fast segment without carrying an interval over.
+        assert_eq!(aim.advance(sample(300_000), true), [0, 0]);
+        let mut total = [0, 0];
+        for step in 1..=10 {
+            let delta = aim.advance(sample(300_000 + step * 3000), true);
+            total[0] += delta[0];
+            total[1] += delta[1];
+        }
+        assert_eq!(total, [-8, 4]);
     }
 
     #[test]

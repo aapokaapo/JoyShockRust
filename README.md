@@ -725,6 +725,13 @@ and in-game sensitivity in the **Game calibration** text fields.
 Changing these settings creates a `[gyro]` section if needed, which
 enables the profile's gyro mouse.
 
+Under **Gyro response**, set a minimum aim speed and the start and end
+speeds for acceleration, in degrees per second. The acceleration
+multiplier ramps up between those speeds and caps at the selected value.
+A minimum speed of 0 and a multiplier of 1 preserve linear aim.
+Under **Flick Stick**, **Axial threshold** snaps the stick to the nearest
+cardinal direction inside the chosen angle. The default is 8°.
+
 Open the profile actions menu to **Validate Profile** or **Save** to
 disk. **Save & Apply** writes the profile and loads it into the running
 bridge. Use Ctrl+S to save or Ctrl+Shift+S to save and apply.
@@ -738,7 +745,9 @@ movement is needed. Sweep the stick around its edge until the camera has
 completed one or more whole turns and has returned to the landmark. Center
 the stick and press Options again. Return to the calibration window and
 enter the number of complete turns. The active profile is preselected if
-its file is available. Choose another profile or use **Browse Profiles…**
+its file is available. **Save game calibration** shows both the calculated RWC
+and the in-game sensitivity. The RWC value updates when you change the
+turn count. Choose another profile or use **Browse Profiles…**
 to find a different file. Select **Save Calibration** to store the result.
 
 In either calibration window, use **D-pad up/down** to move focus,
@@ -1062,4 +1071,9 @@ accepts values from 0.01 to 100. Flicking from center turns toward the stick
 angle over 100 ms. Rotating the held stick follows its angle changes.
 The virtual gamepad's right-stick axes are centered while this mode is
 enabled. Gyro gating still controls gyro input independently.
+
+For a TOML profile, set `flick_axial_threshold_deg` in `[gyro]` to a
+value from 0 to 30. Use 0 to disable cardinal snapping. Gyro response
+uses `threshold_dps`, `accel_start_dps`, `accel_end_dps`, and
+`accel_multiplier` in the same table.
 See the [Flick Stick test](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance).

@@ -1,10 +1,11 @@
 use std::{
-    f64::consts::{PI, TAU},
+    f64::consts::{FRAC_PI_2, PI, TAU},
     time::Duration,
 };
 
 use joyshockrust_core::Stick;
 use joyshockrust_input::{Timebase, TimestampUpdate};
+use joyshockrust_motion::aim_response::DEFAULT_FLICK_AXIAL_THRESHOLD_DEG;
 
 const FLICK_DURATION: Duration = Duration::from_millis(100);
 const ENGAGE_RADIUS: f32 = 0.90;
@@ -12,6 +13,7 @@ const RELEASE_RADIUS: f32 = 0.75;
 
 pub struct FlickStick {
     counts_per_degree: f64,
+    axial_threshold: f64,
     timebase: Timebase,
     armed: bool,
     angle: Option<f64>,
@@ -24,12 +26,24 @@ impl FlickStick {
     pub fn new(counts_per_degree: f64) -> Self {
         Self {
             counts_per_degree,
+            axial_threshold: DEFAULT_FLICK_AXIAL_THRESHOLD_DEG.to_radians(),
             timebase: Timebase::new(150_000).expect("valid 50 ms sensor gap"),
             armed: false,
             angle: None,
             remaining_degrees: 0.0,
             remaining_time: Duration::ZERO,
             remainder: 0.0,
+        }
+    }
+
+    pub fn with_axial_threshold(mut self, degrees: f64) -> Self {
+        self.axial_threshold = degrees.to_radians();
+        self
+    }
+
+    pub fn set_axial_threshold(&mut self, degrees: f64) {
+        if self.axial_threshold != degrees.to_radians() {
+            *self = Self::new(self.counts_per_degree).with_axial_threshold(degrees);
         }
     }
 
@@ -87,7 +101,13 @@ impl FlickStick {
         } else if self.armed
             && (self.angle.is_some() || radius_squared >= ENGAGE_RADIUS * ENGAGE_RADIUS)
         {
-            let current = f64::from(stick.x).atan2(-f64::from(stick.y));
+            let angle = f64::from(stick.x).atan2(-f64::from(stick.y));
+            let cardinal = (angle / FRAC_PI_2).round() * FRAC_PI_2;
+            let current = if (angle - cardinal).abs() <= self.axial_threshold {
+                cardinal
+            } else {
+                angle
+            };
             if let Some(previous) = self.angle.replace(current) {
                 let turn = (current - previous + PI).rem_euclid(TAU) - PI;
                 let degrees_rotated = turn.to_degrees();
@@ -123,8 +143,21 @@ mod tests {
     }
 
     #[test]
+    fn axial_threshold_snaps_forward_at_engagement_and_during_steering() {
+        let mut flick = FlickStick::new(1.0).with_axial_threshold(10.0);
+        let near_forward = |x| Stick { x, y: -1.0 };
+        assert_eq!(flick.advance(Stick::default(), 0), 0);
+        assert_eq!(flick.advance(near_forward(0.1), 30_000), 0);
+        assert_eq!(flick.advance(near_forward(-0.1), 60_000), 0);
+        let turn = flick.advance(near_forward(0.3), 90_000);
+        assert!((16..=17).contains(&turn));
+        assert_eq!(flick.advance(near_forward(-0.1), 120_000), -turn);
+        assert_eq!(flick.advance(Stick::default(), 150_000), 0);
+    }
+
+    #[test]
     fn steering_uses_shortest_arc_across_rear_and_gap_clears_pending_motion() {
-        let mut flick = FlickStick::new(1.0);
+        let mut flick = FlickStick::new(1.0).with_axial_threshold(0.0);
         let rear_right = Stick { x: 0.1, y: 1.0 };
         let rear_left = Stick { x: -0.1, y: 1.0 };
         assert_eq!(flick.advance(rear_right, 0), 0); // wait for center on startup

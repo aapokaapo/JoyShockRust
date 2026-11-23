@@ -1,6 +1,105 @@
+use std::{
+    cell::RefCell,
+    fs::OpenOptions,
+    io::{self, Read},
+    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    path::Path,
+    rc::Rc,
+};
+
 use adw::{glib, gtk, prelude::*};
 
+use joyshockrust_core::{Button, Controls, DPad};
+use joyshockrust_input::{
+    DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN, DUALSENSE_EDGE_USB_REPORT_LEN, DeviceModel, Transport,
+    parse_report,
+};
+
 use crate::calibration::positive_decimal;
+
+pub fn watch(
+    window: &adw::ApplicationWindow,
+    path: &Path,
+    mut on_command: impl FnMut(&str) + 'static,
+    on_error: impl Fn(&io::Error) + 'static,
+) -> io::Result<()> {
+    let mut input = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    let source = Rc::new(RefCell::new(None::<glib::SourceId>));
+    let active = source.clone();
+    let mut previous = None;
+    let mut bytes = [0; 16_384];
+    let id = glib::source::unix_fd_add_local(
+        input.as_raw_fd(),
+        glib::IOCondition::IN | glib::IOCondition::HUP | glib::IOCondition::ERR,
+        move |_, condition| {
+            let result = if condition.intersects(glib::IOCondition::HUP | glib::IOCondition::ERR) {
+                Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "Controller disconnected",
+                ))
+            } else {
+                read_commands(&mut input, &mut bytes, &mut previous, |command| {
+                    on_command(command);
+                    active.borrow().is_some()
+                })
+            };
+            if active.borrow().is_none() {
+                return glib::ControlFlow::Break;
+            }
+            if let Err(error) = result {
+                active.borrow_mut().take();
+                on_error(&error);
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        },
+    );
+    source.replace(Some(id));
+    window.connect_hide(move |_| {
+        if let Some(id) = source.borrow_mut().take() {
+            id.remove();
+        }
+    });
+    Ok(())
+}
+
+fn read_commands(
+    mut input: impl Read,
+    bytes: &mut [u8],
+    previous: &mut Option<Controls>,
+    mut dispatch: impl FnMut(&str) -> bool,
+) -> io::Result<()> {
+    for _ in 0..32 {
+        let len = match input.read(bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Controller disconnected",
+                ));
+            }
+            Ok(len) => len,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        let transport = match len {
+            DUALSENSE_EDGE_USB_REPORT_LEN => Transport::Usb,
+            DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN => Transport::Bluetooth,
+            _ => continue,
+        };
+        // The controls used for navigation have the same layout on both supported models.
+        if let Ok(report) = parse_report(DeviceModel::DualSense, transport, &bytes[..len], None)
+            && let Some(command) = command(previous, report.controls)
+            && !dispatch(command)
+        {
+            break;
+        }
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub enum Control {
@@ -115,5 +214,89 @@ pub fn navigate(window: &adw::ApplicationWindow, controls: &[Control], command: 
             );
         }
         _ => {}
+    }
+}
+
+fn direction(dpad: DPad) -> Option<&'static str> {
+    match dpad {
+        DPad::Up | DPad::UpLeft | DPad::UpRight => Some("up"),
+        DPad::Down | DPad::DownLeft | DPad::DownRight => Some("down"),
+        DPad::Left => Some("left"),
+        DPad::Right => Some("right"),
+        DPad::Neutral => None,
+    }
+}
+
+fn command(previous: &mut Option<Controls>, current: Controls) -> Option<&'static str> {
+    let previous = previous.replace(current)?;
+    let pressed = |button| current.buttons.contains(button) && !previous.buttons.contains(button);
+    if pressed(Button::East) {
+        return Some("back");
+    }
+    let current_direction = direction(current.dpad);
+    if current_direction.is_some() && current_direction != direction(previous.dpad) {
+        return current_direction;
+    }
+    [
+        (Button::South, "accept"),
+        (Button::LeftShoulder, "fine-left"),
+        (Button::RightShoulder, "fine-right"),
+    ]
+    .into_iter()
+    .find_map(|(button, command)| pressed(button).then_some(command))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_reads_complete_usb_reports_and_preserves_press_edges() {
+        use std::os::unix::net::UnixDatagram;
+
+        struct Reports(UnixDatagram);
+        impl Read for Reports {
+            fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                self.0.recv(bytes)
+            }
+        }
+
+        let (tx, rx) = UnixDatagram::pair().unwrap();
+        rx.set_nonblocking(true).unwrap();
+        let mut report = [0; DUALSENSE_EDGE_USB_REPORT_LEN];
+        report[0] = 0x01;
+        for face_and_dpad in [0x08, 0x28, 0x28, 0x08, 0x02, 0x42] {
+            report[8] = face_and_dpad;
+            tx.send(&report).unwrap();
+        }
+        let mut commands = Vec::new();
+        read_commands(Reports(rx), &mut [0; 128], &mut None, |command| {
+            commands.push(command.to_owned());
+            true
+        })
+        .unwrap();
+        assert_eq!(commands, ["accept", "right", "back"]);
+    }
+
+    #[test]
+    fn navigation_emits_fresh_presses_and_leaves_options_for_measurement() {
+        let mut previous = None;
+        let mut controls = Controls::default();
+        controls.buttons.insert(Button::South);
+        assert_eq!(command(&mut previous, controls), None);
+        assert_eq!(command(&mut previous, controls), None);
+        controls.buttons.remove(Button::South);
+        controls.buttons.insert(Button::Start);
+        assert_eq!(command(&mut previous, controls), None);
+        controls.buttons.insert(Button::South);
+        assert_eq!(command(&mut previous, controls), Some("accept"));
+        controls.dpad = DPad::Down;
+        assert_eq!(command(&mut previous, controls), Some("down"));
+        controls.dpad = DPad::DownRight;
+        assert_eq!(command(&mut previous, controls), None);
+        controls.dpad = DPad::Right;
+        assert_eq!(command(&mut previous, controls), Some("right"));
+        controls.buttons.insert(Button::East);
+        assert_eq!(command(&mut previous, controls), Some("back"));
     }
 }
