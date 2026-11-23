@@ -714,6 +714,10 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/gyro-keyboard.tom
     Verify that holding Cross starts Shift after the longer threshold.
     Verify that two short taps within the window send R and that a
     single short tap sends Space when the window expires.
+13. Set `tap = ["KEY_LEFTSHIFT", "BTN_LEFT"]` on a spare button. Check
+    that tapping it performs Shift+click in an application that supports
+    it. In a key-event viewer, check the Shift press before the mouse
+    press and the mouse release before the Shift release.
 
 The automated Flick Stick test verifies two calibrated 90° turns with
 different game sensitivity values. For a physical check, calibrate a

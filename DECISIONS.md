@@ -403,9 +403,10 @@ member retains its own trigger hysteresis. Both must be active for the
 chord's gesture, and standalone bindings remain independent.
 
 Keyboard gesture outputs accept either a single target or a set of
-keyboard keys. A gesture activates its set together and shares key
+keyboard and mouse buttons. A gesture activates its set together and shares key
 ownership with other bindings. Ctrl, Shift, Alt and Meta precede regular
-key presses and follow regular key releases.
+key presses and follow regular key releases. Across devices, mouse
+releases precede the keyboard update and mouse presses follow it.
 
 Keyboard bindings can override hold and double-tap deadlines independently.
 Both timers use the existing monotonic report and readiness clock. The

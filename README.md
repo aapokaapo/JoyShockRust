@@ -223,15 +223,21 @@ settings are optional positive integers in milliseconds and default to
 200 and 300 respectively. Tap outputs hold the virtual key briefly so
 games can observe the press.
 
-Give `tap`, `hold`, or `double_tap` an array of distinct `KEY_*` names
-to send a keyboard shortcut. Ctrl, Shift, Alt and Meta are pressed
-before the other keys and released after them. A key that another
-active binding still holds stays down.
+Give `tap`, `hold`, or `double_tap` an array of distinct keyboard keys or
+mouse buttons to send a shortcut or modified click. Ctrl, Shift, Alt and
+Meta are pressed first and released last. An output that another active
+binding still holds stays down.
 
 ```toml
 [[keyboard.bindings]]
 button = "create"
 tap = ["KEY_LEFTCTRL", "KEY_TAB"]
+```
+
+```toml
+[[keyboard.bindings]]
+button = "r1"
+tap = ["KEY_LEFTSHIFT", "BTN_LEFT"]
 ```
 
 Use `trigger` in place of `button` for an analog L2 or R2 binding.

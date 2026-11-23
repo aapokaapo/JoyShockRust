@@ -43,7 +43,7 @@ struct RawBinding {
 #[serde(untagged)]
 enum RawOutput {
     Single(String),
-    Shortcut(Vec<String>),
+    Combination(Vec<String>),
 }
 
 #[derive(PartialEq)]
@@ -89,6 +89,13 @@ fn is_mouse_button(key: KeyCode) -> bool {
     )
 }
 
+fn gesture_key(name: &str) -> Result<KeyCode, String> {
+    match name.parse::<KeyCode>() {
+        Ok(button) if is_mouse_button(button) => Ok(button),
+        _ => keyboard_key(name),
+    }
+}
+
 fn is_modifier(key: KeyCode) -> bool {
     matches!(
         key,
@@ -107,24 +114,18 @@ impl RawOutput {
     fn resolve(output: Option<Self>) -> Result<Box<[KeyCode]>, String> {
         match output {
             None => Ok(Box::default()),
-            Some(Self::Single(name)) => {
-                let key = match name.parse::<KeyCode>() {
-                    Ok(button) if is_mouse_button(button) => button,
-                    _ => keyboard_key(&name)?,
-                };
-                Ok(Box::new([key]))
-            }
-            Some(Self::Shortcut(names)) => {
+            Some(Self::Single(name)) => Ok(Box::new([gesture_key(&name)?])),
+            Some(Self::Combination(names)) => {
                 if names.is_empty() {
-                    return Err("keyboard shortcut needs at least one key".into());
+                    return Err("gesture combination needs at least one output".into());
                 }
                 let mut keys = names
                     .iter()
-                    .map(|name| keyboard_key(name))
+                    .map(|name| gesture_key(name))
                     .collect::<Result<Vec<_>, _>>()?;
                 keys.sort_unstable_by_key(|key| key.0);
                 if keys.windows(2).any(|pair| pair[0] == pair[1]) {
-                    return Err("keyboard shortcut keys must be distinct".into());
+                    return Err("gesture combination outputs must be distinct".into());
                 }
                 Ok(keys.into_boxed_slice())
             }
@@ -565,40 +566,66 @@ struct Outputs<'a> {
 
 impl Outputs<'_> {
     fn emit(&mut self, events: &[InputEvent]) -> io::Result<()> {
-        let (keys_written, buttons_written) = match (&mut self.keyboard, &mut self.mouse) {
-            (Some(keyboard), Some(mouse)) => {
-                self.keys.clear();
-                self.buttons.clear();
-                for &event in events {
-                    if is_mouse_button(KeyCode(event.code())) {
-                        self.buttons.push(event);
-                    } else {
-                        self.keys.push(event);
-                    }
-                }
-                if !self.keys.is_empty() {
-                    keyboard.emit(&self.keys)?;
-                }
-                if !self.buttons.is_empty() {
-                    mouse.emit(&self.buttons)?;
-                }
-                (!self.keys.is_empty(), !self.buttons.is_empty())
+        let status = self.status;
+        let send = |device: &mut VirtualDevice, target, events: &[InputEvent]| {
+            device.emit(events)?;
+            if let Some(status) = status {
+                status.observe_mapping_outputs(target == Target::Keyboard, target == Target::Mouse);
             }
-            (Some(keyboard), None) => {
-                keyboard.emit(events)?;
-                (true, false)
-            }
-            (None, Some(mouse)) => {
-                mouse.emit(events)?;
-                (false, true)
-            }
-            (None, None) => unreachable!("mapping has an output device"),
+            Ok(())
         };
-        if let Some(status) = self.status {
-            status.observe_mapping_outputs(keys_written, buttons_written);
+        match (&mut self.keyboard, &mut self.mouse) {
+            (Some(keyboard), Some(mouse)) => emit_mixed_batches(
+                events,
+                &mut self.keys,
+                &mut self.buttons,
+                |target, events| match target {
+                    Target::Keyboard => send(keyboard, target, events),
+                    Target::Mouse => send(mouse, target, events),
+                },
+            ),
+            (Some(keyboard), None) => send(keyboard, Target::Keyboard, events),
+            (None, Some(mouse)) => send(mouse, Target::Mouse, events),
+            (None, None) => unreachable!("mapping has an output device"),
         }
-        Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Target {
+    Keyboard,
+    Mouse,
+}
+
+fn emit_mixed_batches(
+    events: &[InputEvent],
+    keys: &mut Vec<InputEvent>,
+    buttons: &mut Vec<InputEvent>,
+    mut send: impl FnMut(Target, &[InputEvent]) -> io::Result<()>,
+) -> io::Result<()> {
+    keys.clear();
+    buttons.clear();
+    for &event in events {
+        if is_mouse_button(KeyCode(event.code())) {
+            buttons.push(event);
+        } else {
+            keys.push(event);
+        }
+    }
+    if keys.is_empty() {
+        return send(Target::Mouse, buttons);
+    }
+    // State emits releases before presses. Keep mouse releases under the old
+    // modifiers and send mouse presses after the keyboard changes.
+    let (releases, presses) = buttons.split_at(buttons.partition_point(|event| event.value() == 0));
+    if !releases.is_empty() {
+        send(Target::Mouse, releases)?;
+    }
+    send(Target::Keyboard, keys)?;
+    if !presses.is_empty() {
+        send(Target::Mouse, presses)?;
+    }
+    Ok(())
 }
 
 impl<'a> Keyboard<'a> {
@@ -1485,17 +1512,71 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_shortcuts_reject_empty_duplicate_and_non_keyboard_keys() {
+    fn gesture_combinations_reject_empty_duplicate_and_unsupported_outputs() {
         for value in [
             "[]",
             "['KEY_TAB', 'KEY_TAB']",
             "['KEY_LEFTCTRL', 'KEY_MISSING']",
-            "['KEY_LEFTCTRL', 'BTN_LEFT']",
+            "['KEY_LEFTCTRL', 'BTN_SOUTH']",
+            "['BTN_LEFT', 'BTN_LEFT']",
         ] {
             let profile =
                 format!("version = 1\n[[keyboard.bindings]]\nbutton = 'cross'\nhold = {value}\n");
             assert!(crate::profile::parse(&profile).is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn modified_clicks_keep_keyboard_changes_between_mouse_release_and_press() {
+        let config = config(
+            r#"
+            [[keyboard.bindings]]
+            button = "cross"
+            hold = ["BTN_LEFT", "KEY_LEFTSHIFT"]
+            [[keyboard.bindings]]
+            button = "circle"
+            hold = ["KEY_LEFTCTRL", "BTN_RIGHT"]
+        "#,
+        );
+        let mut state = State::new(&config);
+        let mut keys = Vec::with_capacity(2);
+        let mut buttons = Vec::with_capacity(2);
+        let mut sent = Vec::with_capacity(8);
+        let start = Instant::now();
+        let allocations = allocation_counter::measure(|| {
+            for button in [Some(Button::South), Some(Button::East), None] {
+                let mut controls = Controls::default();
+                if let Some(button) = button {
+                    controls.buttons.insert(button);
+                }
+                state
+                    .update(input(controls), start, |events| {
+                        emit_mixed_batches(events, &mut keys, &mut buttons, |target, batch| {
+                            sent.extend(
+                                batch
+                                    .iter()
+                                    .map(|event| (target, KeyCode(event.code()), event.value())),
+                            );
+                            Ok(())
+                        })
+                    })
+                    .unwrap();
+            }
+        });
+        assert_eq!(allocations.count_total, 0, "{allocations:?}");
+        assert_eq!(
+            sent,
+            [
+                (Target::Keyboard, KeyCode::KEY_LEFTSHIFT, 1),
+                (Target::Mouse, KeyCode::BTN_LEFT, 1),
+                (Target::Mouse, KeyCode::BTN_LEFT, 0),
+                (Target::Keyboard, KeyCode::KEY_LEFTSHIFT, 0),
+                (Target::Keyboard, KeyCode::KEY_LEFTCTRL, 1),
+                (Target::Mouse, KeyCode::BTN_RIGHT, 1),
+                (Target::Mouse, KeyCode::BTN_RIGHT, 0),
+                (Target::Keyboard, KeyCode::KEY_LEFTCTRL, 0),
+            ]
+        );
     }
 
     #[test]
