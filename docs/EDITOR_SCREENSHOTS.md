@@ -21,9 +21,10 @@ The right stick in this example uses Flick Stick.
 ## Touchpad
 
 Choose a grid region to configure separate touch and click actions. The
-preview highlights the selected region and shows each finger as a dot.
+preview shows the upper DualSense outline, highlights the selected
+region on the touchpad, and shows each finger as a dot.
 
-![Touchpad tab showing two finger positions in a two-by-two grid and bindings for the selected region](screenshots/editor-touchpad.png)
+![Touchpad tab showing two finger positions on a DualSense-shaped pad with a two-by-two grid and upper controller outline](screenshots/editor-touchpad.png)
 
 ## Gyro
 

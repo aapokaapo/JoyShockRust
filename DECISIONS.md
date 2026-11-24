@@ -49,6 +49,8 @@ positions for display, using the same decoded reports as the touch mappings.
 The editor draws those positions over its draft grid. This keeps the preview
 independent of profile activation and avoids a second hidraw reader.
 The touch snapshot distinguishes finger release from connection loss.
+The touchpad preview projects zone boundaries and contact positions
+onto the same tapered surface so both follow the illustrated pad.
 
 ## Optional desktop device access
 
