@@ -13,7 +13,7 @@ use joyshockrust_motion::aim_response::{
     FLICK_RELEASE_RADIUS, FlickDirection, FlickUpdate, snap_flick_angle,
 };
 
-use crate::controller_input;
+use crate::{controller_input, response_plot};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
@@ -58,37 +58,22 @@ pub fn add(
     side: Rc<Cell<StickSide>>,
 ) -> gtk::Box {
     let sample = Rc::new(Cell::new(None::<PreviewSample>));
-    let plots = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    plots.set_homogeneous(true);
-    plots.set_margin_top(12);
-    plots.set_margin_start(12);
-    plots.set_margin_end(12);
-
-    let charts = ["Physical input", "Flick Stick response"].map(|title| {
-        let panel = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        let label = gtk::Label::new(Some(title));
-        label.set_wrap(true);
-        panel.append(&label);
-        let chart = gtk::DrawingArea::builder().content_height(152).build();
-        chart.update_property(&[gtk::accessible::Property::Label(title)]);
-        panel.append(&chart);
-        plots.append(&panel);
-        chart
-    });
-    for (index, chart) in charts.iter().enumerate() {
+    let chart = gtk::DrawingArea::builder().content_height(172).build();
+    chart.update_property(&[gtk::accessible::Property::Label(
+        "Flick Stick input and response",
+    )]);
+    chart.set_draw_func({
         let adjustment = adjustment.clone();
         let steering = steering.clone();
         let sample = sample.clone();
         let engagement = engagement.clone();
-        chart.set_draw_func(move |area, cr, width, height| {
+        move |area, cr, width, height| {
             let threshold = adjustment.value().to_radians();
-            let adjusted = index != 0;
-            let marker = sample.get().map(|sample| {
-                if adjusted {
-                    sample.adjusted_marker(threshold, steering.value())
-                } else {
-                    (f64::from(sample.stick.x), f64::from(sample.stick.y))
-                }
+            let markers = sample.get().map(|sample| {
+                [
+                    (f64::from(sample.stick.x), f64::from(sample.stick.y)),
+                    sample.adjusted_marker(threshold, steering.value()),
+                ]
             });
             draw(
                 area,
@@ -96,15 +81,14 @@ pub fn add(
                 (width, height),
                 threshold,
                 engagement.value(),
-                marker,
-                adjusted,
+                markers,
             );
-        });
-    }
+        }
+    });
     for setting in [adjustment, steering, engagement] {
-        let chart_refs = charts.each_ref().map(|chart| chart.downgrade());
+        let chart = chart.downgrade();
         setting.connect_value_changed(move |_| {
-            for chart in chart_refs.iter().filter_map(glib::WeakRef::upgrade) {
+            if let Some(chart) = chart.upgrade() {
                 chart.queue_draw();
             }
         });
@@ -117,7 +101,12 @@ pub fn add(
         .margin_bottom(12)
         .build();
     let preview = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    preview.append(&plots);
+    preview.set_margin_top(12);
+    let legend = gtk::Label::new(Some("Gray · Physical input    Blue · Flick Stick response"));
+    legend.set_wrap(true);
+    legend.add_css_class("dim-label");
+    preview.append(&legend);
+    preview.append(&chart);
     preview.append(&status);
     group.add(&preview);
 
@@ -127,7 +116,7 @@ pub fn add(
     preview.connect_map(move |_| {
         let task = glib::MainContext::default().spawn_local(poll_input(
             sample.clone(),
-            charts.clone(),
+            chart.clone(),
             status.clone(),
             side.clone(),
             engagement.clone(),
@@ -162,16 +151,14 @@ fn hidraw_path(value: &str) -> Option<PathBuf> {
 
 async fn poll_input(
     sample: Rc<Cell<Option<PreviewSample>>>,
-    charts: [gtk::DrawingArea; 2],
+    chart: gtk::DrawingArea,
     status: gtk::Label,
     side: Rc<Cell<StickSide>>,
     engagement: gtk::Adjustment,
 ) {
     let update = |latest| {
         if sample.replace(latest) != latest {
-            for chart in &charts {
-                chart.queue_draw();
-            }
+            chart.queue_draw();
         }
     };
     update(None);
@@ -265,11 +252,11 @@ fn draw(
     (width, height): (i32, i32),
     threshold: f64,
     engagement: f64,
-    marker: Option<(f64, f64)>,
-    adjusted: bool,
+    markers: Option<[(f64, f64); 2]>,
 ) {
     // Leave room for a diagonal's travel when it snaps onto a cardinal axis.
-    let radius = (f64::from(width.min(height)) * 0.5 - 9.0).max(1.0) * 0.86;
+    let radius =
+        (f64::from(width.min(height)) * 0.5 - 9.0).max(1.0) * std::f64::consts::FRAC_1_SQRT_2;
     let x = f64::from(width) / 2.0;
     let y = f64::from(height) / 2.0;
     let style = area.style_context();
@@ -312,16 +299,11 @@ fn draw(
     let _ = cr.stroke();
     cr.set_dash(&[], 0.0);
 
-    if let Some((dx, dy)) = marker {
-        let color_value = if adjusted { accent } else { fg };
-        color(color_value, 0.5);
-        cr.set_line_width(2.0);
-        cr.move_to(x, y);
-        cr.line_to(x + dx * radius, y + dy * radius);
-        let _ = cr.stroke();
-        color(color_value, 1.0);
-        cr.arc(x + dx * radius, y + dy * radius, 4.5, 0.0, TAU);
-        let _ = cr.fill();
+    if let Some(markers) = markers {
+        response_plot::draw_markers(
+            cr,
+            markers.map(|(dx, dy)| (x + dx * radius, y + dy * radius)),
+        );
     }
 }
 

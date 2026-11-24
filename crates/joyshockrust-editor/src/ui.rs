@@ -28,16 +28,22 @@ impl Context {
     }
 
     pub fn edit(&self, change: impl FnOnce(&mut DocumentMut) -> Result<(), &'static str>) -> bool {
-        let result = self.document().and_then(|mut document| {
-            change(&mut document)?;
-            self.editor.borrow_mut().text = document.to_string();
-            Ok(())
-        });
-        if let Err(error) = result {
+        if let Err(error) = self.try_edit(change) {
             self.report(Err(error));
             return false;
         }
         true
+    }
+
+    pub fn try_edit(
+        &self,
+        change: impl FnOnce(&mut DocumentMut) -> Result<(), &'static str>,
+    ) -> Result<(), String> {
+        self.document().and_then(|mut document| {
+            change(&mut document)?;
+            self.editor.borrow_mut().text = document.to_string();
+            Ok(())
+        })
     }
 
     pub(crate) fn report(&self, result: Result<String, String>) {
@@ -509,12 +515,12 @@ pub(crate) mod tests {
             .into_iter()
             .find(|row| row.title() == "Columns")
             .unwrap();
-        columns.set_value(3.0);
-        let resize = descendants::<gtk::Button>(&page)
+        let grid_rows = descendants::<adw::SpinRow>(&page)
             .into_iter()
-            .find(|button| button.label().as_deref() == Some("Set Grid"))
+            .find(|row| row.title() == "Rows")
             .unwrap();
-        resize.emit_clicked();
+        let preview = descendants::<gtk::DrawingArea>(&page).pop().unwrap();
+        columns.set_value(3.0);
         let cell = descendants::<gtk::ToggleButton>(&page)
             .into_iter()
             .find(|button| button.label().as_deref() == Some("1:3"))
@@ -550,10 +556,8 @@ pub(crate) mod tests {
         );
         press_capture_key(&tap, gtk::gdk::Key::space, evdev::KeyCode::KEY_SPACE);
         assert_eq!(mouse.selected(), 0);
-        rows.iter()
-            .find(|row| row.title() == "Touch activation")
-            .unwrap()
-            .set_selected(1);
+        assert!(rows.iter().all(|row| row.title() != "Touch activation"));
+        assert!(ctx.edit(|doc| crate::gyro_activation::set_binding(doc, "hold", "touch:1:3")));
         let doc = ctx.document().unwrap();
         assert_eq!(doc["touchpad"]["columns"].as_integer(), Some(3));
         let regions = doc["touchpad"]["regions"].as_array_of_tables().unwrap();
@@ -567,6 +571,33 @@ pub(crate) mod tests {
         assert_eq!(keyboard["tap"].as_str(), Some("KEY_SPACE"));
         assert_eq!(doc["gyro"]["binding"]["input"].as_str(), Some("touch:1:3"));
         assert_eq!(doc["gyro"]["binding"]["mode"].as_str(), Some("hold"));
+
+        columns.set_value(2.0);
+        assert_eq!(ctx.document().unwrap().to_string(), doc.to_string());
+        assert!(cell.is_active());
+        columns.set_value(3.0);
+        grid_rows.set_value(9.0);
+        assert_eq!(ctx.document().unwrap().to_string(), doc.to_string());
+        grid_rows.set_value(2.0);
+        let expanded = ctx.document().unwrap();
+        assert_eq!(expanded["touchpad"]["rows"].as_integer(), Some(2));
+        assert_eq!(expanded["touchpad"]["columns"].as_integer(), Some(3));
+        assert_eq!(
+            expanded["gyro"]["binding"]["input"].as_str(),
+            Some("touch:1:3")
+        );
+        let buttons = descendants::<gtk::ToggleButton>(&page);
+        assert!(
+            buttons
+                .iter()
+                .any(|button| button.label().as_deref() == Some("2:3"))
+        );
+        assert!(
+            buttons
+                .iter()
+                .any(|button| button.is_active() && button.label().as_deref() == Some("1:3"))
+        );
+        assert_eq!(descendants::<gtk::DrawingArea>(&page), vec![preview]);
     }
 
     #[test]
@@ -890,10 +921,17 @@ pub(crate) mod tests {
                 .find(|row| row.title() == "Link horizontal and vertical")
                 .unwrap()
         };
+        let sensitivity_scales = |page: &gtk::Widget| {
+            let group = descendants::<adw::PreferencesGroup>(page)
+                .into_iter()
+                .find(|group| group.title() == "Gyro sensitivity")
+                .unwrap();
+            descendants::<gtk::Scale>(group.upcast_ref())
+        };
         let toggle = link_switch(&page);
         assert!(!toggle.is_active());
         toggle.set_active(true);
-        assert_eq!(descendants::<gtk::Scale>(&page).len(), 1);
+        assert_eq!(sensitivity_scales(&page).len(), 1);
         let assert_axes = |horizontal, vertical| {
             let doc = ctx.document().unwrap();
             assert_eq!(doc["gyro"]["sensitivity_x"].as_float(), Some(horizontal));
@@ -917,7 +955,7 @@ pub(crate) mod tests {
         assert_eq!(entry.text(), "invalid");
         entry.set_text("31.25");
         toggle.set_active(false);
-        assert_eq!(descendants::<gtk::Scale>(&reopened).len(), 2);
+        assert_eq!(sensitivity_scales(&reopened).len(), 2);
         let (entry, _) = controls(&reopened, "Vertical");
         entry.set_text("9.5");
         assert_axes(31.25, 9.5);
@@ -929,11 +967,10 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(
             descendants::<gtk::DrawingArea>(preview.upcast_ref()).len(),
-            4
+            3
         );
         for title in [
-            "Physical input",
-            "Flick Stick response",
+            "Gray · Physical input    Blue · Flick Stick response",
             "Initial turn near a cardinal direction",
             "Steering while held",
         ] {

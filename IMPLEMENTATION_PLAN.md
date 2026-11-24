@@ -297,15 +297,18 @@ selection and a live result preview in the real-world calibration window.
 Flick Stick can snap to cardinal axes within a configurable angular
 threshold for the initial turn, with independently scaled held steering
 plus selectable stick, engagement and duration. The Sticks editor previews
-physical and adjusted input and plots both angular responses. RWC measurement
+physical and adjusted input on one diagram and plots both angular responses.
+The per-stick curve charts mark physical and adjusted travel. RWC measurement
 uses the physical stick angle and full steering sensitivity.
 Gyro aim has a minimum movement speed and optional bounded
 speed-dependent gain that can be toggled per profile. The default minimum
 speed filters small residual bias after calibration. The Gyro editor shows
 the speed response and calibrated IMU readings from the active controller.
+The speed chart marks live aim speed and its response under the draft settings.
 Each angular velocity axis has a centered slider. The Touchpad editor
-overlays up to two live contacts on the draft zone grid inside a
-DualSense upper-shell illustration.
+overlays up to two live contacts on the draft zone grid inside a crop
+of the same DualSense SVG shown in Buttons. Changing the rows or columns
+updates the draft grid and preview together.
 
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects

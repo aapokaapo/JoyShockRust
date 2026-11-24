@@ -1015,7 +1015,8 @@ Save and apply the two-column grid, reopen it, and check the two actions
 on the virtual gamepad while touching and clicking the right half.
 Under **Keyboard and mouse · Touch**, set **Tap** to **Space**. Under
 **Keyboard and mouse · Click**, set **Hold** to **Left mouse**. Under
-**Gyro activation**, choose **Enable while touching**. Save and apply.
+**Gyro → Gyro activation**, choose **Enable while held** and select
+**Touch region 1:2** as the input. Save and apply.
 Tap the right half and check for a Space press. Hold a click there and
 check for a held mouse button. Move the controller while touching each
 half and verify gyro aim only activates on the right. Reopen the

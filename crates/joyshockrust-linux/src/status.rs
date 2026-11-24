@@ -15,6 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use joyshockrust_core::Stick;
 use joyshockrust_input::{
     BatteryReading, BatteryState, DeviceModel, FactoryCalibration, RawImuSample, TouchContact,
     Transport,
@@ -49,6 +50,7 @@ struct ImuSnapshot {
     factory: Option<FactoryCalibration>,
     sample: Option<RawImuSample>,
     bias: Calibration,
+    projected_interval: Option<([f32; 2], Duration)>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -83,6 +85,7 @@ struct Snapshot {
     gyro_configured: bool,
     battery: Option<BatteryReading>,
     touch_contacts: Option<[Option<TouchContact>; 2]>,
+    sticks: Option<[Stick; 2]>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -235,12 +238,19 @@ impl StatusSocket {
             factory,
             bias,
             sample: None,
+            projected_interval: None,
         });
     }
 
-    pub fn observe_imu(&self, sample: RawImuSample, bias: Option<Calibration>) {
+    pub fn observe_imu(
+        &self,
+        sample: RawImuSample,
+        bias: Option<Calibration>,
+        projected_interval: Option<([f32; 2], Duration)>,
+    ) {
         let mut imu = self.imu.get();
         imu.sample = Some(sample);
+        imu.projected_interval = projected_interval;
         if let Some(bias) = bias {
             imu.bias = bias;
         }
@@ -259,6 +269,14 @@ impl StatusSocket {
         let mut snapshot = self.snapshot.get();
         if snapshot.identity.is_some() && snapshot.touch_contacts != Some(contacts) {
             snapshot.touch_contacts = Some(contacts);
+            self.snapshot.set(snapshot);
+        }
+    }
+
+    pub fn observe_sticks(&self, sticks: [Stick; 2]) {
+        let mut snapshot = self.snapshot.get();
+        if snapshot.identity.is_some() && snapshot.sticks != Some(sticks) {
+            snapshot.sticks = Some(sticks);
             self.snapshot.set(snapshot);
         }
     }
@@ -365,6 +383,17 @@ impl StatusSocket {
                 response,
                 "imu={gx:.4},{gy:.4},{gz:.4},{ax:.4},{ay:.4},{az:.4}"
             );
+            let speed = imu.projected_interval.map_or_else(
+                || f64::from(gx).hypot(f64::from(gy)),
+                |([x, y], duration)| f64::from(x).hypot(f64::from(y)) / duration.as_secs_f64(),
+            );
+            let _ = writeln!(response, "gyro_speed_dps={speed:.4}");
+        }
+        if let Some(sticks) = snapshot.sticks {
+            use std::fmt::Write;
+            let [left, right] =
+                sticks.map(|stick| 100.0 * f64::from(stick.x).hypot(f64::from(stick.y)).min(1.0));
+            let _ = writeln!(response, "stick_travel={left:.4},{right:.4}");
         }
         if let Some(contacts) = snapshot.touch_contacts {
             use std::fmt::Write;
@@ -486,7 +515,9 @@ mod tests {
             Some(Calibration {
                 gyro_bias_dps: [0.5, -0.5, 0.0],
             }),
+            Some(([3.0, 4.0], Duration::from_millis(50))),
         );
+        status.observe_sticks([Stick { x: 0.3, y: 0.4 }, Stick { x: 1.0, y: 1.0 }]);
         let request = || {
             let mut socket = UnixStream::connect(&path).unwrap();
             status.respond("not_attempted").unwrap();
@@ -503,6 +534,10 @@ mod tests {
             "{active}"
         );
         assert!(!disconnected.contains("\nimu="));
+        assert!(active.contains("\ngyro_speed_dps=100.0000\n"));
+        assert!(active.contains("\nstick_travel=50.0000,100.0000\n"));
+        assert!(!disconnected.contains("\ngyro_speed_dps="));
+        assert!(!disconnected.contains("\nstick_travel="));
     }
 
     #[test]

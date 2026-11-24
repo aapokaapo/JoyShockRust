@@ -719,6 +719,7 @@ and libadwaita 1.5 or newer with their development packages
 (`gtk4-devel libadwaita-devel` on Fedora or
 `libgtk-4-dev libadwaita-1-dev` on Debian/Ubuntu). If diagnostics reports
 a permission error, see the [optional device access rules](#optional-device-access-rules).
+The controller illustration uses the system GdkPixbuf SVG loader.
 
 ### Install the service, tray and editor together
 
@@ -860,20 +861,21 @@ Choose **Save & Apply** to use the new settings.
 
 In **Touchpad**, set the number of rows and columns, select a grid
 cell, and assign separate virtual gamepad buttons to **Touch** and
-**Click**. The preview shows the draft grid, highlights the selected zone,
-and tracks up to two fingers on the active controller. Choose **No action**
+**Click**. The preview and draft grid update as you change the dimensions.
+The preview highlights the selected zone and tracks up to two fingers on
+the active controller. Choose **No action**
 to clear a mapping. Clear or update the
 bindings in any cells you want to remove before shrinking the grid.
 The **Keyboard and mouse** groups assign tap, hold and double-tap actions
 separately for touch and click.
 
-In **Gyro activation**, choose **Enable while touching** or another mode
-to use the selected cell as the profile's gyro input. Choosing a mode in
-another cell moves the touch binding. Clearing the binding leaves
-configured gyro aim always on. Physical button, analog trigger and chord
-gyro bindings can be edited in **Advanced**.
+Under **Gyro → Gyro activation**, choose an activation mode and select
+a **Touch region** as its input. Clearing the binding leaves configured
+gyro aim always on.
 
-The **Sticks** page previews each virtual stick's response curve. Each
+The **Sticks** page previews each stick's response curve. The gray dot
+shows physical travel and the blue dot shows travel after applying the
+draft exponent. Each
 exponent ranges from 0.25 to 4.00 in 0.05 increments. An exponent of 1.00
 is linear. A lower exponent increases response near the center. The
 profile keys are `stick_curve_left` and `stick_curve_right` and each
@@ -918,8 +920,11 @@ settings. **Minimum speed** still applies independently. Its default of
 0.2°/s filters small residual movement after calibration. Set it to 0 to
 use every measured movement.
 The gyro response chart compares projected aim speed with the configured
-threshold and acceleration curve and a linear reference, before axis
-sensitivity and game calibration are applied. **Live calibrated IMU**
+threshold and acceleration curve and a linear reference. The gray dot
+shows live aim speed using the bridge's active projection. The blue dot
+shows the speed after applying the draft threshold and acceleration.
+The chart describes the response before axis sensitivity and game
+calibration. **Live calibrated IMU**
 shows angular velocity on three read-only sliders, one per controller axis.
 Zero is at the center. The sliders reach their ends at ±180°/s and the
 numeric readouts still show faster turns. Acceleration is displayed in g.
@@ -939,8 +944,9 @@ angle changes. Its default is 0.50, so a 30° movement after the flick
 turns the camera about 15° with a calibrated profile. At 0, only the
 initial flick moves the camera. At 1, held steering uses the full
 sensitivity. Separate charts compare the initial turn and held steering
-to a linear reference. The live stick preview shows the configured
-engagement ring, physical stick input and adjusted angle.
+to a linear reference. The live stick preview shows both the gray physical
+input and blue adjusted angle on the same diagram, with the configured
+engagement ring.
 
 Open the profile actions menu to **Validate Profile** or **Save** to
 disk. **Save & Apply** writes the profile and loads it into the running

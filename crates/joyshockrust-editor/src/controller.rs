@@ -3,6 +3,7 @@ use toml_edit::DocumentMut;
 
 use crate::{
     bindings::{self, BindingInput, Gesture, OutputMode},
+    controller_art,
     ui::{self, Context},
 };
 
@@ -14,34 +15,38 @@ struct Control {
     size: [f32; 2],
 }
 
+const ART_SCALE: f64 = 2.0;
+const ART_TOP: f64 = 42.0;
+const ART_BOTTOM: f64 = 216.0;
+
 const FRONT: [Control; 19] = [
-    control("l2", "L2 · Left trigger", "L2", 122., 24., 78., 30.),
-    control("r2", "R2 · Right trigger", "R2", 398., 24., 78., 30.),
-    control("l1", "L1 · Left bumper", "L1", 122., 62., 90., 30.),
-    control("r1", "R1 · Right bumper", "R1", 398., 62., 90., 30.),
-    control("create", "Create", "Create", 146., 103., 60., 28.),
-    control("options", "Options", "Options", 374., 103., 60., 28.),
+    control("l2", "L2 · Left trigger", "L2", 74., 54., 46., 22.),
+    control("r2", "R2 · Right trigger", "R2", 182., 54., 46., 22.),
+    control("l1", "L1 · Left bumper", "L1", 74., 69., 50., 22.),
+    control("r1", "R1 · Right bumper", "R1", 182., 69., 50., 22.),
+    control("create", "Create", "Create", 82., 82., 42., 21.),
+    control("options", "Options", "Options", 174., 82., 46., 21.),
     control(
         "touchpad",
         "Touchpad press",
         "Touchpad",
-        260.,
-        107.,
-        142.,
-        60.,
+        128.,
+        95.,
+        100.,
+        36.,
     ),
-    control("dpad-up", "D-pad up", "↑", 115., 135., 28., 28.),
-    control("dpad-left", "D-pad left", "←", 81., 169., 28., 28.),
-    control("dpad-right", "D-pad right", "→", 149., 169., 28., 28.),
-    control("dpad-down", "D-pad down", "↓", 115., 203., 28., 28.),
-    control("triangle", "Triangle", "△", 405., 135., 30., 30.),
-    control("square", "Square", "□", 371., 169., 30., 30.),
-    control("circle", "Circle", "○", 439., 169., 30., 30.),
-    control("cross", "Cross", "×", 405., 203., 30., 30.),
-    control("l3", "L3 · Left stick press", "L3", 195., 205., 52., 52.),
-    control("r3", "R3 · Right stick press", "R3", 325., 205., 52., 52.),
-    control("ps", "PS button", "PS", 260., 195., 36., 30.),
-    control("mute", "Microphone mute", "Mute", 260., 233., 52., 28.),
+    control("dpad-up", "D-pad up", "↑", 64., 94., 22., 22.),
+    control("dpad-left", "D-pad left", "←", 52., 106., 22., 22.),
+    control("dpad-right", "D-pad right", "→", 76., 106., 22., 22.),
+    control("dpad-down", "D-pad down", "↓", 64., 118., 22., 22.),
+    control("triangle", "Triangle", "△", 192., 94., 22., 22.),
+    control("square", "Square", "□", 180., 106., 22., 22.),
+    control("circle", "Circle", "○", 204., 106., 22., 22.),
+    control("cross", "Cross", "×", 192., 118., 22., 22.),
+    control("l3", "L3 · Left stick press", "L3", 102., 134., 42., 42.),
+    control("r3", "R3 · Right stick press", "R3", 154., 134., 42., 42.),
+    control("ps", "PS button", "PS", 128., 133., 29., 22.),
+    control("mute", "Microphone mute", "Mute", 128., 147., 38., 20.),
 ];
 
 const EDGE: [(&str, &str); 4] = [
@@ -162,14 +167,32 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         .build();
     layout.append(&diagram_scroll);
     let outline = gtk::DrawingArea::builder()
-        .content_width(520)
-        .content_height(308)
+        .content_width((controller_art::SIZE * ART_SCALE) as i32)
+        .content_height(((ART_BOTTOM - ART_TOP) * ART_SCALE) as i32)
         .build();
     outline.set_can_target(false);
-    outline.set_draw_func(draw_shell);
+    match controller_art::load() {
+        Ok(svg) => outline.set_draw_func(move |area, cr, _, _| {
+            let _ = cr.save();
+            cr.scale(ART_SCALE, ART_SCALE);
+            cr.translate(0.0, -ART_TOP);
+            controller_art::draw(cr, &svg, area.style_context().color(), 0.60);
+            let _ = cr.restore();
+        }),
+        Err(error) => eprintln!("DualSense art unavailable: {error}"),
+    }
     let control_style = gtk::CssProvider::new();
-    control_style
-        .load_from_data("button { min-width: 0; min-height: 0; padding: 0; font-size: 12px; }");
+    control_style.load_from_data(
+        "button {
+            min-width: 0;
+            min-height: 0;
+            padding: 0;
+            font-size: 12px;
+            background-color: mix(@window_bg_color, @window_fg_color, 0.12);
+        }
+        button:hover { background-color: mix(@window_bg_color, @window_fg_color, 0.18); }
+        button:checked { background-color: mix(@window_bg_color, @window_fg_color, 0.24); }",
+    );
     diagram.put(&outline, 0.0, 0.0);
 
     let inspector = gtk::Box::new(gtk::Orientation::Vertical, 18);
@@ -229,7 +252,11 @@ pub fn page(ctx: &Context) -> gtk::Widget {
             ) {
                 button.add_css_class("circular");
             }
-            diagram.put(&button, x - width / 2.0, y - height / 2.0);
+            diagram.put(
+                &button,
+                x * ART_SCALE - width / 2.0,
+                (y - ART_TOP) * ART_SCALE - height / 2.0,
+            );
         } else {
             edge.insert(&button, -1);
         }
@@ -241,57 +268,6 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         .child(&clamp)
         .build()
         .upcast()
-}
-
-fn draw_shell(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, _: i32, _: i32) {
-    let style = area.style_context();
-    let foreground = style.color();
-    let set_color = |alpha| {
-        cr.set_source_rgba(
-            foreground.red().into(),
-            foreground.green().into(),
-            foreground.blue().into(),
-            alpha,
-        )
-    };
-    // Trace one half of each shape and mirror it around the controller center.
-    for side in [1.0, -1.0] {
-        let _ = cr.save();
-        cr.translate(260.0, 0.0);
-        cr.scale(side, 1.0);
-        cr.move_to(0.0, 43.0);
-        cr.line_to(-115.0, 43.0);
-        cr.curve_to(-166.0, 43.0, -194.0, 69.0, -205.0, 115.0);
-        cr.curve_to(-217.0, 161.0, -234.0, 234.0, -225.0, 270.0);
-        cr.curve_to(-219.0, 303.0, -193.0, 310.0, -173.0, 286.0);
-        cr.line_to(-141.0, 248.0);
-        cr.curve_to(-122.0, 226.0, -102.0, 240.0, -76.0, 249.0);
-        cr.curve_to(-53.0, 258.0, -30.0, 259.0, 0.0, 259.0);
-        cr.close_path();
-        set_color(0.14);
-        let _ = cr.fill();
-
-        cr.move_to(0.0, 139.0);
-        cr.curve_to(-63.0, 135.0, -94.0, 157.0, -113.0, 192.0);
-        cr.curve_to(-136.0, 225.0, -160.0, 257.0, -175.0, 285.0);
-        cr.curve_to(-157.0, 263.0, -147.0, 245.0, -132.0, 240.0);
-        cr.curve_to(-108.0, 231.0, -97.0, 244.0, -76.0, 249.0);
-        cr.curve_to(-53.0, 258.0, -30.0, 259.0, 0.0, 259.0);
-        cr.close_path();
-        set_color(0.16);
-        let _ = cr.fill();
-        let _ = cr.restore();
-    }
-
-    // The speaker grille sits between the touchpad and the PS button.
-    set_color(0.32);
-    for row in [154.0, 160.0, 166.0] {
-        for column in [247.0, 254.0, 260.0, 266.0, 273.0] {
-            cr.new_sub_path();
-            cr.arc(column, row, 1.25, 0.0, std::f64::consts::TAU);
-        }
-    }
-    let _ = cr.fill();
 }
 
 fn gamepad_type_row(ctx: &Context, doc: &DocumentMut) -> adw::PreferencesGroup {

@@ -1250,11 +1250,15 @@ fn serve_session(
             };
             if let Some(status) = status {
                 status.observe_touch(report.touch_contacts);
+                status.observe_sticks([report.controls.left_stick, report.controls.right_stick]);
                 status.observe_imu(
                     report.imu,
                     mouse
                         .as_ref()
                         .map(gyro_mouse::GyroMouse::stationary_calibration),
+                    mouse
+                        .as_ref()
+                        .and_then(gyro_mouse::GyroMouse::projected_interval),
                 );
                 if gamepad_batch || mouse_batch {
                     status.observe_outputs(gamepad_batch, mouse_batch);

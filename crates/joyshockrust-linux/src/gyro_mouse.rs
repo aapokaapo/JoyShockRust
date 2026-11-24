@@ -269,6 +269,10 @@ impl GyroMouse {
         self.aim.motion.calibration()
     }
 
+    pub fn projected_interval(&self) -> Option<([f32; 2], Duration)> {
+        self.aim.projected_interval
+    }
+
     pub fn publish(&mut self, report: InputReport) -> io::Result<bool> {
         let mut suppress_flick = false;
         if let Some(hold) = &mut self.hold {
@@ -302,6 +306,7 @@ impl GyroMouse {
                 }
                 if !shortcut.measuring {
                     if pressed || now < shortcut.settle_at {
+                        self.aim.projected_interval = None;
                         return Ok(false);
                     }
                     shortcut.measuring = true;
@@ -364,6 +369,7 @@ struct GyroAim {
     remainder: [f64; 2],
     sensitivity: [f64; 2],
     response: GyroResponse,
+    projected_interval: Option<([f32; 2], Duration)>,
     was_enabled: bool,
 }
 
@@ -388,6 +394,7 @@ impl GyroAim {
             remainder: [0.0; 2],
             sensitivity,
             response: GyroResponse::default(),
+            projected_interval: None,
             was_enabled: false,
         }
     }
@@ -455,6 +462,7 @@ impl GyroAim {
             TimestampUpdate::Repeated { .. } | TimestampUpdate::OutOfOrder { .. } => return [0; 2],
         };
         let timestamp_ns = elapsed.as_nanos() as u64;
+        self.projected_interval = None;
         let calibrated_sample = || {
             let calibrated = self.factory.convert(sample);
             ImuSample {
@@ -482,6 +490,9 @@ impl GyroAim {
             self.reset_motion();
             return [0; 2];
         };
+        if !interval.is_zero() {
+            self.projected_interval = Some((aim_delta, interval));
+        }
 
         if !emit_motion {
             return [0; 2];
@@ -508,6 +519,7 @@ impl GyroAim {
     fn reset_motion(&mut self) {
         self.motion.reset_segment();
         self.remainder = [0.0; 2];
+        self.projected_interval = None;
     }
 }
 
