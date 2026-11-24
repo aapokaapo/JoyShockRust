@@ -1,8 +1,8 @@
 # Profile editor screenshots
 
 These screenshots show the GTK 4 and libadwaita profile editor running on
-Wayland in dark mode with an example profile. The editor was captured with no
-physical controller connected, so the live input and IMU previews are idle.
+Wayland in dark mode with an example profile. The Touchpad and Gyro
+screenshots use synthetic controller readings.
 
 ## Buttons
 
@@ -20,16 +20,18 @@ The right stick in this example uses Flick Stick.
 
 ## Touchpad
 
-Choose a grid region to configure separate touch and click actions.
+Choose a grid region to configure separate touch and click actions. The
+preview highlights the selected region and shows each finger as a dot.
 
-![Touchpad tab showing a two-by-two grid and bindings for the selected region](screenshots/editor-touchpad.png)
+![Touchpad tab showing two finger positions in a two-by-two grid and bindings for the selected region](screenshots/editor-touchpad.png)
 
 ## Gyro
 
 Choose the aim mode and activation, view the calibrated IMU readings, and
-adjust horizontal and vertical sensitivity.
+adjust horizontal and vertical sensitivity. The three angular velocity
+sliders show signed movement with zero at the center.
 
-![Gyro tab showing the aim mode selector, live calibrated IMU, gyro activation and axis sensitivity controls](screenshots/editor-gyro.png)
+![Gyro tab showing negative X, centered Y and positive Z angular velocity, with aim mode and activation controls](screenshots/editor-gyro.png)
 
 ## Gyro response
 

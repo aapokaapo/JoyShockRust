@@ -1,11 +1,14 @@
 use std::{
+    cell::RefCell,
     fs::{File, OpenOptions},
     io::{self, Read},
     os::unix::fs::OpenOptionsExt,
     path::Path,
+    rc::Rc,
+    time::Duration,
 };
 
-use adw::{gio, glib, prelude::*};
+use adw::{gio, glib, gtk, prelude::*};
 use joyshockrust_core::Controls;
 use joyshockrust_input::{
     DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN, DUALSENSE_EDGE_USB_REPORT_LEN, DeviceModel, Transport,
@@ -39,6 +42,39 @@ pub async fn status_value(
         }
     }
     Ok(None)
+}
+
+pub fn watch_status(
+    widget: &impl IsA<gtk::Widget>,
+    key: &'static str,
+    interval: Duration,
+    update: impl Fn(Result<Option<String>, ()>) + 'static,
+) {
+    let update = Rc::new(update);
+    let polling = Rc::new(RefCell::new(None::<glib::JoinHandle<()>>));
+    let on_map = polling.clone();
+    widget.connect_map(move |_| {
+        let update = update.clone();
+        let task = glib::MainContext::default().spawn_local(async move {
+            update(Ok(None));
+            let Some(address) = status_address() else {
+                update(Err(()));
+                return;
+            };
+            let client = gio::SocketClient::new();
+            client.set_timeout(1);
+            loop {
+                update(status_value(&client, &address, key).await.map_err(|_| ()));
+                glib::timeout_future(interval).await;
+            }
+        });
+        on_map.replace(Some(task));
+    });
+    widget.connect_unmap(move |_| {
+        if let Some(task) = polling.borrow_mut().take() {
+            task.abort();
+        }
+    });
 }
 
 pub fn open(path: &Path) -> io::Result<File> {

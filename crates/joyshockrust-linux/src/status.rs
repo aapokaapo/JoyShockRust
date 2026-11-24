@@ -16,7 +16,8 @@ use std::{
 };
 
 use joyshockrust_input::{
-    BatteryReading, BatteryState, DeviceModel, FactoryCalibration, RawImuSample, Transport,
+    BatteryReading, BatteryState, DeviceModel, FactoryCalibration, RawImuSample, TouchContact,
+    Transport,
 };
 use joyshockrust_motion::Calibration;
 
@@ -81,6 +82,7 @@ struct Snapshot {
     identity: Option<Identity>,
     gyro_configured: bool,
     battery: Option<BatteryReading>,
+    touch_contacts: Option<[Option<TouchContact>; 2]>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -106,7 +108,10 @@ impl ReportStats {
 
 impl StatusSocket {
     pub fn bind(path: &Path) -> io::Result<Self> {
-        let listener = UnixListener::bind(path)?;
+        Self::bind_listener(UnixListener::bind(path)?)
+    }
+
+    fn bind_listener(listener: UnixListener) -> io::Result<Self> {
         listener.set_nonblocking(true)?;
         Ok(Self {
             listener,
@@ -250,6 +255,14 @@ impl StatusSocket {
         }
     }
 
+    pub fn observe_touch(&self, contacts: [Option<TouchContact>; 2]) {
+        let mut snapshot = self.snapshot.get();
+        if snapshot.identity.is_some() && snapshot.touch_contacts != Some(contacts) {
+            snapshot.touch_contacts = Some(contacts);
+            self.snapshot.set(snapshot);
+        }
+    }
+
     pub fn observe_outputs(&self, gamepad: bool, mouse: bool) {
         let mut reports = self.reports.get();
         reports.gamepad_batches += u64::from(gamepad);
@@ -352,6 +365,15 @@ impl StatusSocket {
                 response,
                 "imu={gx:.4},{gy:.4},{gz:.4},{ax:.4},{ay:.4},{az:.4}"
             );
+        }
+        if let Some(contacts) = snapshot.touch_contacts {
+            use std::fmt::Write;
+            let _ = write!(response, "touch_contacts=");
+            for (index, contact) in contacts.into_iter().flatten().enumerate() {
+                let separator = if index == 0 { "" } else { ";" };
+                let _ = write!(response, "{separator}{},{}", contact.x, contact.y);
+            }
+            response.push('\n');
         }
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
@@ -481,6 +503,44 @@ mod tests {
             "{active}"
         );
         assert!(!disconnected.contains("\nimu="));
+    }
+
+    #[test]
+    fn touch_snapshot_distinguishes_release_and_disconnect() {
+        let name = format!("jsr-touch-status-test-{}", process::id());
+        let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+        let listener = UnixListener::bind_addr(&address).unwrap();
+        let status = StatusSocket::bind_listener(listener).unwrap();
+        let request = || {
+            let mut socket = UnixStream::connect_addr(&address).unwrap();
+            status.respond("not_attempted").unwrap();
+            let mut reply = String::new();
+            socket.read_to_string(&mut reply).unwrap();
+            reply
+        };
+        status.update(
+            Some(Identity {
+                model: DeviceModel::DualSenseEdge,
+                transport: Transport::Usb,
+            }),
+            false,
+        );
+        assert!(!request().contains("\ntouch_contacts="));
+        let left = Some(TouchContact { id: 1, x: 0, y: 0 });
+        let right = Some(TouchContact {
+            id: 2,
+            x: 1919,
+            y: 1079,
+        });
+        status.observe_touch([left, right]);
+        assert!(request().contains("\ntouch_contacts=0,0;1919,1079\n"));
+        status.observe_touch([None, right]);
+        assert!(request().contains("\ntouch_contacts=1919,1079\n"));
+        status.observe_touch([None, None]);
+        assert!(request().contains("\ntouch_contacts=\n"));
+        status.observe_touch([left, right]);
+        status.update(None, false);
+        assert!(!request().contains("\ntouch_contacts="));
     }
 
     #[test]

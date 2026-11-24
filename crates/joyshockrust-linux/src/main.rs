@@ -1249,6 +1249,7 @@ fn serve_session(
                 false
             };
             if let Some(status) = status {
+                status.observe_touch(report.touch_contacts);
                 status.observe_imu(
                     report.imu,
                     mouse

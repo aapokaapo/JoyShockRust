@@ -303,6 +303,8 @@ Gyro aim has a minimum movement speed and optional bounded
 speed-dependent gain that can be toggled per profile. The default minimum
 speed filters small residual bias after calibration. The Gyro editor shows
 the speed response and calibrated IMU readings from the active controller.
+Each angular velocity axis has a centered slider. The Touchpad editor
+overlays up to two live contacts on the draft zone grid.
 
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects

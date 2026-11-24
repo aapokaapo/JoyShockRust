@@ -860,7 +860,9 @@ Choose **Save & Apply** to use the new settings.
 
 In **Touchpad**, set the number of rows and columns, select a grid
 cell, and assign separate virtual gamepad buttons to **Touch** and
-**Click**. Choose **No action** to clear a mapping. Clear or update the
+**Click**. The preview shows the draft grid, highlights the selected zone,
+and tracks up to two fingers on the active controller. Choose **No action**
+to clear a mapping. Clear or update the
 bindings in any cells you want to remove before shrinking the grid.
 The **Keyboard and mouse** groups assign tap, hold and double-tap actions
 separately for touch and click.
@@ -918,9 +920,11 @@ use every measured movement.
 The gyro response chart compares projected aim speed with the configured
 threshold and acceleration curve and a linear reference, before axis
 sensitivity and game calibration are applied. **Live calibrated IMU**
-shows angular velocity in °/s and acceleration in g on the active
-controller's X, Y and Z axes. The readings include factory calibration
-and the stationary gyro bias currently applied by the bridge.
+shows angular velocity on three read-only sliders, one per controller axis.
+Zero is at the center. The sliders reach their ends at ±180°/s and the
+numeric readouts still show faster turns. Acceleration is displayed in g.
+The readings include factory calibration and the stationary gyro bias
+currently applied by the bridge.
 
 Under **Sticks → Flick Stick → Flick Stick input**, choose **Off**,
 **Left stick** or **Right stick**. The selected stick controls horizontal
