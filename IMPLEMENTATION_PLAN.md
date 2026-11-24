@@ -22,7 +22,7 @@ for the physical test sequence and the [feature matrix](FEATURE_MATRIX.md)
 for evidence by feature.
 
 ## Phase 0 — research and feasibility
-Review both JSM repositories and Linux hid-playstation for scheduling, protocol, calibration, permissions, kernel coexistence, mapping semantics and licensing. The [reference analysis](docs/REFERENCE_ANALYSIS.md) records exact source revisions. The [feature matrix](FEATURE_MATRIX.md) and [decision log](DECISIONS.md) record findings and open items.
+Review JoyShockMapper and Linux hid-playstation for scheduling, protocol, calibration, permissions, kernel coexistence, mapping semantics and licensing. The [reference analysis](docs/REFERENCE_ANALYSIS.md) records exact source revisions. The [feature matrix](FEATURE_MATRIX.md) and [decision log](DECISIONS.md) record findings and open items.
 
 Source review is complete. The stationary USB capture and subsequent Linux tests provide partial hardware evidence. Annotated control and motion captures, a shareable factory calibration reply, and broader permission and coexistence checks remain open.
 

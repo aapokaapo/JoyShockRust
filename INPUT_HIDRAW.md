@@ -41,4 +41,4 @@ Validate lengths before indexing, check ranges and malformed packets, cap work p
 ## References to inspect
 - https://github.com/torvalds/linux/blob/master/drivers/hid/hid-playstation.c
 - https://docs.kernel.org/hid/hidraw.html
-- https://github.com/aapokaapo/JoyShockMapper-systemd
+- https://github.com/Electronicks/JoyShockMapper

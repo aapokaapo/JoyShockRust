@@ -5,7 +5,8 @@ It can run on its own as a user service or with a tray and a Wayland profile
 editor.
 
 1. For installation, use the [systemd user service](README.md#systemd-user-service)
-   and [desktop tray](README.md#desktop-tray) instructions.
+   and [desktop tray](README.md#desktop-tray) instructions. For removal,
+   see [Uninstall](README.md#uninstall).
 2. For the current development focus, read the
    [implementation plan](IMPLEMENTATION_PLAN.md#current-status).
 3. For what is implemented and how it was checked, read the
