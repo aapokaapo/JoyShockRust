@@ -888,6 +888,19 @@ and strength for the selected trigger, or choose **Off**. The bridge
 sends the effect to a DualSense or DualSense Edge when you **Save & Apply**
 and reapplies it on reconnect. This setting needs write access to hidraw.
 
+On DualSense Edge, set the rear L2 and R2 travel sliders to the longest
+setting and check that **Trigger Effect Intensity** is enabled in the
+controller's active hardware profile. To isolate the effect from your
+JoyShockRust profile, close the bridge and test each trigger separately.
+
+```sh
+cargo run --locked -p joyshockrust-linux -- --test-adaptive-triggers left
+cargo run --locked -p joyshockrust-linux -- --test-adaptive-triggers right
+```
+
+The test applies resistance for eight seconds and then clears it. If
+multiple controllers are connected, append the desired `/dev/hidrawN`.
+
 In **Touchpad**, set the number of rows and columns, select a grid
 cell, and assign separate virtual gamepad buttons to **Touch** and
 **Click**. The preview and draft grid update as you change the dimensions.

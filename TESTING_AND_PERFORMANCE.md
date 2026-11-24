@@ -970,6 +970,13 @@ and only affects that side. Change the strength, reconnect, and confirm
 the profile reapplies. Select **Off** and save to check normal travel.
 Repeat on DualSense and DualSense Edge.
 
+If there is no resistance on Edge, set both travel sliders to the
+longest position and enable trigger effects in its active hardware
+profile. Stop the bridge and run the
+[standalone adaptive trigger test](README.md#desktop-tray) once per
+side. Record the transport, whether the report write succeeded and
+whether you felt resistance. Repeat on the other transport if available.
+
 In **Gyro → Aim input**, switch between **Gyro aim** and **Sensor fusion
 aim** using **Save & Apply**. Hold the controller approximately flat and
 rotate about vertical to compare horizontal aim. Move the controller in
