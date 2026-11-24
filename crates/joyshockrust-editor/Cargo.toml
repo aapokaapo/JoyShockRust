@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+joyshockrust-config = { path = "../joyshockrust-config", features = ["profile"] }
 adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
 evdev = "0.13.2"
 joyshockrust-core = { path = "../joyshockrust-core" }

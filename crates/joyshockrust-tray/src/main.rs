@@ -1,3 +1,5 @@
+use joyshockrust_config::paths::{self, APP_DIRECTORY, PROFILE_FILE, PROFILES_DIRECTORY};
+
 use std::{
     env, fs,
     io::{self, Read},
@@ -434,20 +436,11 @@ impl Desktop {
     }
 
     fn profile_paths(&self) -> Vec<PathBuf> {
-        let root = self.config.join("joyshockrust");
-        let mut paths: Vec<_> = fs::read_dir(root.join("profiles"))
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "toml") && path.is_file())
-            .collect();
-        paths.sort();
-        let startup = root.join("profile.toml");
-        if startup.is_file() {
-            paths.insert(0, startup);
-        }
-        paths
+        let root = self.config.join(APP_DIRECTORY);
+        paths::profile_paths(
+            &root.join(PROFILES_DIRECTORY),
+            Some(&root.join(PROFILE_FILE)),
+        )
     }
 
     fn command(&self, args: &[&str]) -> io::Result<String> {
@@ -588,21 +581,13 @@ fn bridge_service(action: &str) -> io::Result<()> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .ok_or("HOME must be an absolute path")?;
+    let home = paths::absolute_env("HOME").ok_or("HOME must be an absolute path")?;
     let desktop = Desktop {
         bridge: env::current_exe()?.with_file_name("joyshockrust-linux"),
-        config: env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .unwrap_or_else(|| home.join(".config")),
-        status_socket: env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or("XDG_RUNTIME_DIR must be an absolute path")?
-            .join("joyshockrust/status.sock"),
+        config: paths::config_home(paths::absolute_env("XDG_CONFIG_HOME"), Some(home))
+            .expect("absolute home has a config fallback"),
+        status_socket: paths::runtime_socket("status.sock", true)
+            .ok_or("XDG_RUNTIME_DIR must be an absolute path")?,
     };
     let (sender, receiver) = mpsc::channel();
     let tray = Tray {

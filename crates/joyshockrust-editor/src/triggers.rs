@@ -1,10 +1,4 @@
-use std::{
-    cell::Cell,
-    io,
-    os::unix::net::UnixDatagram,
-    path::{Path, PathBuf},
-    rc::Rc,
-};
+use std::{cell::Cell, io, os::unix::net::UnixDatagram, path::Path, rc::Rc};
 
 use adw::{gtk, prelude::*};
 use joyshockrust_core::{DEFAULT_TRIGGER_THRESHOLDS, validate_trigger_thresholds};
@@ -32,14 +26,9 @@ pub fn send_preview(payload: &[u8]) -> io::Result<()> {
 }
 
 pub(crate) fn send_preview_message(prefix: &[u8], payload: &[u8]) -> io::Result<()> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|path| !path.is_empty())
+    let path = joyshockrust_config::paths::runtime_socket("reload.sock.load", false)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
-    send_preview_to(
-        &PathBuf::from(runtime).join("joyshockrust/reload.sock.load"),
-        prefix,
-        payload,
-    )
+    send_preview_to(&path, prefix, payload)
 }
 
 fn send_preview_to(path: &Path, prefix: &[u8], payload: &[u8]) -> io::Result<()> {
@@ -424,16 +413,21 @@ fn is_analog_target(action: Option<&str>) -> bool {
 
 fn travel_range(settings: Option<&dyn TableLike>) -> (u8, bool) {
     let limit = settings.and_then(|table| table.get("travel_limit_percent"));
-    let relative = limit.is_some()
-        || settings
-            .and_then(|table| table.get("full_pull_exclusive"))
-            .and_then(Item::as_bool)
-            == Some(true);
+    let exclusive = settings
+        .and_then(|table| table.get("full_pull_exclusive"))
+        .and_then(Item::as_bool)
+        .unwrap_or_default();
+    let relative =
+        joyshockrust_config::profile::relative_trigger_stages(exclusive, limit.is_some());
     let percent = limit
         .or_else(|| settings.and_then(|table| table.get("full_travel_percent")))
         .and_then(Item::as_integer)
         .and_then(|value| u8::try_from(value).ok())
-        .filter(|value| (1..=100).contains(value))
+        .and_then(|percent| {
+            joyshockrust_config::profile::trigger_travel_limit(Some(percent))
+                .ok()
+                .flatten()
+        })
         .unwrap_or(100);
     (percent, relative)
 }

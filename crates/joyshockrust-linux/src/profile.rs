@@ -1,10 +1,14 @@
+use joyshockrust_config::{
+    PROFILE_VERSION,
+    paths::{APP_DIRECTORY, PROFILE_FILE, config_home_from_env},
+    profile::{Profile, TriggerProfile, relative_trigger_stages},
+};
 use joyshockrust_motion::aim_response::{
     GyroResponse, MAX_FLICK_DURATION_MS, MIN_FLICK_DURATION_MS, MIN_FLICK_ENGAGE_PERCENT,
     validate_flick_axial_threshold,
 };
 
 use std::{
-    env,
     error::Error,
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -29,110 +33,55 @@ use crate::{
     keyboard, touchpad,
 };
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Profile {
-    version: u32,
-    bridge: Option<BridgeFile>,
-    stick_curve: Option<f32>,
-    stick_curve_left: Option<f32>,
-    stick_curve_right: Option<f32>,
-    #[serde(default)]
-    remap_buttons: Vec<String>,
-    #[serde(default)]
-    layer_remaps: Vec<String>,
-    gyro: Option<Gyro>,
-    touchpad: Option<touchpad::Config>,
-    keyboard: Option<keyboard::Settings>,
-    #[serde(default)]
-    triggers: TriggerProfiles,
-}
+type LinuxProfile = Profile<BridgeFile, Gyro, touchpad::Config, keyboard::Settings, Effect>;
 
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct TriggerProfiles {
-    l2: TriggerProfile,
-    r2: TriggerProfile,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct TriggerProfile {
-    thresholds: Option<[u8; 4]>,
-    full_travel_percent: Option<u8>,
-    travel_limit_percent: Option<u8>,
-    partial_button: Option<String>,
-    full_button: Option<String>,
-    full_pull_exclusive: bool,
-    keep_partial: bool,
-    adaptive: Effect,
-}
-
-impl TriggerProfile {
-    fn analog_route(&self, side: gyro_gate::TriggerSide) -> crate::gamepad::AnalogTriggerRoute {
-        use crate::gamepad::AnalogTriggerRoute::{Off, Other, Same};
-        use gyro_gate::TriggerSide::{Left, Right};
-        if !self.full_pull_exclusive {
-            return Same;
-        }
-        match (side, self.full_button.as_deref()) {
-            (_, None) | (Left, Some("l2")) | (Right, Some("r2")) => Same,
-            (_, Some("l2" | "r2")) => Other,
-            _ => Off,
-        }
+fn resolve_trigger(
+    settings: &TriggerProfile<Effect>,
+    side: gyro_gate::TriggerSide,
+) -> Result<crate::gamepad::TriggerStages, &'static str> {
+    let thresholds = settings
+        .thresholds
+        .unwrap_or(joyshockrust_core::DEFAULT_TRIGGER_THRESHOLDS);
+    joyshockrust_core::validate_trigger_thresholds(thresholds)?;
+    let [partial, partial_release, full, full_release] = thresholds;
+    let analog_full = settings.full_pull_exclusive
+        && !matches!(
+            settings.analog_route(side),
+            crate::gamepad::AnalogTriggerRoute::Off
+        );
+    if analog_full && settings.partial_button.is_some() {
+        return Err("a partial pull button requires a non-trigger full pull target");
     }
-
-    fn full_travel(&self) -> Result<Option<u8>, &'static str> {
-        match self.travel_limit_percent.or(self.full_travel_percent) {
-            None | Some(100) => Ok(None),
-            Some(value @ 1..=99) => Ok(Some(value)),
-            _ => Err("trigger travel limit must be between 1 and 100"),
-        }
-    }
-
-    fn resolve(
-        &self,
-        side: gyro_gate::TriggerSide,
-    ) -> Result<crate::gamepad::TriggerStages, &'static str> {
-        let thresholds = self
-            .thresholds
-            .unwrap_or(joyshockrust_core::DEFAULT_TRIGGER_THRESHOLDS);
-        joyshockrust_core::validate_trigger_thresholds(thresholds)?;
-        let [partial, partial_release, full, full_release] = thresholds;
-        let analog_full = self.full_pull_exclusive
-            && !matches!(
-                self.analog_route(side),
-                crate::gamepad::AnalogTriggerRoute::Off
-            );
-        if analog_full && self.partial_button.is_some() {
-            return Err("a partial pull button requires a non-trigger full pull target");
-        }
-        let travel = if self.full_pull_exclusive || self.travel_limit_percent.is_some() {
-            self.full_travel()?.unwrap_or(100)
+    let travel = if relative_trigger_stages(
+        settings.full_pull_exclusive,
+        settings.travel_limit_percent.is_some(),
+    ) {
+        settings.full_travel()?.unwrap_or(100)
+    } else {
+        100
+    };
+    Ok(crate::gamepad::TriggerStages {
+        lower: TriggerGate::from_percent(side, partial, partial_release).within_travel(travel),
+        upper: TriggerGate::from_percent(side, full, full_release).within_travel(travel),
+        targets: if analog_full {
+            [None; 2]
         } else {
-            100
-        };
-        Ok(crate::gamepad::TriggerStages {
-            lower: TriggerGate::from_percent(side, partial, partial_release).within_travel(travel),
-            upper: TriggerGate::from_percent(side, full, full_release).within_travel(travel),
-            targets: if analog_full {
-                [None; 2]
-            } else {
-                [
-                    self.partial_button
-                        .as_deref()
-                        .map(crate::gamepad::parse_target)
-                        .transpose()?,
-                    self.full_button
-                        .as_deref()
-                        .map(crate::gamepad::parse_target)
-                        .transpose()?,
-                ]
-            },
-            keep_partial: self.keep_partial,
-            travel_percent: travel,
-        })
-    }
+            [
+                settings
+                    .partial_button
+                    .as_deref()
+                    .map(crate::gamepad::parse_target)
+                    .transpose()?,
+                settings
+                    .full_button
+                    .as_deref()
+                    .map(crate::gamepad::parse_target)
+                    .transpose()?,
+            ]
+        },
+        keep_partial: settings.keep_partial,
+        travel_percent: travel,
+    })
 }
 
 #[derive(Deserialize)]
@@ -341,16 +290,8 @@ pub fn remember_selection(file: &Path, selected: Option<&Path>, defaults: bool) 
 }
 
 pub fn default_path() -> io::Result<PathBuf> {
-    env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|dir| dir.is_absolute())
-        .or_else(|| {
-            env::var_os("HOME")
-                .map(PathBuf::from)
-                .filter(|dir| dir.is_absolute())
-                .map(|home| home.join(".config"))
-        })
-        .map(|dir| dir.join("joyshockrust/profile.toml"))
+    config_home_from_env()
+        .map(|dir| dir.join(APP_DIRECTORY).join(PROFILE_FILE))
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -464,10 +405,10 @@ pub(crate) fn replace_file(destination: &Path, content: &[u8]) -> io::Result<()>
 }
 
 pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
-    let profile: Profile = toml::from_str(source)?;
-    if profile.version != 1 {
+    let profile: LinuxProfile = toml::from_str(source)?;
+    if profile.version != PROFILE_VERSION {
         return Err(format!(
-            "unsupported profile version {}, expected 1",
+            "unsupported profile version {}, expected {PROFILE_VERSION}",
             profile.version
         )
         .into());
@@ -497,8 +438,8 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         .as_ref()
         .is_some_and(|keyboard| keyboard.grab_touchpad);
     let trigger_stages = [
-        profile.triggers.l2.resolve(gyro_gate::TriggerSide::Left)?,
-        profile.triggers.r2.resolve(gyro_gate::TriggerSide::Right)?,
+        resolve_trigger(&profile.triggers.l2, gyro_gate::TriggerSide::Left)?,
+        resolve_trigger(&profile.triggers.r2, gyro_gate::TriggerSide::Right)?,
     ];
     let adaptive_triggers = [
         profile.triggers.l2.adaptive.validate()?,

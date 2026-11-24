@@ -749,6 +749,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "joyshockrust-config"
+version = "0.1.0"
+dependencies = [
+ "joyshockrust-core",
+ "serde",
+]
+
+[[package]]
 name = "joyshockrust-core"
 version = "0.1.0"
 
@@ -757,6 +765,7 @@ name = "joyshockrust-editor"
 version = "0.1.0"
 dependencies = [
  "evdev",
+ "joyshockrust-config",
  "joyshockrust-core",
  "joyshockrust-input",
  "joyshockrust-motion",
@@ -779,6 +788,7 @@ version = "0.1.0"
 dependencies = [
  "allocation-counter",
  "evdev",
+ "joyshockrust-config",
  "joyshockrust-core",
  "joyshockrust-input",
  "joyshockrust-motion",
@@ -800,6 +810,7 @@ dependencies = [
 name = "joyshockrust-tray"
 version = "0.1.0"
 dependencies = [
+ "joyshockrust-config",
  "ksni",
 ]
 

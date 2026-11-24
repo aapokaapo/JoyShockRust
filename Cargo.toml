@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/joyshockrust-core",
+    "crates/joyshockrust-config",
     "crates/joyshockrust-input",
     "crates/joyshockrust-linux",
     "crates/joyshockrust-motion",

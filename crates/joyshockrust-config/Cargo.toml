@@ -1,0 +1,16 @@
+[package]
+name = "joyshockrust-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+profile = ["dep:serde"]
+
+[dependencies]
+joyshockrust-core = { path = "../joyshockrust-core" }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[lints]
+workspace = true

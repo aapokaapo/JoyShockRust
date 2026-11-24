@@ -16,11 +16,8 @@ use joyshockrust_input::{
 };
 
 pub fn status_address() -> Option<gio::UnixSocketAddress> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;
-    let runtime = Path::new(&runtime);
-    runtime
-        .is_absolute()
-        .then(|| gio::UnixSocketAddress::new(&runtime.join("joyshockrust/status.sock")))
+    joyshockrust_config::paths::runtime_socket("status.sock", true)
+        .map(|path| gio::UnixSocketAddress::new(&path))
 }
 
 pub async fn status_value(

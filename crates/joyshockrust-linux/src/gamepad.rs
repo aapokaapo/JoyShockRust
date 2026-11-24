@@ -18,13 +18,7 @@ pub struct TriggerStages {
     pub travel_percent: u8,
 }
 
-#[derive(Clone, Copy, Default)]
-pub enum AnalogTriggerRoute {
-    #[default]
-    Same,
-    Other,
-    Off,
-}
+pub use joyshockrust_config::profile::AnalogTriggerRoute;
 
 pub fn route_trigger_axes(
     controls: &mut Controls,

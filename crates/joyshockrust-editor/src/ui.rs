@@ -434,7 +434,7 @@ pub(crate) mod tests {
         std::fs::create_dir(&directory).unwrap();
         let startup = config.path().join("profile.toml");
         let game = directory.join("game_one.toml");
-        std::fs::write(&startup, crate::NEW_PROFILE).unwrap();
+        std::fs::write(&startup, crate::new_profile_text()).unwrap();
         std::fs::write(&game, "version = 1\n# Game profile\n").unwrap();
         let editor = Rc::new(RefCell::new(
             Editor::open("/bin/true".into(), directory.clone(), Some(startup.clone())).unwrap(),
@@ -481,7 +481,7 @@ pub(crate) mod tests {
         assert!(editor.borrow().text.contains("# Unsaved change"));
         choose_draft_action("Discard");
         assert_eq!(editor.borrow().path, None);
-        assert_eq!(editor.borrow().text, crate::NEW_PROFILE);
+        assert_eq!(editor.borrow().text, crate::new_profile_text());
 
         let name = descendants::<gtk::Entry>(window.upcast_ref())
             .into_iter()
@@ -490,7 +490,10 @@ pub(crate) mod tests {
         name.set_text("New Game");
         window.lookup_action("save").unwrap().activate(None);
         let saved = directory.join("New Game.toml");
-        assert_eq!(std::fs::read_to_string(&saved).unwrap(), crate::NEW_PROFILE);
+        assert_eq!(
+            std::fs::read_to_string(&saved).unwrap(),
+            crate::new_profile_text()
+        );
         assert_eq!(
             target(1).get::<Vec<u8>>().unwrap(),
             saved.as_os_str().as_bytes()

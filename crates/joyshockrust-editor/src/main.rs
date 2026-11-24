@@ -25,8 +25,12 @@ mod trigger_travel;
 mod triggers;
 mod ui;
 
-const NEW_PROFILE: &str = "version = 1\n";
-const DESKTOP_APP_ID: &str = "io.github.aapokaapo.JoyShockRust";
+use joyshockrust_config::{
+    new_profile_text,
+    paths::{
+        APP_DIRECTORY, DESKTOP_APP_ID, PROFILE_FILE, PROFILES_DIRECTORY, config_home_from_env,
+    },
+};
 
 fn profile_filename(name: &str) -> Result<String, String> {
     let name = name.trim();
@@ -90,7 +94,7 @@ impl Editor {
     fn open(bridge: PathBuf, directory: PathBuf, path: Option<PathBuf>) -> io::Result<Self> {
         let original = path
             .as_ref()
-            .map_or_else(|| Ok(NEW_PROFILE.to_owned()), fs::read_to_string)?;
+            .map_or_else(|| Ok(new_profile_text()), fs::read_to_string)?;
         Ok(Self {
             bridge,
             directory,
@@ -113,22 +117,9 @@ impl Editor {
     }
 
     fn profile_paths(&self) -> Vec<PathBuf> {
-        let mut paths: Vec<_> = fs::read_dir(&self.directory)
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "toml") && path.is_file())
-            .collect();
-        paths.sort();
-        if let Some(startup) = self
-            .directory
-            .parent()
-            .map(|root| root.join("profile.toml"))
-            && startup.is_file()
-        {
-            paths.insert(0, startup);
-        }
+        let startup = self.directory.parent().map(|root| root.join(PROFILE_FILE));
+        let mut paths =
+            joyshockrust_config::paths::profile_paths(&self.directory, startup.as_deref());
         if let Some(path) = &self.path
             && !paths.contains(path)
         {
@@ -270,17 +261,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.next().is_some() {
         return Err("usage: joyshockrust-editor [PROFILE]".into());
     }
-    let directory = env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| {
-            env::var_os("HOME")
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-                .map(|home| home.join(".config"))
-        })
+    let directory = config_home_from_env()
         .ok_or("expected an absolute XDG_CONFIG_HOME or HOME")?
-        .join("joyshockrust/profiles");
+        .join(APP_DIRECTORY)
+        .join(PROFILES_DIRECTORY);
     let editor = std::rc::Rc::new(std::cell::RefCell::new(Editor::open(
         bridge, directory, path,
     )?));
@@ -315,7 +299,7 @@ mod tests {
     fn a_profile_changed_outside_the_editor_is_not_replaced() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("game.toml");
-        fs::write(&path, NEW_PROFILE).unwrap();
+        fs::write(&path, new_profile_text()).unwrap();
         let mut editor = Editor::open(
             directory.path().join("unused-bridge"),
             directory.path().into(),

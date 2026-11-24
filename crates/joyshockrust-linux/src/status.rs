@@ -1,6 +1,5 @@
 use std::{
     cell::{Cell, RefCell},
-    env,
     ffi::OsStr,
     fmt::Display,
     io::{self, Read, Write},
@@ -448,12 +447,8 @@ pub(crate) fn socket_path(path: Option<&Path>, socket_name: &str) -> io::Result<
     if let Some(path) = path {
         return Ok(path.to_path_buf());
     }
-    let runtime = env::var_os("XDG_RUNTIME_DIR")
-        .filter(|dir| !dir.is_empty())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
-    Ok(PathBuf::from(runtime)
-        .join("joyshockrust")
-        .join(socket_name))
+    joyshockrust_config::paths::runtime_socket(socket_name, false)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))
 }
 
 pub(crate) fn connect(path: Option<&Path>, socket_name: &str) -> io::Result<UnixStream> {
