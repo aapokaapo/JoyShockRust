@@ -11,6 +11,13 @@ to Space on tap and Left Shift on hold. [DualSense SVG](../crates/joyshockrust-e
 
 ![Buttons tab showing the DualSense layout, Xbox Series virtual gamepad selection and Cross keyboard bindings](screenshots/editor-buttons.png)
 
+## Analog triggers
+
+Select L2 or R2 to adjust the pull and release points, assign one action
+to each stage, and configure the physical resistance.
+
+![L2 inspector showing the partial and full pull settings with adaptive resistance](screenshots/editor-analog-trigger.png)
+
 ## Sticks
 
 Choose a stick mode and compare the gray physical input with the blue

@@ -58,6 +58,23 @@ value changes and retains the live preview across those edits.
 Response charts reuse the bridge's stick travel and projected gyro speed
 and apply the editor's draft curve settings to those inputs.
 
+## D-pad remapping
+
+2026-11-24. The bridge expands the physical hat into cardinal directions
+at the mapping boundary. It combines mapped outputs into the virtual hat
+after processing base rules, layers and touchpad targets. Opposite
+directions cancel on their axis.
+
+## Analog and adaptive triggers
+
+2026-11-24. Per-trigger profile settings define two analog stages with
+separate pull and release points. The editor uses one continuous action
+per stage and retains legacy threshold strings and gesture bindings.
+The bridge applies opt-in resistance on connection and profile changes
+and sends Off when closing a session. Trigger-only HID reports leave
+rumble and lights under kernel control. Physical validation is pending.
+[Linux report framing](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1235-L1306) · [DualSense payload reference](https://github.com/x-iso/FlexInput/blob/6efeb8945f2edcb4591c7920d02915b6579cee8a/crates/devices/src/gyro.rs#L2418-L2457)
+
 ## Optional desktop device access
 
 Reviewed 2026-11-24. Ship separate hidraw and uinput fallback rules for

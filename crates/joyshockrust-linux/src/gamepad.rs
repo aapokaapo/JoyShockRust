@@ -6,6 +6,16 @@ use evdev::{
 };
 use joyshockrust_core::{Button, Buttons, Controls, DPad, Stick};
 
+use crate::gyro_gate::TriggerGate;
+
+#[derive(Clone, Copy, PartialEq)]
+pub struct TriggerStages {
+    pub lower: TriggerGate,
+    pub upper: TriggerGate,
+    pub targets: [Option<Button>; 2],
+    pub keep_partial: bool,
+}
+
 #[derive(Default, PartialEq)]
 pub struct ButtonRemaps {
     base: Vec<(Button, Button)>,
@@ -22,6 +32,46 @@ struct RemapLayer {
 pub struct RemapState {
     active: Option<usize>,
     previous: Buttons,
+    trigger_pressed: [[bool; 2]; 2],
+}
+
+impl RemapState {
+    pub fn trigger_outputs(
+        &mut self,
+        controls: &Controls,
+        stages: Option<[TriggerStages; 2]>,
+        suppressed: &mut Buttons,
+    ) -> Buttons {
+        let mut targets = Buttons::default();
+        if let Some(stages) = stages {
+            for ((settings, physical), active) in stages
+                .into_iter()
+                .zip([Button::LeftTrigger, Button::RightTrigger])
+                .zip(&mut self.trigger_pressed)
+            {
+                if settings.targets == [None; 2] || suppressed.contains(physical) {
+                    *active = [false; 2];
+                    continue;
+                }
+                suppressed.insert(physical);
+                let [partial, full] = *active;
+                *active = [
+                    settings.lower.pressed(controls, partial),
+                    settings.upper.pressed(controls, full),
+                ];
+                let [partial, full] = *active;
+                for (pressed, target) in [partial && (!full || settings.keep_partial), full]
+                    .into_iter()
+                    .zip(settings.targets)
+                {
+                    if pressed && let Some(target) = target {
+                        targets.insert(target);
+                    }
+                }
+            }
+        }
+        targets
+    }
 }
 
 impl ButtonRemaps {
@@ -37,8 +87,7 @@ impl ButtonRemaps {
         let (modifier, rule) = spec
             .split_once(':')
             .ok_or("expected MODIFIER:SOURCE=TARGET")?;
-        let modifier =
-            super::gyro_gate::button_by_name(modifier).ok_or("unknown remap layer button")?;
+        let modifier = remap_button_by_name(modifier).ok_or("unknown remap layer button")?;
         let rule = parse_rule(rule)?;
         if let Some(layer) = self
             .layers
@@ -57,7 +106,7 @@ impl ButtonRemaps {
 
     #[cfg(test)]
     pub fn apply(&self, controls: Controls, state: &mut RemapState) -> Controls {
-        self.apply_filtered(controls, state, Buttons::default())
+        self.apply_filtered(controls, state, Buttons::default(), Buttons::default())
     }
 
     pub fn apply_filtered(
@@ -65,8 +114,9 @@ impl ButtonRemaps {
         mut controls: Controls,
         state: &mut RemapState,
         suppressed: Buttons,
+        direct_outputs: Buttons,
     ) -> Controls {
-        let physical = controls.buttons;
+        let physical = controls.buttons.union(controls.dpad.buttons());
         if state
             .active
             .is_some_and(|i| !physical.contains(self.layers[i].modifier))
@@ -80,7 +130,7 @@ impl ButtonRemaps {
         }
         state.previous = physical;
         let mut remaining = physical.difference(suppressed);
-        let mut targets = Buttons::default();
+        let mut targets = direct_outputs;
         let active_layer = state.active.map(|i| &self.layers[i]);
         for &(source, target) in active_layer
             .into_iter()
@@ -92,22 +142,39 @@ impl ButtonRemaps {
                 targets.insert(target);
             }
         }
-        controls.buttons = remaining.union(targets);
+        let mapped = remaining.union(targets);
+        controls.buttons = mapped.difference(DPad::BUTTONS);
+        controls.dpad = DPad::from_buttons(mapped);
         controls
     }
 }
 
+pub fn dpad_button_by_name(name: &str) -> Option<Button> {
+    Some(match name {
+        "dpad-up" => Button::DPadUp,
+        "dpad-right" => Button::DPadRight,
+        "dpad-down" => Button::DPadDown,
+        "dpad-left" => Button::DPadLeft,
+        _ => return None,
+    })
+}
+
+fn remap_button_by_name(name: &str) -> Option<Button> {
+    super::gyro_gate::button_by_name(name).or_else(|| dpad_button_by_name(name))
+}
+
 fn parse_rule(spec: &str) -> Result<(Button, Button), &'static str> {
     let (source, target) = spec.split_once('=').ok_or("expected SOURCE=TARGET")?;
-    let source = super::gyro_gate::button_by_name(source).ok_or("unknown source button")?;
+    let source = remap_button_by_name(source).ok_or("unknown source button")?;
     Ok((source, parse_target(target)?))
 }
 
 pub fn parse_target(name: &str) -> Result<Button, &'static str> {
-    let target = super::gyro_gate::button_by_name(name).ok_or("unknown target button")?;
-    if !OutputKind::Generic
-        .buttons()
-        .any(|(button, _)| button == target)
+    let target = remap_button_by_name(name).ok_or("unknown target button")?;
+    if !DPad::BUTTONS.contains(target)
+        && !OutputKind::Generic
+            .buttons()
+            .any(|(button, _)| button == target)
     {
         return Err("target button is unavailable on the virtual gamepad");
     }

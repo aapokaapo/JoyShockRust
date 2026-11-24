@@ -21,6 +21,7 @@ mod response_plot;
 mod sensitivity;
 mod stick_keys;
 mod touchpad;
+mod triggers;
 mod ui;
 
 const NEW_PROFILE: &str = "version = 1\n";

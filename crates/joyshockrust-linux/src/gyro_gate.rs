@@ -47,6 +47,14 @@ pub(crate) enum TriggerSide {
 }
 
 impl TriggerGate {
+    pub(crate) fn from_percent(side: TriggerSide, press: u8, release: u8) -> Self {
+        Self {
+            side,
+            press: f32::from(press) / 100.0,
+            release: f32::from(release) / 100.0,
+        }
+    }
+
     pub fn parse(spec: &str) -> Result<Self, &'static str> {
         let mut fields = spec.split(':');
         let side = match fields.next() {

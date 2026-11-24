@@ -78,6 +78,9 @@ impl BindingInput<'_> {
 }
 
 fn matching_triggers(first: &str, second: &str) -> bool {
+    if first == second {
+        return true;
+    }
     let mut left = first.split(':');
     let mut right = second.split(':');
     if left.next() != right.next() {
@@ -224,6 +227,14 @@ pub fn set_output_mode(
     }
     if mode != OutputMode::Gamepad {
         set_gamepad(doc, id, None)?;
+        if let Some(trigger) = doc
+            .get_mut("triggers")
+            .and_then(|table| table.get_mut(id))
+            .and_then(Item::as_table_like_mut)
+        {
+            trigger.remove("partial_button");
+            trigger.remove("full_button");
+        }
     }
     let keyboard = doc
         .entry("keyboard")
@@ -347,41 +358,25 @@ pub fn set_action(
     Ok(())
 }
 
-const KEEP_PARTIAL_ERROR: &str = "Edit this trigger setting in Advanced TOML.";
-
-pub fn keep_partial(doc: &DocumentMut, trigger: &str) -> Result<bool, &'static str> {
-    let Some(keyboard) = doc.get("keyboard") else {
-        return Ok(false);
-    };
-    let keyboard = keyboard.as_table_like().ok_or(KEEP_PARTIAL_ERROR)?;
-    let Some(modes) = keyboard.get("keep_partial") else {
-        return Ok(false);
-    };
-    let modes = modes.as_table_like().ok_or(KEEP_PARTIAL_ERROR)?;
-    modes
-        .get(trigger)
-        .map_or(Ok(false), |item| item.as_bool().ok_or(KEEP_PARTIAL_ERROR))
-}
-
-pub fn set_keep_partial(
+pub fn rename_trigger(
     doc: &mut DocumentMut,
-    trigger: &str,
-    enabled: bool,
+    previous: &str,
+    next: &str,
 ) -> Result<(), &'static str> {
-    let keyboard = doc
-        .entry("keyboard")
-        .or_insert_with(|| Item::Table(Table::new()))
-        .as_table_like_mut()
-        .ok_or(KEEP_PARTIAL_ERROR)?;
-    let modes = keyboard
-        .entry("keep_partial")
-        .or_insert_with(|| value(toml_edit::InlineTable::new()))
-        .as_table_like_mut()
-        .ok_or(KEEP_PARTIAL_ERROR)?;
-    if let Some(previous) = modes.get_mut(trigger).and_then(Item::as_value_mut) {
-        replace_value(previous, Value::from(enabled));
-    } else {
-        modes.insert(trigger, value(enabled));
+    let Some(bindings) = keyboard_bindings(doc)? else {
+        return Ok(());
+    };
+    if let Some(index) = binding_index(bindings, BindingInput::Trigger(previous))? {
+        if binding_index(bindings, BindingInput::Trigger(next))?.is_some() {
+            return Err("Edit duplicate trigger stages in Advanced TOML.");
+        }
+        let bindings = doc["keyboard"]["bindings"]
+            .as_array_of_tables_mut()
+            .unwrap();
+        let old = bindings.get_mut(index).unwrap()["trigger"]
+            .as_value_mut()
+            .unwrap();
+        replace_value(old, Value::from(next));
     }
     Ok(())
 }

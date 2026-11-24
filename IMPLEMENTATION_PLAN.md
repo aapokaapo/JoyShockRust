@@ -313,7 +313,11 @@ updates the draft grid and preview together.
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects
 physical controls and selects an exclusive keyboard, mouse or gamepad
-output per physical button in the inspector. Keyboard pickers capture
+output per physical button or D-pad direction in the inspector. The
+D-pad can also be a virtual gamepad target. Touchpad regions use the
+Touchpad tab. L2 and R2 expose adjustable partial and full stages with
+one action per stage and optional physical resistance. Adaptive effects
+still need USB and Bluetooth hardware validation. Keyboard pickers capture
 one key in the editor window. Esc, a click or a 10-second timeout ends
 the inline prompt. Mouse buttons use dropdowns and **Unbind** clears
 the current action.

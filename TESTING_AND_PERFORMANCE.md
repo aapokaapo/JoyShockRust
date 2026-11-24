@@ -955,13 +955,20 @@ saving displays an error while the saved profile remains usable.
 
 Choose **Xbox Series X|S** under **Virtual gamepad type**, save and apply,
 then check `virtual_gamepad_kind=xbox-series` and the replacement device
-in Steam. In the L2 inspector choose **Keyboard**, set **Partial pull → Hold** to Q and
-**Full pull → Hold** to E. Check that Q is held partway and E takes over
-at full travel. With partial **Tap** configured, check that a full pull
-and release does not emit that partial tap. Enable **Keep partial action
+in Steam. In the L2 inspector choose **Keyboard**, set the **Partial pull**
+action to Q and the **Full pull** action to E. Check that Q is held partway
+and E takes over at full travel. Change the two pull and release points
+under **Trigger travel** and verify the transitions move with them.
+Enable **Keep partial action
 at full pull** for L2 and save. Verify Q stays held when E engages, then
 ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
+
+On USB and Bluetooth, select **Resistance** under **Adaptive trigger**
+for one side and save. Check that resistance starts in the selected zone
+and only affects that side. Change the strength, reconnect, and confirm
+the profile reapplies. Select **Off** and save to check normal travel.
+Repeat on DualSense and DualSense Edge.
 
 In **Gyro → Aim input**, switch between **Gyro aim** and **Sensor fusion
 aim** using **Save & Apply**. Hold the controller approximately flat and

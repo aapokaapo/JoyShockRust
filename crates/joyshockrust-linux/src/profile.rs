@@ -19,6 +19,7 @@ use std::{
 use serde::Deserialize;
 
 use crate::{
+    adaptive_trigger::Effect,
     discovery::{ModelSelection, Selection},
     game_calibration::GameCalibration,
     gamepad::{ButtonRemaps, OutputKind, StickCurve},
@@ -43,6 +44,53 @@ struct Profile {
     gyro: Option<Gyro>,
     touchpad: Option<touchpad::Config>,
     keyboard: Option<keyboard::Settings>,
+    #[serde(default)]
+    triggers: TriggerProfiles,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TriggerProfiles {
+    l2: TriggerProfile,
+    r2: TriggerProfile,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TriggerProfile {
+    thresholds: Option<[u8; 4]>,
+    partial_button: Option<String>,
+    full_button: Option<String>,
+    keep_partial: bool,
+    adaptive: Effect,
+}
+
+impl TriggerProfile {
+    fn resolve(
+        &self,
+        side: gyro_gate::TriggerSide,
+    ) -> Result<crate::gamepad::TriggerStages, &'static str> {
+        let thresholds = self
+            .thresholds
+            .unwrap_or(joyshockrust_core::DEFAULT_TRIGGER_THRESHOLDS);
+        joyshockrust_core::validate_trigger_thresholds(thresholds)?;
+        let [partial, partial_release, full, full_release] = thresholds;
+        Ok(crate::gamepad::TriggerStages {
+            lower: TriggerGate::from_percent(side, partial, partial_release),
+            upper: TriggerGate::from_percent(side, full, full_release),
+            targets: [
+                self.partial_button
+                    .as_deref()
+                    .map(crate::gamepad::parse_target)
+                    .transpose()?,
+                self.full_button
+                    .as_deref()
+                    .map(crate::gamepad::parse_target)
+                    .transpose()?,
+            ],
+            keep_partial: self.keep_partial,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -180,6 +228,8 @@ pub struct RuntimeOptions {
     pub touchpad: Option<touchpad::Grid>,
     pub keyboard: Option<keyboard::Config>,
     pub grab_touchpad: bool,
+    pub trigger_stages: Option<[crate::gamepad::TriggerStages; 2]>,
+    pub adaptive_triggers: [Effect; 2],
 }
 
 pub fn load(path: &Path) -> Result<RuntimeOptions, Box<dyn Error>> {
@@ -402,9 +452,17 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         .keyboard
         .as_ref()
         .is_some_and(|keyboard| keyboard.grab_touchpad);
+    let trigger_stages = [
+        profile.triggers.l2.resolve(gyro_gate::TriggerSide::Left)?,
+        profile.triggers.r2.resolve(gyro_gate::TriggerSide::Right)?,
+    ];
+    let adaptive_triggers = [
+        profile.triggers.l2.adaptive.validate()?,
+        profile.triggers.r2.adaptive.validate()?,
+    ];
     let keyboard = profile
         .keyboard
-        .map(|keyboard| keyboard.resolve(touchpad.as_ref()))
+        .map(|keyboard| keyboard.resolve(touchpad.as_ref(), trigger_stages))
         .transpose()?;
     Ok(RuntimeOptions {
         bridge: profile.bridge.and_then(BridgeFile::outputs),
@@ -414,6 +472,11 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         touchpad,
         keyboard,
         grab_touchpad,
+        trigger_stages: trigger_stages
+            .iter()
+            .any(|stage| stage.targets != [None; 2])
+            .then_some(trigger_stages),
+        adaptive_triggers,
     })
 }
 

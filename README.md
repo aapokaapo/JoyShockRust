@@ -190,14 +190,15 @@ Use these exact lowercase names in TOML profiles.
 | DualSense Edge rear paddles | `paddle-left`, `paddle-right` |
 | D-pad directions | `dpad-up`, `dpad-right`, `dpad-down`, `dpad-left` |
 
-The digital button names above the D-pad row are valid as
-`remap_buttons` sources and as `layer_remaps` sources or modifiers.
-They also work in `gyro.binding.input` for digital activation modes, in
+All listed digital inputs are valid as `remap_buttons` sources and as
+`layer_remaps` sources or modifiers. The button names above the D-pad
+row also work in `gyro.binding.input` for digital activation modes, in
 `gyro.calibration_hold.button`, in `keyboard.bindings.button` and
 `keyboard.bindings.chord`, and as keys in `[keyboard.button_output]`.
 The four D-pad directions work in keyboard button bindings, keyboard
 chords and `[keyboard.button_output]`. A diagonal activates its two
-cardinal directions.
+cardinal inputs independently. On the virtual D-pad, perpendicular
+outputs combine into a diagonal and opposite outputs cancel on their axis.
 
 For analog trigger travel, use `l2` or `r2` in
 `keyboard.bindings.trigger` or in a gyro binding with `mode = "trigger"`.
@@ -214,7 +215,7 @@ requires L1 and a touch in the second column of the first row.
 
 Virtual gamepad targets for `remap_buttons`, `layer_remaps` and
 `[[touchpad.regions]]` are `cross`, `circle`, `square`, `triangle`,
-`l1`, `r1`, `l3`, `r3`, `create`, `options` and `ps`.
+`l1`, `r1`, `l3`, `r3`, `create`, `options`, `ps`, and the four D-pad directions.
 The generic virtual gamepad also emits digital `l2` and `r2` targets.
 Analog axes are independent of button remaps.
 
@@ -310,7 +311,25 @@ tap = ["KEY_LEFTSHIFT", "BTN_LEFT"]
 ```
 
 Use `trigger` in place of `button` for an analog L2 or R2 binding.
-The optional suffix sets the engagement and release thresholds on a
+The editor uses named stages such as `l2:partial` and `l2:full`.
+Set that side's boundaries under `[triggers.l2]` or `[triggers.r2]`.
+
+```toml
+[triggers.l2]
+thresholds = [45, 35, 95, 85] # Partial pull, partial release, full pull, full release in percent
+keep_partial = false
+adaptive = { mode = "resistance", start = 3, strength = 3 }
+
+[[keyboard.bindings]]
+trigger = "l2:partial"
+hold = "KEY_Q"
+```
+
+For virtual buttons, set `partial_button` and `full_button` under the
+trigger instead of adding keyboard bindings. The virtual analog axis
+continues to follow physical travel in gamepad mode.
+
+For a legacy explicit trigger binding, the optional suffix sets the engagement and release thresholds on a
 scale from 0 to 1. The defaults are 0.45 and 0.35. Bindings at different
 thresholds can overlap, so a deeper pull can add a second key. For a
 partial-only binding, add a second pair of thresholds, for example
@@ -834,9 +853,13 @@ Use the profile dropdown inside the editor to open a saved profile or
 choose **New profile**. Use **Save & Apply** to make a profile active.
 The editor follows the system’s light or dark appearance. The page
 switcher moves to the bottom when the window is narrow.
-Select a physical control on the DualSense diagram or choose a DualSense
-Edge control below it. Choose one **Output type** per physical button.
-**Keyboard** and **Mouse** each support separate tap, hold and double-tap
+Select a physical control on the DualSense diagram. The selected control
+has a filled highlight and an outline. The Edge Fn buttons are under L3
+and R3, with the matching paddles below them. Configure touch and
+click actions in **Touchpad**. Existing whole-touchpad click bindings
+can be edited in **Advanced**.
+Choose one **Output type** per physical button.
+For digital buttons, **Keyboard** and **Mouse** support separate tap, hold and double-tap
 actions and suppress that physical button on the virtual gamepad.
 For a keyboard action, choose **Bind key…** and press the desired key.
 While the editor waits, press **Esc** or click anywhere in its window to
@@ -850,14 +873,18 @@ gesture or **Same as controller** to remove the base remap. Existing
 TOML profiles retain their original routing until you choose an output
 type for the button. Use **Advanced** for chords and layers.
 
-At the top of **Buttons**, choose the **Virtual gamepad type**. Selecting
-L2 or R2 with **Keyboard** or **Mouse** selected shows **Partial pull**
-and **Full pull** actions of that type in addition to the digital button. A partial pull engages at
-45%, and a full pull at 95%. The release thresholds are 35% and 85%.
-Turn on **Keep partial action at full pull** to hold both assigned keys
-at full travel. The switch is off by default, so the full action takes
-over. L2 and R2 have separate switches.
-Choose **Save & Apply** to use the new settings.
+Selecting L2 or R2 shows **Trigger travel**, with adjustable engage and
+release points and one action each for **Partial pull** and **Full pull**.
+The defaults engage at 45% and 95% and release at 35% and 85%. Each
+action stays active while its stage is engaged. Enable **Keep partial
+action at full pull** to keep both actions active at full travel. You can
+choose a key, mouse button or virtual gamepad button using **Output type**.
+Custom trigger gestures from older profiles can still be edited in **Advanced**.
+
+Under **Adaptive trigger**, choose **Resistance** and set the start zone
+and strength for the selected trigger, or choose **Off**. The bridge
+sends the effect to a DualSense or DualSense Edge when you **Save & Apply**
+and reapplies it on reconnect. This setting needs write access to hidraw.
 
 In **Touchpad**, set the number of rows and columns, select a grid
 cell, and assign separate virtual gamepad buttons to **Touch** and
