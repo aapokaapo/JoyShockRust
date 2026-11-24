@@ -426,7 +426,7 @@ fn parse_contacts(value: &str) -> Option<Contacts> {
 fn live_preview(size: Cell, selected: Rc<State<Cell>>, layout: &gtk::Box) -> gtk::DrawingArea {
     let preview = gtk::Box::new(gtk::Orientation::Vertical, 6);
     preview.set_margin_bottom(12);
-    let area = gtk::DrawingArea::builder().content_height(160).build();
+    let area = gtk::DrawingArea::builder().content_height(194).build();
     area.update_property(&[gtk::accessible::Property::Label("Live touchpad preview")]);
     preview.append(&area);
     let status = gtk::Label::builder()
@@ -439,61 +439,14 @@ fn live_preview(size: Cell, selected: Rc<State<Cell>>, layout: &gtk::Box) -> gtk
     let contacts = Rc::new(State::new(Contacts::default()));
     let drawn_contacts = contacts.clone();
     area.set_draw_func(move |area, cr, width, height| {
-        let style = area.style_context();
-        let fg = style.color();
-        let accent = style.lookup_color("accent_color").unwrap_or(fg);
-        let color = |c: gtk::gdk::RGBA, alpha| {
-            cr.set_source_rgba(
-                f64::from(c.red()),
-                f64::from(c.green()),
-                f64::from(c.blue()),
-                alpha,
-            );
-        };
-        let ratio = f64::from(DUALSENSE_TOUCHPAD_WIDTH) / f64::from(DUALSENSE_TOUCHPAD_HEIGHT);
-        let w = (f64::from(width) - 20.0).min((f64::from(height) - 20.0) * ratio);
-        if w <= 0.0 {
-            return;
-        }
-        let h = w / ratio;
-        let left = (f64::from(width) - w) / 2.0;
-        let top = (f64::from(height) - h) / 2.0;
-        let cw = w / size.column as f64;
-        let ch = h / size.row as f64;
-        color(fg, 0.08);
-        cr.rectangle(left, top, w, h);
-        let _ = cr.fill();
-        let cell = selected.get();
-        color(accent, 0.25);
-        cr.rectangle(
-            left + (cell.column - 1) as f64 * cw,
-            top + (cell.row - 1) as f64 * ch,
-            cw,
-            ch,
+        draw_preview(
+            area,
+            cr,
+            (width, height),
+            size,
+            selected.get(),
+            drawn_contacts.get(),
         );
-        let _ = cr.fill();
-        color(fg, 0.38);
-        cr.set_line_width(1.0);
-        cr.rectangle(left, top, w, h);
-        for column in 1..size.column {
-            let x = left + column as f64 * cw;
-            cr.move_to(x, top);
-            cr.line_to(x, top + h);
-        }
-        for row in 1..size.row {
-            let y = top + row as f64 * ch;
-            cr.move_to(left, y);
-            cr.line_to(left + w, y);
-        }
-        let _ = cr.stroke();
-        for (x, y) in drawn_contacts.get().into_iter().flatten() {
-            cr.arc(left + x * w, top + y * h, 6.0, 0.0, std::f64::consts::TAU);
-            color(accent, 1.0);
-            let _ = cr.fill_preserve();
-            color(fg, 1.0);
-            cr.set_line_width(1.5);
-            let _ = cr.stroke();
-        }
     });
     let chart = area.clone();
     controller_input::watch_status(
@@ -515,6 +468,211 @@ fn live_preview(size: Cell, selected: Rc<State<Cell>>, layout: &gtk::Box) -> gtk
         },
     );
     area
+}
+
+const PREVIEW_WIDTH: f64 = 420.0;
+const PREVIEW_HEIGHT: f64 = 180.0;
+const PAD_CENTER: f64 = PREVIEW_WIDTH / 2.0;
+const PAD_TOP: f64 = 35.0;
+const PAD_BOTTOM: f64 = 144.0;
+const PAD_TOP_WIDTH: f64 = 190.0;
+const PAD_BOTTOM_WIDTH: f64 = 166.0;
+
+fn touch_position(x: f64, y: f64) -> (f64, f64) {
+    let width = PAD_TOP_WIDTH + y * (PAD_BOTTOM_WIDTH - PAD_TOP_WIDTH);
+    (
+        PAD_CENTER + (x - 0.5) * width,
+        PAD_TOP + y * (PAD_BOTTOM - PAD_TOP),
+    )
+}
+
+fn draw_preview(
+    area: &gtk::DrawingArea,
+    cr: &gtk::cairo::Context,
+    (width, height): (i32, i32),
+    size: Cell,
+    selected: Cell,
+    contacts: Contacts,
+) {
+    let style = area.style_context();
+    let fg = style.color();
+    let accent = style.lookup_color("accent_color").unwrap_or(fg);
+    let color = |c: gtk::gdk::RGBA, alpha| {
+        cr.set_source_rgba(c.red().into(), c.green().into(), c.blue().into(), alpha);
+    };
+    let scale = ((f64::from(width) - 12.0) / PREVIEW_WIDTH)
+        .min((f64::from(height) - 12.0) / PREVIEW_HEIGHT);
+    if scale <= 0.0 {
+        return;
+    }
+    let _ = cr.save();
+    cr.translate(
+        (f64::from(width) - PREVIEW_WIDTH * scale) / 2.0,
+        (f64::from(height) - PREVIEW_HEIGHT * scale) / 2.0,
+    );
+    cr.scale(scale, scale);
+    draw_upper_shell(cr, |alpha| color(fg, alpha));
+
+    // Round the trapezoid corners without changing the coordinate mapping.
+    let (lt, _) = touch_position(0.0, 0.0);
+    let (rt, _) = touch_position(1.0, 0.0);
+    let (lb, _) = touch_position(0.0, 1.0);
+    let (rb, _) = touch_position(1.0, 1.0);
+    cr.move_to(lt + 10.0, PAD_TOP);
+    cr.line_to(rt - 10.0, PAD_TOP);
+    cr.curve_to(
+        rt - 3.0,
+        PAD_TOP,
+        rt + 0.5,
+        PAD_TOP + 4.0,
+        rt - 1.0,
+        PAD_TOP + 11.0,
+    );
+    cr.line_to(rb + 1.0, PAD_BOTTOM - 9.0);
+    cr.curve_to(
+        rb,
+        PAD_BOTTOM - 3.0,
+        rb - 4.0,
+        PAD_BOTTOM,
+        rb - 10.0,
+        PAD_BOTTOM,
+    );
+    cr.line_to(lb + 10.0, PAD_BOTTOM);
+    cr.curve_to(
+        lb + 4.0,
+        PAD_BOTTOM,
+        lb,
+        PAD_BOTTOM - 3.0,
+        lb - 1.0,
+        PAD_BOTTOM - 9.0,
+    );
+    cr.line_to(lt + 1.0, PAD_TOP + 11.0);
+    cr.curve_to(
+        lt - 0.5,
+        PAD_TOP + 4.0,
+        lt + 3.0,
+        PAD_TOP,
+        lt + 10.0,
+        PAD_TOP,
+    );
+    cr.close_path();
+    color(fg, 0.09);
+    let _ = cr.fill_preserve();
+    color(fg, 0.62);
+    cr.set_line_width(1.5);
+    let _ = cr.stroke_preserve();
+    cr.clip();
+
+    // Zone edges and contact dots share the same surface projection.
+    let move_to = |x, y| {
+        let (x, y) = touch_position(x, y);
+        cr.move_to(x, y);
+    };
+    let line_to = |x, y| {
+        let (x, y) = touch_position(x, y);
+        cr.line_to(x, y);
+    };
+    let left = (selected.column - 1) as f64 / size.column as f64;
+    let right = selected.column as f64 / size.column as f64;
+    let top = (selected.row - 1) as f64 / size.row as f64;
+    let bottom = selected.row as f64 / size.row as f64;
+    move_to(left, top);
+    line_to(right, top);
+    line_to(right, bottom);
+    line_to(left, bottom);
+    cr.close_path();
+    color(accent, 0.28);
+    let _ = cr.fill();
+    for column in 1..size.column {
+        let x = column as f64 / size.column as f64;
+        move_to(x, 0.0);
+        line_to(x, 1.0);
+    }
+    for row in 1..size.row {
+        let y = row as f64 / size.row as f64;
+        move_to(0.0, y);
+        line_to(1.0, y);
+    }
+    color(fg, 0.35);
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+    for (x, y) in contacts.into_iter().flatten() {
+        let (x, y) = touch_position(x, y);
+        cr.arc(x, y, 6.0 / scale, 0.0, std::f64::consts::TAU);
+        color(accent, 1.0);
+        let _ = cr.fill_preserve();
+        color(fg, 1.0);
+        cr.set_line_width(1.5 / scale);
+        let _ = cr.stroke();
+    }
+    let _ = cr.restore();
+}
+
+fn draw_upper_shell(cr: &gtk::cairo::Context, color: impl Fn(f64)) {
+    // Leave the lower edge open where the grips continue beyond this view.
+    cr.move_to(22.0, 164.0);
+    cr.curve_to(32.0, 123.0, 30.0, 70.0, 60.0, 44.0);
+    cr.curve_to(82.0, 24.0, 108.0, 22.0, 141.0, 23.0);
+    cr.line_to(279.0, 23.0);
+    cr.curve_to(312.0, 22.0, 338.0, 24.0, 360.0, 44.0);
+    cr.curve_to(390.0, 70.0, 388.0, 123.0, 398.0, 164.0);
+    cr.curve_to(318.0, 178.0, 102.0, 178.0, 22.0, 164.0);
+    color(0.055);
+    let _ = cr.fill();
+
+    for side in [1.0, -1.0] {
+        let _ = cr.save();
+        cr.translate(PAD_CENTER, 0.0);
+        cr.scale(side, 1.0);
+        cr.move_to(-188.0, 164.0);
+        cr.curve_to(-178.0, 123.0, -180.0, 70.0, -150.0, 44.0);
+        cr.curve_to(-128.0, 24.0, -102.0, 22.0, -69.0, 23.0);
+        cr.line_to(0.0, 23.0);
+        cr.move_to(-147.0, 41.0);
+        cr.curve_to(-147.0, 14.0, -127.0, 7.0, -99.0, 7.0);
+        cr.line_to(-76.0, 7.0);
+        cr.curve_to(-65.0, 7.0, -63.0, 15.0, -63.0, 23.0);
+        cr.move_to(-105.0, 66.0);
+        cr.line_to(-97.0, 118.0);
+        color(0.31);
+        cr.set_line_width(1.8);
+        cr.set_line_cap(gtk::cairo::LineCap::Round);
+        let _ = cr.stroke();
+        let _ = cr.restore();
+    }
+
+    // The D-pad, face buttons and speaker grille distinguish the top view.
+    for (x, y) in [
+        (70.0, 81.0),
+        (78.0, 81.0),
+        (78.0, 93.0),
+        (90.0, 93.0),
+        (90.0, 101.0),
+        (78.0, 101.0),
+        (78.0, 113.0),
+        (70.0, 113.0),
+        (70.0, 101.0),
+        (58.0, 101.0),
+        (58.0, 93.0),
+        (70.0, 93.0),
+    ] {
+        cr.line_to(x, y);
+    }
+    cr.close_path();
+    for (x, y) in [(346.0, 79.0), (328.0, 97.0), (364.0, 97.0), (346.0, 115.0)] {
+        cr.new_sub_path();
+        cr.arc(x, y, 7.0, 0.0, std::f64::consts::TAU);
+    }
+    color(0.28);
+    cr.set_line_width(1.4);
+    let _ = cr.stroke();
+    for y in [154.0, 160.0] {
+        for x in [198.0, 204.0, 210.0, 216.0, 222.0] {
+            cr.new_sub_path();
+            cr.arc(x, y, 1.2, 0.0, std::f64::consts::TAU);
+        }
+    }
+    let _ = cr.fill();
 }
 
 fn show_actions(ctx: &Context, cell: Cell, actions: &gtk::Box) {
