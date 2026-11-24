@@ -19,6 +19,7 @@ use std::{
 use serde::Deserialize;
 
 use crate::{
+    adaptive_trigger::Effect,
     discovery::{ModelSelection, Selection},
     game_calibration::GameCalibration,
     gamepad::{ButtonRemaps, OutputKind, StickCurve},
@@ -43,6 +44,95 @@ struct Profile {
     gyro: Option<Gyro>,
     touchpad: Option<touchpad::Config>,
     keyboard: Option<keyboard::Settings>,
+    #[serde(default)]
+    triggers: TriggerProfiles,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TriggerProfiles {
+    l2: TriggerProfile,
+    r2: TriggerProfile,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TriggerProfile {
+    thresholds: Option<[u8; 4]>,
+    full_travel_percent: Option<u8>,
+    travel_limit_percent: Option<u8>,
+    partial_button: Option<String>,
+    full_button: Option<String>,
+    full_pull_exclusive: bool,
+    keep_partial: bool,
+    adaptive: Effect,
+}
+
+impl TriggerProfile {
+    fn analog_route(&self, side: gyro_gate::TriggerSide) -> crate::gamepad::AnalogTriggerRoute {
+        use crate::gamepad::AnalogTriggerRoute::{Off, Other, Same};
+        use gyro_gate::TriggerSide::{Left, Right};
+        if !self.full_pull_exclusive {
+            return Same;
+        }
+        match (side, self.full_button.as_deref()) {
+            (_, None) | (Left, Some("l2")) | (Right, Some("r2")) => Same,
+            (_, Some("l2" | "r2")) => Other,
+            _ => Off,
+        }
+    }
+
+    fn full_travel(&self) -> Result<Option<u8>, &'static str> {
+        match self.travel_limit_percent.or(self.full_travel_percent) {
+            None | Some(100) => Ok(None),
+            Some(value @ 1..=99) => Ok(Some(value)),
+            _ => Err("trigger travel limit must be between 1 and 100"),
+        }
+    }
+
+    fn resolve(
+        &self,
+        side: gyro_gate::TriggerSide,
+    ) -> Result<crate::gamepad::TriggerStages, &'static str> {
+        let thresholds = self
+            .thresholds
+            .unwrap_or(joyshockrust_core::DEFAULT_TRIGGER_THRESHOLDS);
+        joyshockrust_core::validate_trigger_thresholds(thresholds)?;
+        let [partial, partial_release, full, full_release] = thresholds;
+        let analog_full = self.full_pull_exclusive
+            && !matches!(
+                self.analog_route(side),
+                crate::gamepad::AnalogTriggerRoute::Off
+            );
+        if analog_full && self.partial_button.is_some() {
+            return Err("a partial pull button requires a non-trigger full pull target");
+        }
+        let travel = if self.full_pull_exclusive || self.travel_limit_percent.is_some() {
+            self.full_travel()?.unwrap_or(100)
+        } else {
+            100
+        };
+        Ok(crate::gamepad::TriggerStages {
+            lower: TriggerGate::from_percent(side, partial, partial_release).within_travel(travel),
+            upper: TriggerGate::from_percent(side, full, full_release).within_travel(travel),
+            targets: if analog_full {
+                [None; 2]
+            } else {
+                [
+                    self.partial_button
+                        .as_deref()
+                        .map(crate::gamepad::parse_target)
+                        .transpose()?,
+                    self.full_button
+                        .as_deref()
+                        .map(crate::gamepad::parse_target)
+                        .transpose()?,
+                ]
+            },
+            keep_partial: self.keep_partial,
+            travel_percent: travel,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -180,6 +270,10 @@ pub struct RuntimeOptions {
     pub touchpad: Option<touchpad::Grid>,
     pub keyboard: Option<keyboard::Config>,
     pub grab_touchpad: bool,
+    pub trigger_stages: Option<[crate::gamepad::TriggerStages; 2]>,
+    pub trigger_full_travel: [Option<u8>; 2],
+    pub trigger_analog_routes: [crate::gamepad::AnalogTriggerRoute; 2],
+    pub adaptive_triggers: [Effect; 2],
 }
 
 pub fn load(path: &Path) -> Result<RuntimeOptions, Box<dyn Error>> {
@@ -402,9 +496,17 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         .keyboard
         .as_ref()
         .is_some_and(|keyboard| keyboard.grab_touchpad);
+    let trigger_stages = [
+        profile.triggers.l2.resolve(gyro_gate::TriggerSide::Left)?,
+        profile.triggers.r2.resolve(gyro_gate::TriggerSide::Right)?,
+    ];
+    let adaptive_triggers = [
+        profile.triggers.l2.adaptive.validate()?,
+        profile.triggers.r2.adaptive.validate()?,
+    ];
     let keyboard = profile
         .keyboard
-        .map(|keyboard| keyboard.resolve(touchpad.as_ref()))
+        .map(|keyboard| keyboard.resolve(touchpad.as_ref(), trigger_stages))
         .transpose()?;
     Ok(RuntimeOptions {
         bridge: profile.bridge.and_then(BridgeFile::outputs),
@@ -414,6 +516,25 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         touchpad,
         keyboard,
         grab_touchpad,
+        trigger_stages: trigger_stages
+            .iter()
+            .any(|stage| stage.targets != [None; 2])
+            .then_some(trigger_stages),
+        trigger_full_travel: [
+            profile.triggers.l2.full_travel()?,
+            profile.triggers.r2.full_travel()?,
+        ],
+        trigger_analog_routes: [
+            profile
+                .triggers
+                .l2
+                .analog_route(gyro_gate::TriggerSide::Left),
+            profile
+                .triggers
+                .r2
+                .analog_route(gyro_gate::TriggerSide::Right),
+        ],
+        adaptive_triggers,
     })
 }
 

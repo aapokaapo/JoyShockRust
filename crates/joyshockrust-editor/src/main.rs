@@ -21,9 +21,12 @@ mod response_plot;
 mod sensitivity;
 mod stick_keys;
 mod touchpad;
+mod trigger_travel;
+mod triggers;
 mod ui;
 
 const NEW_PROFILE: &str = "version = 1\n";
+const DESKTOP_APP_ID: &str = "io.github.aapokaapo.JoyShockRust";
 
 fn profile_filename(name: &str) -> Result<String, String> {
     let name = name.trim();
@@ -80,6 +83,7 @@ struct Editor {
     calibration: sensitivity::CalibrationDraft,
     link_gyro_sensitivity: bool,
     invalid_gyro_sensitivity: [Option<String>; 2],
+    trigger_preview_active: bool,
 }
 
 impl Editor {
@@ -98,6 +102,7 @@ impl Editor {
             calibration: sensitivity::CalibrationDraft::default(),
             link_gyro_sensitivity: false,
             invalid_gyro_sensitivity: [None, None],
+            trigger_preview_active: false,
         })
     }
 
@@ -134,9 +139,26 @@ impl Editor {
 
     fn switch_profile(&mut self, path: Option<PathBuf>) -> io::Result<()> {
         if self.path != path || path.is_none() {
-            *self = Self::open(self.bridge.clone(), self.directory.clone(), path)?;
+            let next = Self::open(self.bridge.clone(), self.directory.clone(), path)?;
+            self.clear_trigger_preview();
+            *self = next;
         }
         Ok(())
+    }
+
+    fn preview_trigger(&mut self, payload: [u8; 3]) -> io::Result<()> {
+        triggers::send_preview(&payload)?;
+        self.trigger_preview_active = true;
+        Ok(())
+    }
+
+    fn clear_trigger_preview(&mut self) {
+        if self.trigger_preview_active {
+            if let Err(error) = triggers::send_preview(&[]) {
+                eprintln!("Could not end adaptive trigger preview: {error}");
+            }
+            self.trigger_preview_active = false;
+        }
     }
 
     fn draft_error(&self) -> Option<&'static str> {
@@ -195,6 +217,7 @@ impl Editor {
         if apply {
             run_bridge(&self.bridge, &[Path::new("--load-profile"), &path])
                 .map_err(|error| format!("Profile saved. Could not apply it: {error}"))?;
+            self.trigger_preview_active = false;
             return Ok("Profile saved and applied.".into());
         }
         Ok("Profile saved.".into())
@@ -261,9 +284,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let editor = std::rc::Rc::new(std::cell::RefCell::new(Editor::open(
         bridge, directory, path,
     )?));
+    // With NON_UNIQUE, GTK uses the program name as the Wayland app ID.
+    adw::glib::set_program_name(Some(DESKTOP_APP_ID));
     gtk::gdk::set_allowed_backends("wayland");
     let app = adw::Application::builder()
-        .application_id("io.github.aapokaapo.JoyShockRust.Editor")
+        .application_id(DESKTOP_APP_ID)
         .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
         .build();
     app.connect_activate(move |app| ui::open_window(app, editor.clone()));

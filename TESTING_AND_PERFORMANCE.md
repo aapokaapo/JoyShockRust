@@ -955,13 +955,53 @@ saving displays an error while the saved profile remains usable.
 
 Choose **Xbox Series X|S** under **Virtual gamepad type**, save and apply,
 then check `virtual_gamepad_kind=xbox-series` and the replacement device
-in Steam. In the L2 inspector choose **Keyboard**, set **Partial pull → Hold** to Q and
-**Full pull → Hold** to E. Check that Q is held partway and E takes over
-at full travel. With partial **Tap** configured, check that a full pull
-and release does not emit that partial tap. Enable **Keep partial action
+in Steam. In the L2 inspector choose **Keyboard**, set the **Partial pull**
+action to Q and the **Full pull** action to E. Check that Q is held partway
+and E takes over at full travel. Change the two pull and release points
+under **Trigger travel** and verify the transitions move with them.
+Enable **Keep partial action
 at full pull** for L2 and save. Verify Q stays held when E engages, then
 ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
+
+On the Buttons tab, select L2 and choose **Same as controller** for
+Full Pull. Verify that only the travel limit is editable and that a
+limit of 60 produces 100% virtual L2 at 60% physical travel. Confirm
+the gray marker shows 30% and the blue marker shows 50% at 30% travel.
+Hold at or above the limit and check that the haptic tick plays once.
+Release below 59% and pull back to the limit to check that it plays again.
+Select a
+non-trigger Full Pull target, then assign Partial Pull. Verify that a
+Full Pull setting of 80 activates at 48% physical travel. Check the
+same relative threshold with a keyboard key and a mouse button. Toggle
+**Keep partial action at full pull** and confirm the Partial band stays
+colored through the travel limit only when the switch is on. With L2
+selected in the focused editor, slowly pull and release L2.
+Check that the marker follows the pull and that a short haptic tick
+plays at each solid line on the way down and at each dashed line on the
+way back. Hold the trigger between a stage's two lines and check that
+small movements do not repeat the tick. With the trigger held, edit a
+valid threshold and check that the chart updates immediately. Select
+R2 and repeat. Switch away from the editor and confirm the preview
+ticks stop. Repeat with USB and Bluetooth.
+
+On USB and Bluetooth, select **Resistance** under **Adaptive trigger**
+for one side. Change the start zone and strength. Check each change
+before saving and verify the other side stays as it was. Select **Off**
+and confirm that normal travel returns immediately. Close the editor
+and discard the draft to verify the active profile's effects are
+restored. Open the editor again, use **Save & Apply**, and confirm the
+saved effect is applied on reconnect. Repeat on DualSense and DualSense
+Edge.
+
+The user confirmed Edge resistance after enabling **Trigger Effect
+Intensity** in the active onboard profile. The earlier USB test
+reported successful HID writes on both sides with this setting **Off**
+and produced no physical resistance. For a repeat test, set both
+travel sliders to the longest position, stop the bridge and run the
+[standalone adaptive trigger test](README.md#desktop-tray) once per
+side. Record the transport, whether the report write succeeded and
+whether you felt resistance. Repeat on the other transport if available.
 
 In **Gyro → Aim input**, switch between **Gyro aim** and **Sensor fusion
 aim** using **Save & Apply**. Hold the controller approximately flat and

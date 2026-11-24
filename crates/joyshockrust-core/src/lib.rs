@@ -24,6 +24,10 @@ pub enum Button {
     RightFunction,
     LeftPaddle,
     RightPaddle,
+    DPadUp,
+    DPadRight,
+    DPadDown,
+    DPadLeft,
 }
 
 /// The digital buttons held in a report. Trigger buttons are independent of
@@ -65,6 +69,66 @@ pub enum DPad {
     DownLeft,
     Left,
     UpLeft,
+}
+
+impl DPad {
+    const UP: Buttons = Buttons(1 << Button::DPadUp as u32);
+    const RIGHT: Buttons = Buttons(1 << Button::DPadRight as u32);
+    const DOWN: Buttons = Buttons(1 << Button::DPadDown as u32);
+    const LEFT: Buttons = Buttons(1 << Button::DPadLeft as u32);
+    pub const BUTTONS: Buttons = Self::UP
+        .union(Self::RIGHT)
+        .union(Self::DOWN)
+        .union(Self::LEFT);
+
+    /// The cardinal inputs represented by this hat position.
+    pub const fn buttons(self) -> Buttons {
+        match self {
+            Self::Neutral => Buttons(0),
+            Self::Up => Self::UP,
+            Self::UpRight => Self::UP.union(Self::RIGHT),
+            Self::Right => Self::RIGHT,
+            Self::DownRight => Self::DOWN.union(Self::RIGHT),
+            Self::Down => Self::DOWN,
+            Self::DownLeft => Self::DOWN.union(Self::LEFT),
+            Self::Left => Self::LEFT,
+            Self::UpLeft => Self::UP.union(Self::LEFT),
+        }
+    }
+
+    /// Combine mapped cardinal outputs. Opposites cancel on their axis.
+    pub fn from_buttons(buttons: Buttons) -> Self {
+        let x = i8::from(buttons.contains(Button::DPadRight))
+            - i8::from(buttons.contains(Button::DPadLeft));
+        let y = i8::from(buttons.contains(Button::DPadDown))
+            - i8::from(buttons.contains(Button::DPadUp));
+        match (x, y) {
+            (0, -1) => Self::Up,
+            (1, -1) => Self::UpRight,
+            (1, 0) => Self::Right,
+            (1, 1) => Self::DownRight,
+            (0, 1) => Self::Down,
+            (-1, 1) => Self::DownLeft,
+            (-1, 0) => Self::Left,
+            (-1, -1) => Self::UpLeft,
+            _ => Self::Neutral,
+        }
+    }
+}
+
+/// Pull and release points in percent, in partial then full order.
+pub const DEFAULT_TRIGGER_THRESHOLDS: [u8; 4] = [45, 35, 95, 85];
+
+pub fn validate_trigger_thresholds(
+    [partial, partial_release, full, full_release]: [u8; 4],
+) -> Result<(), &'static str> {
+    if partial_release < partial && partial < full_release && full_release < full && full <= 100 {
+        Ok(())
+    } else {
+        Err(
+            "Trigger thresholds must satisfy partial release < partial pull < full release < full pull ≤ 100%.",
+        )
+    }
 }
 
 /// Centered axes in `[-1.0, 1.0]`. Positive X is right, positive Y is down.

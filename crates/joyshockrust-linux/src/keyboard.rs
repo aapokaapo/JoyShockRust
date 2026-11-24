@@ -7,7 +7,7 @@ use std::{
 use evdev::{
     AttributeSet, EventType, InputEvent, KeyCode, RelativeAxisCode, uinput::VirtualDevice,
 };
-use joyshockrust_core::{Button, Buttons, Controls, DPad};
+use joyshockrust_core::{Button, Buttons, Controls};
 use joyshockrust_input::{InputReport, TouchContact};
 use serde::Deserialize;
 
@@ -51,7 +51,6 @@ enum ButtonOutput {
 #[derive(Default, PartialEq)]
 pub struct GamepadMask {
     pub buttons: Buttons,
-    directions: [bool; 4],
 }
 
 impl GamepadMask {
@@ -62,47 +61,6 @@ impl GamepadMask {
         if self.buttons.contains(Button::RightTrigger) {
             controls.right_trigger = 0.0;
         }
-        let [up, right, down, left] = self.directions;
-        use DPad::*;
-        controls.dpad = match controls.dpad {
-            Up if up => Neutral,
-            Right if right => Neutral,
-            Down if down => Neutral,
-            Left if left => Neutral,
-            UpRight if up => {
-                if right {
-                    Neutral
-                } else {
-                    Right
-                }
-            }
-            UpRight if right => Up,
-            UpLeft if up => {
-                if left {
-                    Neutral
-                } else {
-                    Left
-                }
-            }
-            UpLeft if left => Up,
-            DownRight if down => {
-                if right {
-                    Neutral
-                } else {
-                    Right
-                }
-            }
-            DownRight if right => Down,
-            DownLeft if down => {
-                if left {
-                    Neutral
-                } else {
-                    Left
-                }
-            }
-            DownLeft if left => Down,
-            direction => direction,
-        };
     }
 }
 
@@ -295,7 +253,7 @@ impl RawOutput {
 #[derive(Clone, Copy, PartialEq)]
 enum Source {
     Button(Button),
-    Direction(DPad),
+    Direction(Button),
     Trigger(TriggerGate),
     Touch(TouchRegion),
     TouchClick(TouchRegion),
@@ -380,18 +338,12 @@ impl Source {
                 .parse_region(spec)?;
             return Ok(source(region));
         }
-        let direction = match name {
-            "dpad-up" => DPad::Up,
-            "dpad-right" => DPad::Right,
-            "dpad-down" => DPad::Down,
-            "dpad-left" => DPad::Left,
-            _ => {
-                return gyro_gate::button_by_name(name)
-                    .map(Self::Button)
-                    .ok_or_else(|| format!("unknown keyboard binding button {name}"));
-            }
-        };
-        Ok(Self::Direction(direction))
+        if let Some(direction) = crate::gamepad::dpad_button_by_name(name) {
+            return Ok(Self::Direction(direction));
+        }
+        gyro_gate::button_by_name(name)
+            .map(Self::Button)
+            .ok_or_else(|| format!("unknown keyboard binding button {name}"))
     }
 
     fn pressed(self, input: &Input, click: Option<TouchContact>, was_pressed: bool) -> bool {
@@ -401,32 +353,26 @@ impl Source {
             Self::Trigger(trigger) => trigger.pressed(controls, was_pressed),
             Self::Touch(region) => region.pressed(&input.contacts),
             Self::TouchClick(region) => click.is_some_and(|contact| region.contains(contact)),
-            Self::Direction(direction) => {
-                controls.dpad == direction
-                    || matches!(
-                        (direction, controls.dpad),
-                        (DPad::Up, DPad::UpLeft | DPad::UpRight)
-                            | (DPad::Right, DPad::UpRight | DPad::DownRight)
-                            | (DPad::Down, DPad::DownLeft | DPad::DownRight)
-                            | (DPad::Left, DPad::UpLeft | DPad::DownLeft)
-                    )
-            }
+            Self::Direction(direction) => controls.dpad.buttons().contains(direction),
         }
     }
 }
 
 impl Settings {
-    pub fn resolve(self, grid: Option<&Grid>) -> Result<Config, String> {
+    pub fn resolve(
+        self,
+        grid: Option<&Grid>,
+        triggers: [crate::gamepad::TriggerStages; 2],
+    ) -> Result<Config, String> {
+        let scaled = |gate: TriggerGate| {
+            let index = usize::from(gate.side() == super::gyro_gate::TriggerSide::Right);
+            gate.within_travel(triggers[index].travel_percent)
+        };
         let mut gamepad_mask = GamepadMask::default();
         for name in self.button_output.keys() {
             match Source::parse(name, grid)? {
-                Source::Button(button) => gamepad_mask.buttons.insert(button),
-                Source::Direction(direction) => {
-                    let index = [DPad::Up, DPad::Right, DPad::Down, DPad::Left]
-                        .iter()
-                        .position(|&value| value == direction)
-                        .expect("source parser returns cardinal directions");
-                    gamepad_mask.directions[index] = true;
+                Source::Button(button) | Source::Direction(button) => {
+                    gamepad_mask.buttons.insert(button)
                 }
                 _ => return Err(format!("button_output requires a physical button: {name}")),
             }
@@ -438,13 +384,32 @@ impl Settings {
                     (BindingSource::Single(Source::parse(&name, grid)?), name)
                 }
                 (None, Some(spec), None) => {
-                    let source = match TriggerGate::partial(&spec)? {
-                        Some((lower, upper)) => BindingSource::PartialTrigger {
-                            lower,
-                            upper,
+                    let named = spec.split_once(':').and_then(|(side, stage)| {
+                        let settings = match side {
+                            "l2" => triggers[0],
+                            "r2" => triggers[1],
+                            _ => return None,
+                        };
+                        match stage {
+                            "partial" => Some(BindingSource::PartialTrigger {
+                                lower: settings.lower,
+                                upper: settings.upper,
+                                keep_partial: settings.keep_partial,
+                            }),
+                            "full" => Some(BindingSource::Single(Source::Trigger(settings.upper))),
+                            _ => None,
+                        }
+                    });
+                    let source = if let Some(source) = named {
+                        source
+                    } else if let Some((lower, upper)) = TriggerGate::partial(&spec)? {
+                        BindingSource::PartialTrigger {
+                            lower: scaled(lower),
+                            upper: scaled(upper),
                             keep_partial: self.keep_partial.for_side(lower.side()),
-                        },
-                        None => BindingSource::Single(Source::trigger(&spec)?),
+                        }
+                    } else {
+                        BindingSource::Single(Source::Trigger(scaled(TriggerGate::parse(&spec)?)))
                     };
                     (source, spec)
                 }
@@ -1071,6 +1036,7 @@ impl<'a> Keyboard<'a> {
 
 #[cfg(test)]
 mod tests {
+    use joyshockrust_core::DPad;
     use std::time::Duration;
 
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
@@ -2065,6 +2031,83 @@ mod tests {
                 [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
                 expected,
                 "{travel}"
+            );
+        }
+    }
+
+    #[test]
+    fn named_trigger_stages_use_profile_thresholds() {
+        let config = config(
+            r#"
+            [triggers.l2]
+            thresholds = [30, 20, 80, 70]
+            [[keyboard.bindings]]
+            trigger = "l2:partial"
+            hold = "KEY_Q"
+            [[keyboard.bindings]]
+            trigger = "l2:full"
+            hold = "KEY_E"
+        "#,
+        );
+        let mut state = State::new(&config);
+        for (travel, expected) in [
+            (0.3, [true, false]),
+            (0.8, [false, true]),
+            (0.7, [true, false]),
+            (0.2, [false, false]),
+        ] {
+            let controls = Controls {
+                left_trigger: travel,
+                right_trigger: 1.0,
+                ..Default::default()
+            };
+            state
+                .update(input(controls), Instant::now(), |_| Ok(()))
+                .unwrap();
+            assert_eq!(
+                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn trigger_travel_limit_scales_named_keyboard_and_mouse_stages() {
+        let config = config(
+            r#"
+            [triggers.l2]
+            travel_limit_percent = 60
+            thresholds = [30, 20, 80, 70]
+            [[keyboard.bindings]]
+            trigger = "l2:partial"
+            hold = "KEY_Q"
+            [[keyboard.bindings]]
+            trigger = "l2:full"
+            hold = "BTN_LEFT"
+            "#,
+        );
+        let mut state = State::new(&config);
+        for (travel, expected) in [
+            (0.19, [true, false]),
+            (0.47, [true, false]),
+            (0.49, [false, true]),
+            (0.43, [false, true]),
+            (0.41, [true, false]),
+            (0.11, [false, false]),
+        ] {
+            state
+                .update(
+                    input(Controls {
+                        left_trigger: travel,
+                        ..Default::default()
+                    }),
+                    Instant::now(),
+                    |_| Ok(()),
+                )
+                .unwrap();
+            assert_eq!(
+                [KeyCode::KEY_Q, KeyCode::BTN_LEFT].map(|key| state.held.contains(key)),
+                expected
             );
         }
     }

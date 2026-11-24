@@ -134,7 +134,8 @@ fn play_rumble(input: &File, cue: Cue) -> io::Result<()> {
         Cue::CalibrationStart => (85, 26_000, 20_000, 1),
         Cue::GyroCalibrationDone => (150, 52_000, 46_000, 2),
         Cue::OutputsReady => (110, 35_000, 30_000, 1),
-        Cue::CalibrationDone | Cue::Detent => return Ok(()),
+        Cue::Detent => (38, 21_000, 28_000, 1),
+        Cue::CalibrationDone => return Ok(()),
     };
     let (mut device, _) = Rumble::open_physical(input)?;
     let mut effect = device.upload_ff_effect(FFEffectData {

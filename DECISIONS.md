@@ -58,6 +58,59 @@ value changes and retains the live preview across those edits.
 Response charts reuse the bridge's stick travel and projected gyro speed
 and apply the editor's draft curve settings to those inputs.
 
+## D-pad remapping
+
+2026-11-24. The bridge expands the physical hat into cardinal directions
+at the mapping boundary. It combines mapped outputs into the virtual hat
+after processing base rules, layers and touchpad targets. Opposite
+directions cancel on their axis.
+
+## Analog and adaptive triggers
+
+2026-11-24. Per-trigger profile settings define two analog stages with
+separate pull and release points. The editor uses one continuous action
+per stage and retains legacy threshold strings and gesture bindings.
+The bridge sends opt-in resistance on connection and on every profile
+apply, including an identical reapply. It addresses only configured
+actuators and actuators it needs to clear. Trigger-only HID reports leave
+rumble and lights under kernel control. DualSense and Edge use the same
+trigger framing in the reference implementation reviewed 2026-11-24.
+The CLI can test either side without a JoyShockRust profile. The user
+confirmed resistance on DualSense and DualSense Edge. On Edge, the
+active onboard profile's **Trigger Effect Intensity** was **Off** during
+the failed test. Enabling it restored resistance.
+[Linux report framing](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1235-L1306) · [DualSense payload reference](https://github.com/x-iso/FlexInput/blob/6efeb8945f2edcb4591c7920d02915b6579cee8a/crates/devices/src/gyro.rs#L2418-L2457)
+[DualSense and Edge detection](https://github.com/nowrep/dualsensectl/blob/d3ae2fa272e1bf9a5c08a0ded3f374b40f7c73ac/main.c#L346-L364) · [Trigger reports](https://github.com/nowrep/dualsensectl/blob/d3ae2fa272e1bf9a5c08a0ded3f374b40f7c73ac/main.c#L795-L882)
+
+2026-11-24. The editor sends trigger previews asynchronously through the
+local control socket. The bridge writes the selected side in the
+control event, leaving the profile, virtual device state and last
+reload status alone. Closing the editor or switching drafts requests
+restoration of the active profile's effects. A new controller session
+starts with the active profile.
+
+2026-11-24. Trigger travel uses the bridge's raw normalized input
+snapshot. Polling starts when the chart is mapped, including when the
+user selects a trigger in an inspector that is already visible. The
+Partial band shows suppression from the Full Pull threshold when stage
+overlap is disabled. The focused editor sends the selected trigger's draft
+thresholds through the control socket and refreshes them while the
+chart is mapped. The bridge applies the existing hysteresis at report
+cadence and queues a detent on a stage transition or when the selected
+trigger reaches its travel limit. The limit cue rearms one percentage
+point below the limit. The preview
+expires when the editor stops refreshing it. It uses the controller
+haptics worker with USB PCM and evdev rumble fallback.
+
+2026-11-24. Full Pull selects an analog trigger or a digital output in
+the editor. An analog selection uses the travel limit for saturation.
+The chart draws the same scaling as a blue live marker alongside the
+physical position.
+Digital stage thresholds and preview gates use percentages of the
+configured travel. The chart plots the range and stage bands on one
+physical axis. The profile retains prior routing and threshold
+semantics for legacy settings.
+
 ## Optional desktop device access
 
 Reviewed 2026-11-24. Ship separate hidraw and uinput fallback rules for
@@ -545,6 +598,14 @@ Desktop polling and command execution stay outside the input process.
 · [graphical-session.target](https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html#graphical-session.target)
 [XDG Autostart](https://specifications.freedesktop.org/autostart-spec/latest/)
 · [StatusNotifierItem](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/)
+
+2026-11-24. The desktop launcher uses the editor's bundled DualSense SVG.
+The user installation places it in the `hicolor` fallback theme.
+[Icon Theme Specification](https://specifications.freedesktop.org/icon-theme-spec/latest/)
+
+The running profile editor uses the desktop entry's application ID
+so Wayland shells can associate its window with the installed icon.
+[XDG Shell application ID](https://wayland.app/protocols/xdg-shell#xdg_toplevel:request:set_app_id)
 
 For tray RWC calibration, the bridge ends its active output session
 before acknowledging the pause and keeps serving control requests.

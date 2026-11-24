@@ -1,4 +1,6 @@
 #[cfg(target_os = "linux")]
+mod adaptive_trigger;
+#[cfg(target_os = "linux")]
 mod benchmark;
 #[cfg(target_os = "linux")]
 mod controller_config;
@@ -41,6 +43,8 @@ mod status;
 mod systemd;
 #[cfg(target_os = "linux")]
 mod touchpad;
+#[cfg(target_os = "linux")]
+mod trigger_travel;
 
 #[cfg(target_os = "linux")]
 use hidraw::Identity;
@@ -60,6 +64,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         "usage: joyshockrust-linux [--profile PATH|--profile-if-present PATH] [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
         "       joyshockrust-linux --test-haptics [--pattern all|start|done|ready|detent|sweep] [--pcm ALSA_DEVICE] [/dev/hidrawN]\n",
+        "       joyshockrust-linux --test-adaptive-triggers [left|right|both] [/dev/hidrawN]\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
         "       joyshockrust-linux --diagnose [--profile PATH] [--show-controller-id] [CONTROLLER_OPTIONS] [/dev/hidrawN]\n",
         "       joyshockrust-linux --list-controllers [--show-controller-id] [CONTROLLER_OPTIONS]\n",
@@ -126,6 +131,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     }
     if args.next_if(|arg| arg == "--test-haptics").is_some() {
         haptics::test_cli(args)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if args
+        .next_if(|arg| arg == "--test-adaptive-triggers")
+        .is_some()
+    {
+        adaptive_trigger::test_cli(args)?;
         return Ok(ExitCode::SUCCESS);
     }
     if args.next_if(|arg| arg == "--gyro-calibration").is_some() {
@@ -761,7 +773,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             }
                             None
                         }
-                        None => return Ok(None),
+                        Some(
+                            reload::Update::TriggerPreview(_) | reload::Update::TriggerTravel(_),
+                        )
+                        | None => return Ok(None),
                     };
                     reload.applied(status);
                     Ok(selection)
@@ -932,6 +947,9 @@ fn serve_session(
     };
 
     let mut active_gyro = emulation.gyro(runtime.gyro);
+    let mut adaptive = adaptive_trigger::AdaptiveTriggers::new(identity.transport);
+    let mut travel_preview: Option<trigger_travel::Preview> = None;
+    let mut travel_haptics = None;
     let mut mouse = open_mouse(input, identity.transport, active_gyro)?;
     let mut keyboard = keyboard::Keyboard::open(runtime.keyboard.as_ref(), status)?;
     let keyboard_deadline = Cell::new(None);
@@ -954,6 +972,7 @@ fn serve_session(
     let mut native_touchpad = touchpad_requested
         .then(|| touchpad::try_grab_native(input))
         .flatten();
+    adaptive.update(path, input, runtime.adaptive_triggers);
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());
         let (factory, bias) = mouse.as_ref().map_or_else(
@@ -1017,6 +1036,25 @@ fn serve_session(
                     let current_filter = filter;
                     let next = match reload.resolve(current_filter) {
                         Some(reload::Update::Profile(next)) => next,
+                        Some(reload::Update::TriggerPreview(preview)) => {
+                            adaptive.preview(
+                                path,
+                                reload_input.as_ref().expect("reload descriptor"),
+                                runtime.adaptive_triggers,
+                                preview,
+                            );
+                            return Ok(ControlFlow::Continue(()));
+                        }
+                        Some(reload::Update::TriggerTravel(settings)) => {
+                            if settings.is_some() && travel_haptics.is_none() {
+                                travel_haptics = haptics::Haptics::open_controller(
+                                    reload_input.as_ref().expect("reload descriptor"),
+                                    identity.transport,
+                                );
+                            }
+                            trigger_travel::Preview::refresh(&mut travel_preview, settings);
+                            return Ok(ControlFlow::Continue(()));
+                        }
                         Some(reload::Update::Selection(selection))
                             if selection != current_filter =>
                         {
@@ -1154,7 +1192,9 @@ fn serve_session(
                             }
                         }
                     }
-                    if runtime.remaps != next.remaps {
+                    if runtime.remaps != next.remaps
+                        || runtime.trigger_stages != next.trigger_stages
+                    {
                         layer_state = gamepad::RemapState::default();
                     }
                     if runtime.touchpad != next.touchpad {
@@ -1195,6 +1235,11 @@ fn serve_session(
                         status.set_gamepad_kind(next_kind);
                     }
                     *runtime = *next;
+                    adaptive.update(
+                        path,
+                        reload_input.as_ref().expect("reload descriptor"),
+                        runtime.adaptive_triggers,
+                    );
                     active_gyro = next_gyro;
                     let touchpad_requested = grab_touchpad || runtime.grab_touchpad;
                     if !touchpad_requested {
@@ -1250,7 +1295,7 @@ fn serve_session(
             };
             if let Some(status) = status {
                 status.observe_touch(report.touch_contacts);
-                status.observe_sticks([report.controls.left_stick, report.controls.right_stick]);
+                status.observe_analog(&report.controls);
                 status.observe_imu(
                     report.imu,
                     mouse
@@ -1263,6 +1308,12 @@ fn serve_session(
                 if gamepad_batch || mouse_batch {
                     status.observe_outputs(gamepad_batch, mouse_batch);
                 }
+            }
+            if let Some(preview) = &mut travel_preview
+                && preview.crossed(&report.controls)
+                && let Some(haptics) = &travel_haptics
+            {
+                haptics.send(haptics::Cue::Detent);
             }
             Ok(ControlFlow::Continue(()))
         },
@@ -1286,6 +1337,7 @@ fn serve_session(
     };
     let result = result.and(release_gamepad).and(release_keyboard);
     drop(native_touchpad);
+    drop(adaptive);
     if let Some((selection, request)) = switch {
         if let Err(err) = &result {
             request.rejected(err);
@@ -1354,11 +1406,20 @@ fn map_gamepad_controls(
             }
             buttons
         });
-    let mut controls = runtime
-        .remaps
-        .apply_filtered(controls, layer_state, suppressed);
-    controls.buttons = controls.buttons.union(touch_buttons);
-    controls
+    let trigger_buttons =
+        layer_state.trigger_outputs(&controls, runtime.trigger_stages, &mut suppressed);
+    gamepad::route_trigger_axes(
+        &mut controls,
+        runtime.trigger_full_travel,
+        runtime.trigger_analog_routes,
+        &mut suppressed,
+    );
+    runtime.remaps.apply_filtered(
+        controls,
+        layer_state,
+        suppressed,
+        touch_buttons.union(trigger_buttons),
+    )
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1667,7 +1728,7 @@ mod tests {
         use joyshockrust_core::{Button, DPad};
         let source = r#"
 version = 1
-remap_buttons = ["cross=triangle", "circle=cross"]
+remap_buttons = ["cross=triangle", "circle=cross", "dpad-up=square"]
 [keyboard.button_output]
 cross = "keyboard"
 l2 = "mouse"
@@ -1696,11 +1757,222 @@ hold = "BTN_LEFT"
             &mut super::touchpad::ClickState::default(),
         );
         assert!(!controls.buttons.contains(Button::North));
+        assert!(!controls.buttons.contains(Button::West));
         assert!(controls.buttons.contains(Button::South));
         assert!(!controls.buttons.contains(Button::LeftTrigger));
         assert_eq!(controls.left_trigger, 0.0);
         assert_eq!(controls.dpad, DPad::Right);
         assert!(super::profile::parse(&source.replace("BTN_LEFT", "KEY_A")).is_err());
+    }
+
+    #[test]
+    fn dpad_remaps_reach_button_and_hat_events_without_chaining() {
+        use evdev::{AbsoluteAxisCode, EventType, KeyCode};
+        use joyshockrust_core::DPad;
+
+        let runtime = super::profile::parse(
+            r#"
+version = 1
+remap_buttons = ["dpad-up=cross", "circle=dpad-left", "dpad-left=dpad-right"]
+[touchpad]
+rows = 1
+columns = 1
+[[touchpad.regions]]
+row = 1
+column = 1
+touch = "dpad-down"
+"#,
+        )
+        .unwrap();
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[1..=4].fill(128);
+        frame[37] = 0x80;
+        let mut state = super::gamepad::GamepadState::new(super::gamepad::OutputKind::Xbox360);
+        let mut layer = super::gamepad::RemapState::default();
+        let mut click = super::touchpad::ClickState::default();
+        let hat_x = AbsoluteAxisCode::ABS_HAT0X.0;
+        let hat_y = AbsoluteAxisCode::ABS_HAT0Y.0;
+        let south = KeyCode::BTN_SOUTH.0;
+        let hat = |code, value| (EventType::ABSOLUTE, code, value);
+        let key = |value| (EventType::KEY, south, value);
+        for (bits, touch, expected_hat, expected_events) in [
+            (0x01, false, DPad::Right, vec![key(1), hat(hat_x, 1)]),
+            (0x41, false, DPad::Neutral, vec![hat(hat_x, 0)]),
+            (0x48, false, DPad::Left, vec![key(0), hat(hat_x, -1)]),
+            (
+                0x06,
+                true,
+                DPad::DownRight,
+                vec![hat(hat_x, 1), hat(hat_y, 1)],
+            ),
+            (
+                0x08,
+                false,
+                DPad::Neutral,
+                vec![hat(hat_x, 0), hat(hat_y, 0)],
+            ),
+        ] {
+            frame[8] = bits;
+            frame[33] = if touch { 0 } else { 0x80 };
+            let report =
+                joyshockrust_input::parse_report(USB_EDGE.model, USB_EDGE.transport, &frame, None)
+                    .unwrap();
+            let controls = super::map_gamepad_controls(
+                &runtime,
+                runtime.gyro,
+                &report,
+                &mut layer,
+                &mut click,
+            );
+            assert_eq!(controls.dpad, expected_hat);
+            let mut actual = Vec::new();
+            state
+                .publish(controls, |events| {
+                    actual.extend(
+                        events
+                            .iter()
+                            .map(|event| (event.event_type(), event.code(), event.value())),
+                    );
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(actual, expected_events);
+        }
+    }
+
+    #[test]
+    fn virtual_trigger_stages_keep_analog_travel_and_route_digital_targets() {
+        use joyshockrust_core::{Button, DPad};
+        let runtime = super::profile::parse(
+            r#"
+version = 1
+[triggers.r2]
+thresholds = [30, 20, 80, 70]
+partial_button = "cross"
+full_button = "dpad-left"
+keep_partial = true
+"#,
+        )
+        .unwrap();
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[8] = 8;
+        frame[33] = 0x80;
+        frame[37] = 0x80;
+        let mut layers = super::gamepad::RemapState::default();
+        let mut click = super::touchpad::ClickState::default();
+        for (travel, cross, hat) in [
+            (80, true, DPad::Neutral),
+            (204, true, DPad::Left),
+            (180, true, DPad::Left),
+            (178, true, DPad::Neutral),
+            (51, false, DPad::Neutral),
+        ] {
+            frame[6] = travel;
+            frame[9] = if travel > 0 { 0x08 } else { 0 };
+            let report =
+                joyshockrust_input::parse_report(USB_EDGE.model, USB_EDGE.transport, &frame, None)
+                    .unwrap();
+            let mapped =
+                super::map_gamepad_controls(&runtime, None, &report, &mut layers, &mut click);
+            assert_eq!(mapped.buttons.contains(Button::South), cross);
+            assert!(!mapped.buttons.contains(Button::RightTrigger));
+            assert_eq!(mapped.right_trigger, report.controls.right_trigger);
+            assert_eq!(mapped.dpad, hat);
+        }
+    }
+
+    #[test]
+    fn virtual_trigger_travel_saturates_at_the_configured_physical_travel() {
+        let runtime = super::profile::parse(
+            "version = 1\n[triggers.l2]\nfull_travel_percent = 60\nfull_button = 'cross'\n",
+        )
+        .unwrap();
+        for invalid in [0, 101] {
+            assert!(
+                super::profile::parse(&format!(
+                    "version = 1\n[triggers.l2]\nfull_travel_percent = {invalid}\n"
+                ))
+                .is_err()
+            );
+        }
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[8] = 8;
+        frame[6] = 102;
+        let mut layers = super::gamepad::RemapState::default();
+        let mut click = super::touchpad::ClickState::default();
+        for (left, expected, action) in [
+            (0, 0.0, false),
+            (102, 2.0 / 3.0, false),
+            (153, 1.0, false),
+            (255, 1.0, true),
+        ] {
+            frame[5] = left;
+            let report =
+                joyshockrust_input::parse_report(USB_EDGE.model, USB_EDGE.transport, &frame, None)
+                    .unwrap();
+            let mapped =
+                super::map_gamepad_controls(&runtime, None, &report, &mut layers, &mut click);
+            assert!((mapped.left_trigger - expected).abs() < 0.0001);
+            assert_eq!(mapped.right_trigger, report.controls.right_trigger);
+            assert_eq!(
+                mapped.buttons.contains(joyshockrust_core::Button::South),
+                action
+            );
+        }
+    }
+
+    #[test]
+    fn exclusive_full_pull_routes_either_digital_stages_or_an_analog_axis() {
+        let profile = |target: &str, partial: &str| {
+            super::profile::parse(&format!(
+                "version = 1\n[triggers.l2]\nfull_pull_exclusive = true\ntravel_limit_percent = 60\nthresholds = [30, 20, 80, 70]\nfull_button = '{target}'\n{partial}"
+            ))
+        };
+        assert!(profile("r2", "partial_button = 'cross'").is_err());
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[8] = 8;
+        frame[9] = 4;
+        let mut layers = super::gamepad::RemapState::default();
+        let mut click = super::touchpad::ClickState::default();
+        let mut map = |runtime: &super::profile::RuntimeOptions, left: u8| {
+            frame[5] = left;
+            let report =
+                joyshockrust_input::parse_report(USB_EDGE.model, USB_EDGE.transport, &frame, None)
+                    .unwrap();
+            super::map_gamepad_controls(runtime, None, &report, &mut layers, &mut click)
+        };
+
+        let analog = profile("r2", "").unwrap();
+        let mapped = map(&analog, 153);
+        assert_eq!([mapped.left_trigger, mapped.right_trigger], [0.0, 1.0]);
+        assert!(
+            !mapped
+                .buttons
+                .contains(joyshockrust_core::Button::LeftTrigger)
+        );
+
+        let digital = profile("cross", "partial_button = 'square'").unwrap();
+        for (physical, partial, full) in [
+            (120, true, false),
+            (123, false, true),
+            (110, false, true),
+            (107, true, false),
+        ] {
+            let mapped = map(&digital, physical);
+            assert_eq!(mapped.left_trigger, 0.0);
+            assert_eq!(
+                mapped.buttons.contains(joyshockrust_core::Button::West),
+                partial
+            );
+            assert_eq!(
+                mapped.buttons.contains(joyshockrust_core::Button::South),
+                full
+            );
+        }
     }
 
     #[test]

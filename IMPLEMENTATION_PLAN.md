@@ -310,11 +310,22 @@ overlays up to two live contacts on the draft zone grid inside a crop
 of the same DualSense SVG shown in Buttons. Changing the rows or columns
 updates the draft grid and preview together.
 
+The application launcher and running profile editor share the DualSense SVG icon.
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects
 physical controls and selects an exclusive keyboard, mouse or gamepad
-output per physical button in the inspector. Keyboard pickers capture
-one key in the editor window. Esc, a click or a 10-second timeout ends
+output per physical button or D-pad direction in the inspector. The
+D-pad can also be a virtual gamepad target. Touchpad regions use the
+Touchpad tab. L2 and R2 route Full Pull to an analog axis or a digital
+action. The digital route exposes Partial Pull. The live chart shows
+the configurable travel range, physical and scaled positions, and
+stage thresholds in gamepad, keyboard and mouse modes. Haptic previews
+cover the travel limit and the assigned stages. Optional physical resistance is
+available in the editor. The
+standalone adaptive trigger test can isolate each side on
+USB or Bluetooth. The user verified resistance on both models after
+enabling trigger effects in the Edge's onboard profile. Keyboard pickers
+capture one key in the editor window. Esc, a click or a 10-second timeout ends
 the inline prompt. Mouse buttons use dropdowns and **Unbind** clears
 the current action.
 Advanced TOML covers the full profile schema.

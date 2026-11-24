@@ -190,14 +190,15 @@ Use these exact lowercase names in TOML profiles.
 | DualSense Edge rear paddles | `paddle-left`, `paddle-right` |
 | D-pad directions | `dpad-up`, `dpad-right`, `dpad-down`, `dpad-left` |
 
-The digital button names above the D-pad row are valid as
-`remap_buttons` sources and as `layer_remaps` sources or modifiers.
-They also work in `gyro.binding.input` for digital activation modes, in
+All listed digital inputs are valid as `remap_buttons` sources and as
+`layer_remaps` sources or modifiers. The button names above the D-pad
+row also work in `gyro.binding.input` for digital activation modes, in
 `gyro.calibration_hold.button`, in `keyboard.bindings.button` and
 `keyboard.bindings.chord`, and as keys in `[keyboard.button_output]`.
 The four D-pad directions work in keyboard button bindings, keyboard
 chords and `[keyboard.button_output]`. A diagonal activates its two
-cardinal directions.
+cardinal inputs independently. On the virtual D-pad, perpendicular
+outputs combine into a diagonal and opposite outputs cancel on their axis.
 
 For analog trigger travel, use `l2` or `r2` in
 `keyboard.bindings.trigger` or in a gyro binding with `mode = "trigger"`.
@@ -214,7 +215,7 @@ requires L1 and a touch in the second column of the first row.
 
 Virtual gamepad targets for `remap_buttons`, `layer_remaps` and
 `[[touchpad.regions]]` are `cross`, `circle`, `square`, `triangle`,
-`l1`, `r1`, `l3`, `r3`, `create`, `options` and `ps`.
+`l1`, `r1`, `l3`, `r3`, `create`, `options`, `ps`, and the four D-pad directions.
 The generic virtual gamepad also emits digital `l2` and `r2` targets.
 Analog axes are independent of button remaps.
 
@@ -310,7 +311,31 @@ tap = ["KEY_LEFTSHIFT", "BTN_LEFT"]
 ```
 
 Use `trigger` in place of `button` for an analog L2 or R2 binding.
-The optional suffix sets the engagement and release thresholds on a
+The editor uses named stages such as `l2:partial` and `l2:full`.
+Set that side's boundaries under `[triggers.l2]` or `[triggers.r2]`.
+
+```toml
+[triggers.l2]
+thresholds = [45, 35, 95, 85] # Partial pull, partial release, full pull, full release in percent
+travel_limit_percent = 60
+keep_partial = false
+adaptive = { mode = "resistance", start = 3, strength = 3 }
+
+[[keyboard.bindings]]
+trigger = "l2:partial"
+hold = "KEY_Q"
+```
+
+Set `travel_limit_percent` from 1 to 100. Stage thresholds are percentages
+of that travel. For virtual gamepad routing, set `full_pull_exclusive = true`
+and choose a `full_button`. An omitted target uses the matching analog
+trigger. The targets `l2` and `r2` select an analog axis; any other target
+uses the two digital stages and allows `partial_button`.
+Existing profiles still accept `full_travel_percent` for analog-only
+scaling and retain their original routing until the Full Pull output is
+changed in the editor.
+
+For a legacy explicit trigger binding, the optional suffix sets the engagement and release thresholds on a
 scale from 0 to 1. The defaults are 0.45 and 0.35. Bindings at different
 thresholds can overlap, so a deeper pull can add a second key. For a
 partial-only binding, add a second pair of thresholds, for example
@@ -739,6 +764,7 @@ mappings.
   install -Dm644 dist/systemd/joyshockrust.service "$config_dir/systemd/user/joyshockrust.service"
   install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
   install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+  install -Dm644 crates/joyshockrust-editor/assets/dualsense.svg "$data_dir/icons/hicolor/scalable/apps/io.github.aapokaapo.JoyShockRust.svg"
   systemctl --user daemon-reload
   systemctl --user restart joyshockrust.service joyshockrust-tray.service
 )
@@ -796,6 +822,7 @@ unit and desktop launcher.
   cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-editor
   install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
   install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+  install -Dm644 crates/joyshockrust-editor/assets/dualsense.svg "$data_dir/icons/hicolor/scalable/apps/io.github.aapokaapo.JoyShockRust.svg"
   systemctl --user daemon-reload
   systemctl --user restart joyshockrust-tray.service
 )
@@ -834,9 +861,13 @@ Use the profile dropdown inside the editor to open a saved profile or
 choose **New profile**. Use **Save & Apply** to make a profile active.
 The editor follows the system’s light or dark appearance. The page
 switcher moves to the bottom when the window is narrow.
-Select a physical control on the DualSense diagram or choose a DualSense
-Edge control below it. Choose one **Output type** per physical button.
-**Keyboard** and **Mouse** each support separate tap, hold and double-tap
+Select a physical control on the DualSense diagram. The selected control
+has a filled highlight and an outline. The Edge Fn buttons are under L3
+and R3, with the matching paddles below them. Configure touch and
+click actions in **Touchpad**. Existing whole-touchpad click bindings
+can be edited in **Advanced**.
+Choose one **Output type** per physical button.
+For digital buttons, **Keyboard** and **Mouse** support separate tap, hold and double-tap
 actions and suppress that physical button on the virtual gamepad.
 For a keyboard action, choose **Bind key…** and press the desired key.
 While the editor waits, press **Esc** or click anywhere in its window to
@@ -850,14 +881,53 @@ gesture or **Same as controller** to remove the base remap. Existing
 TOML profiles retain their original routing until you choose an output
 type for the button. Use **Advanced** for chords and layers.
 
-At the top of **Buttons**, choose the **Virtual gamepad type**. Selecting
-L2 or R2 with **Keyboard** or **Mouse** selected shows **Partial pull**
-and **Full pull** actions of that type in addition to the digital button. A partial pull engages at
-45%, and a full pull at 95%. The release thresholds are 35% and 85%.
-Turn on **Keep partial action at full pull** to hold both assigned keys
-at full travel. The switch is off by default, so the full action takes
-over. L2 and R2 have separate switches.
-Choose **Save & Apply** to use the new settings.
+Select L2 or R2 and choose its **Full pull** output first. In **Virtual
+gamepad** mode, **Same as controller** routes the analog axis to the
+matching virtual trigger. Selecting either virtual trigger uses the
+**Trigger travel limit (%)** as the point of maximum output. The
+engagement and release controls apply to digital stages.
+
+Selecting a non-trigger button, key or mouse button enables **Partial
+pull** as an optional second action. The travel limit is editable in
+all output modes. At a 60% travel limit, an analog trigger reaches
+maximum at 60% physical travel and an 80% digital Full Pull engages at
+48% physical travel. Release thresholds use the same scale. **Keep
+partial action at full pull** lets both digital actions stay active.
+Custom trigger gestures from older profiles can still be edited in **Advanced**.
+
+The **Trigger travel** chart shows the configured range and the selected
+trigger's live physical position in gray. The blue marker shows the
+scaled travel, reaching 100% at the configured limit. A band for each
+assigned digital stage shows its thresholds. Solid lines mark engagement,
+dashed lines mark release, and the lighter band shows the gap between
+them. The Partial band turns gray from the Full Pull threshold when
+**Keep partial action at full pull** is off. While the editor is focused,
+entering or leaving either stage plays a short haptic tick on the
+controller. Reaching the travel limit also plays a tick, including with
+analog output. Valid threshold edits take effect in this preview immediately.
+
+Under **Adaptive trigger**, choose **Resistance** and set the start zone
+and strength for the selected trigger, or choose **Off**. The editor
+previews these changes immediately on the controller connected to the
+running bridge. **Save & Apply** keeps them in the active profile.
+Closing the editor or switching the draft restores the active profile's
+effects. Reconnecting also applies the active profile. The bridge needs
+write access to hidraw.
+
+On DualSense Edge, enable **Trigger Effect Intensity** in the
+controller's active onboard profile. When this is **Off**, a successful
+HID write can still produce no resistance. Set the rear L2 and R2
+travel sliders to the longest setting for the test. To isolate the
+effect from your JoyShockRust profile, close the bridge and test each
+trigger separately.
+
+```sh
+cargo run --locked -p joyshockrust-linux -- --test-adaptive-triggers left
+cargo run --locked -p joyshockrust-linux -- --test-adaptive-triggers right
+```
+
+The test applies resistance for eight seconds and then clears it. If
+multiple controllers are connected, append the desired `/dev/hidrawN`.
 
 In **Touchpad**, set the number of rows and columns, select a grid
 cell, and assign separate virtual gamepad buttons to **Touch** and
@@ -1063,7 +1133,8 @@ you used during installation.
      "$config_dir/systemd/user/joyshockrust.service" \
      "$config_dir/systemd/user/joyshockrust-tray.service" \
      "$config_dir/autostart/io.github.aapokaapo.JoyShockRust.desktop" \
-     "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+     "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop" \
+     "$data_dir/icons/hicolor/scalable/apps/io.github.aapokaapo.JoyShockRust.svg"
    systemctl --user daemon-reload
    ```
 

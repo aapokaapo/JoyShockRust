@@ -290,11 +290,16 @@ fn bluetooth_crc_matches(seed: u8, bytes: &[u8]) -> bool {
     let Some((body, checksum)) = bytes.split_last_chunk::<4>() else {
         return false;
     };
+    bluetooth_crc32(seed, body) == u32::from_le_bytes(*checksum)
+}
+
+/// Reflected CRC-32 of a Bluetooth HID report with its transaction byte prepended.
+pub fn bluetooth_crc32(seed: u8, body: &[u8]) -> u32 {
     let mut crc = u32::MAX;
     for byte in core::iter::once(seed).chain(body.iter().copied()) {
         crc = (crc >> 8) ^ CRC32_TABLE[((crc as u8) ^ byte) as usize];
     }
-    !crc == u32::from_le_bytes(*checksum)
+    !crc
 }
 
 const CRC32_TABLE: [u32; 256] = {

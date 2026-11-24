@@ -70,6 +70,7 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("JoyShockRust Profiles")
+        .icon_name(crate::DESKTOP_APP_ID)
         .default_width(1040)
         .default_height(760)
         .build();
@@ -235,6 +236,7 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let confirmed = Rc::new(Cell::new(false));
     window.connect_close_request(move |window| {
         if confirmed.get() || !close_ctx.editor.borrow().has_unsaved_changes() {
+            close_ctx.editor.borrow_mut().clear_trigger_preview();
             return glib::Propagation::Proceed;
         }
         let window_ref = window.downgrade();
@@ -1077,7 +1079,6 @@ pub(crate) mod tests {
         adw::init().unwrap();
         let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
         editor.text.push_str("[bridge]\nrumble = true\n");
-        editor.selected = "l2";
         let ctx = Context {
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
@@ -1098,6 +1099,23 @@ pub(crate) mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(diagram.width() > 0);
+        for side in ["R2", "L2"] {
+            let button = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
+                .into_iter()
+                .find(|button| button.label().as_deref() == Some(side))
+                .unwrap();
+            button.set_active(true);
+            let chart = descendants::<gtk::DrawingArea>(&page)
+                .into_iter()
+                .find(|area| area.widget_name() == "trigger-travel-chart")
+                .unwrap();
+            assert!(chart.is_mapped(), "{side} shows analog travel");
+            assert!(
+                descendants::<adw::PreferencesGroup>(&page)
+                    .into_iter()
+                    .any(|group| group.title() == "Partial pull" && !group.is_visible())
+            );
+        }
         let bounds = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
             .into_iter()
             .map(|button| {
@@ -1107,7 +1125,23 @@ pub(crate) mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(bounds.len(), 19);
+        assert_eq!(bounds.len(), 22);
+        assert!(bounds.iter().all(|(label, _)| label != "Touchpad"));
+        let control_bounds = |name: &str| bounds.iter().find(|(label, _)| label == name).unwrap().1;
+        for (stick, function) in [
+            ("L3", "Left Fn"),
+            ("R3", "Right Fn"),
+            ("Left Fn", "Left paddle"),
+            ("Right Fn", "Right paddle"),
+        ] {
+            let stick = control_bounds(stick);
+            let function = control_bounds(function);
+            assert!(function.y() >= stick.y() + stick.height());
+            assert_eq!(
+                stick.x() + stick.width() / 2.0,
+                function.x() + function.width() / 2.0
+            );
+        }
         for (index, (label, rect)) in bounds.iter().enumerate() {
             for (other_label, other_rect) in &bounds[..index] {
                 assert!(
@@ -1134,15 +1168,46 @@ pub(crate) mod tests {
                 .find(|row| row.title() == "Output type")
                 .unwrap()
         };
+        let spin = |title: &str| {
+            descendants::<adw::SpinRow>(&page)
+                .into_iter()
+                .find(|row| row.title() == title)
+                .unwrap()
+        };
+        let analog = spin("Trigger travel limit (%)");
+        assert_eq!(analog.value(), 100.0);
+        analog.set_value(70.0);
+        assert_eq!(
+            ctx.document().unwrap()["triggers"]["l2"]["travel_limit_percent"].as_integer(),
+            Some(70)
+        );
         select(&output_type(&page), "Keyboard");
+        assert_eq!(spin("Trigger travel limit (%)").value(), 70.0);
+        spin("Trigger travel limit (%)").set_value(60.0);
+        assert!(!spin("Partial pull (%)").is_visible());
+        assert!(!spin("Full pull (%)").is_visible());
+        assert!(
+            !descendants::<adw::ActionRow>(&page)
+                .iter()
+                .any(|row| { matches!(row.title().as_str(), "Tap" | "Hold" | "Double tap") })
+        );
         let groups = descendants::<adw::PreferencesGroup>(&page);
         for (stage, keyval, code) in [
-            ("Partial pull", gtk::gdk::Key::q, evdev::KeyCode::KEY_Q),
             ("Full pull", gtk::gdk::Key::e, evdev::KeyCode::KEY_E),
+            ("Partial pull", gtk::gdk::Key::q, evdev::KeyCode::KEY_Q),
         ] {
             let group = groups.iter().find(|group| group.title() == stage).unwrap();
-            let row = key_row(group.upcast_ref(), "Hold");
+            let row = key_row(group.upcast_ref(), "Action");
             press_capture_key(&row, keyval, code);
+            assert!(spin(&format!("{stage} (%)")).is_visible());
+            if stage == "Full pull" {
+                assert!(!spin("Partial pull (%)").is_visible());
+            }
+            let chart = descendants::<gtk::DrawingArea>(&page)
+                .into_iter()
+                .find(|area| area.widget_name() == "trigger-travel-chart")
+                .unwrap();
+            assert!(chart.is_mapped());
             let saved = ctx.document().unwrap().to_string();
             press_capture_key(&row, gtk::gdk::Key::Escape, evdev::KeyCode::KEY_ESC);
             assert_eq!(ctx.document().unwrap().to_string(), saved);
@@ -1159,7 +1224,7 @@ pub(crate) mod tests {
             .iter()
             .find(|group| group.title() == "Partial pull")
             .unwrap();
-        let hold = key_row(partial.upcast_ref(), "Hold");
+        let hold = key_row(partial.upcast_ref(), "Action");
         let saved = ctx.document().unwrap().to_string();
         let button = begin_capture(&hold);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
@@ -1170,10 +1235,18 @@ pub(crate) mod tests {
         }
         assert_eq!(button.label().as_deref(), Some("Bind key…"));
         assert_eq!(ctx.document().unwrap().to_string(), saved);
-        let tap = key_row(partial.upcast_ref(), "Tap");
-        press_capture_key(&tap, gtk::gdk::Key::F20, evdev::KeyCode::KEY_F20);
-        unbind_button(tap.upcast_ref()).emit_clicked();
-        assert_eq!(ctx.document().unwrap().to_string(), saved);
+        spin("Partial pull (%)").set_value(40.0);
+        spin("Full pull (%)").set_value(90.0);
+        let effect = descendants::<adw::ComboRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Effect")
+            .unwrap();
+        select(&effect, "Resistance");
+        spin("Resistance strength").set_value(6.0);
+        assert_eq!(
+            ctx.document().unwrap()["triggers"]["l2"]["adaptive"]["strength"].as_integer(),
+            Some(6)
+        );
 
         let keep_partial = |page: &gtk::Widget| {
             descendants::<adw::SwitchRow>(page)
@@ -1186,22 +1259,38 @@ pub(crate) mod tests {
         l2.set_active(true);
         ctx.editor.borrow_mut().selected = "r2";
         let r2_page = controller::page(&ctx);
-        select(&output_type(&r2_page), "Keyboard");
+        let targets = descendants::<adw::ComboRow>(&r2_page)
+            .into_iter()
+            .filter(|row| row.title() == "Output button")
+            .collect::<Vec<_>>();
+        assert_eq!(targets.len(), 2);
+        for row in targets {
+            select(&row, "South · A / Cross");
+        }
         let r2 = keep_partial(&r2_page);
         assert!(!r2.is_active());
         r2.set_active(true);
         l2.set_active(false);
 
         let doc = ctx.document().unwrap();
-        assert_eq!(doc["keyboard"]["keep_partial"]["l2"].as_bool(), Some(false));
-        assert_eq!(doc["keyboard"]["keep_partial"]["r2"].as_bool(), Some(true));
+        assert_eq!(doc["triggers"]["l2"]["keep_partial"].as_bool(), Some(false));
+        assert_eq!(doc["triggers"]["r2"]["keep_partial"].as_bool(), Some(true));
         assert_eq!(doc["bridge"]["gamepad"].as_str(), Some("xbox-series"));
         assert_eq!(doc["bridge"]["rumble"].as_bool(), Some(true));
+        assert_eq!(
+            doc["triggers"]["l2"]["thresholds"]
+                .as_array()
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .as_integer(),
+            Some(40)
+        );
         let bindings = doc["keyboard"]["bindings"].as_array_of_tables().unwrap();
-        let partial = bindings.get(0).unwrap();
-        let full = bindings.get(1).unwrap();
-        assert_eq!(partial["trigger"].as_str(), Some("l2:0.45:0.35:0.95:0.85"));
-        assert_eq!(full["trigger"].as_str(), Some("l2:0.95:0.85"));
+        let full = bindings.get(0).unwrap();
+        let partial = bindings.get(1).unwrap();
+        assert_eq!(partial["trigger"].as_str(), Some("l2:partial"));
+        assert_eq!(full["trigger"].as_str(), Some("l2:full"));
         assert_eq!(partial["hold"].as_str(), Some("KEY_Q"));
         assert_eq!(full["hold"].as_str(), Some("KEY_E"));
 
@@ -1212,13 +1301,13 @@ pub(crate) mod tests {
             Some("mouse")
         );
         assert!(
-            crate::bindings::binding(&doc, crate::bindings::BindingInput::Trigger("l2:0.95:0.85"))
+            crate::bindings::binding(&doc, crate::bindings::BindingInput::Trigger("l2:full"))
                 .unwrap()
                 .is_none()
         );
         let tap = descendants::<adw::ComboRow>(&page)
             .into_iter()
-            .find(|row| row.title() == "Tap")
+            .find(|row| row.title() == "Action")
             .unwrap();
         let model = tap.model().unwrap().downcast::<gtk::StringList>().unwrap();
         assert_eq!(model.n_items(), 6);
@@ -1228,7 +1317,7 @@ pub(crate) mod tests {
                 .as_array_of_tables()
                 .unwrap()
                 .get(0)
-                .unwrap()["tap"]
+                .unwrap()["hold"]
                 .as_str(),
             Some("BTN_LEFT")
         );
@@ -1236,21 +1325,32 @@ pub(crate) mod tests {
         assert!(unbind.is_sensitive());
         unbind.emit_clicked();
         assert!(!unbind.is_sensitive());
+        assert!(!spin("Partial pull (%)").is_visible());
         assert!(
-            crate::bindings::keyboard_binding(&ctx.document().unwrap(), "l2")
-                .unwrap()
-                .is_none()
+            crate::bindings::binding(
+                &ctx.document().unwrap(),
+                crate::bindings::BindingInput::Trigger("l2:partial")
+            )
+            .unwrap()
+            .is_none()
         );
         select(&tap, "Left mouse");
         select(&output_type(&page), "Virtual gamepad");
-        let target = descendants::<adw::ComboRow>(&page)
-            .into_iter()
-            .find(|row| row.title() == "Output button")
-            .unwrap();
-        select(&target, "South · A / Cross");
+        let stage_target = |stage: &str| {
+            let group = descendants::<adw::PreferencesGroup>(&page)
+                .into_iter()
+                .find(|group| group.title() == stage)
+                .unwrap();
+            descendants::<adw::ComboRow>(group.upcast_ref())
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+        select(&stage_target("Full pull"), "East · B / Circle");
+        select(&stage_target("Partial pull"), "South · A / Cross");
         let doc = ctx.document().unwrap();
         assert_eq!(
-            crate::bindings::gamepad_target(&doc, "l2").unwrap(),
+            doc["triggers"]["l2"]["partial_button"].as_str(),
             Some("cross")
         );
         assert!(
@@ -1258,10 +1358,39 @@ pub(crate) mod tests {
                 .unwrap()
                 .is_none()
         );
+        select(&stage_target("Full pull"), "Right trigger");
+        assert!(!spin("Full pull (%)").is_visible());
+        assert!(!spin("Full release (%)").is_visible());
+        assert!(!spin("Partial pull (%)").is_visible());
+        assert!(
+            ctx.document().unwrap()["triggers"]["l2"]
+                .get("partial_button")
+                .is_none()
+        );
 
         select(&row, "Use bridge default");
         let doc = ctx.document().unwrap();
         assert!(doc["bridge"].get("gamepad").is_none());
         assert_eq!(doc["bridge"]["rumble"].as_bool(), Some(true));
+
+        for (glyph, source, output, expected) in [
+            ("↑", "dpad-up", "South · A / Cross", "cross"),
+            ("×", "cross", "D-pad left", "dpad-left"),
+        ] {
+            let button = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
+                .into_iter()
+                .find(|button| button.label().as_deref() == Some(glyph))
+                .unwrap();
+            button.set_active(true);
+            let target = descendants::<adw::ComboRow>(&page)
+                .into_iter()
+                .find(|row| row.title() == "Output button")
+                .unwrap();
+            select(&target, output);
+            assert_eq!(
+                crate::bindings::gamepad_target(&ctx.document().unwrap(), source).unwrap(),
+                Some(expected)
+            );
+        }
     }
 }
