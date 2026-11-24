@@ -2,7 +2,7 @@ use adw::{glib, gtk, prelude::*};
 use toml_edit::DocumentMut;
 
 use crate::{
-    bindings::{self, BindingInput, Gesture},
+    bindings::{self, BindingInput, Gesture, OutputMode},
     ui::{self, Context},
 };
 
@@ -15,33 +15,33 @@ struct Control {
 }
 
 const FRONT: [Control; 19] = [
-    control("l2", "L2 · Left trigger", "L2", 126., 24., 74., 28.),
-    control("r2", "R2 · Right trigger", "R2", 394., 24., 74., 28.),
-    control("l1", "L1 · Left bumper", "L1", 126., 61., 74., 28.),
-    control("r1", "R1 · Right bumper", "R1", 394., 61., 74., 28.),
-    control("create", "Create", "Create", 158., 99., 57., 24.),
-    control("options", "Options", "Options", 372., 99., 70., 24.),
+    control("l2", "L2 · Left trigger", "L2", 122., 24., 78., 30.),
+    control("r2", "R2 · Right trigger", "R2", 398., 24., 78., 30.),
+    control("l1", "L1 · Left bumper", "L1", 122., 62., 90., 30.),
+    control("r1", "R1 · Right bumper", "R1", 398., 62., 90., 30.),
+    control("create", "Create", "Create", 146., 103., 60., 28.),
+    control("options", "Options", "Options", 374., 103., 60., 28.),
     control(
         "touchpad",
         "Touchpad press",
         "Touchpad",
         260.,
-        111.,
-        124.,
-        55.,
+        107.,
+        142.,
+        60.,
     ),
-    control("dpad-up", "D-pad up", "↑", 121., 132., 32., 32.),
-    control("dpad-left", "D-pad left", "←", 88., 166., 32., 32.),
-    control("dpad-right", "D-pad right", "→", 154., 166., 32., 32.),
-    control("dpad-down", "D-pad down", "↓", 121., 200., 32., 32.),
-    control("triangle", "Triangle", "△", 399., 132., 32., 32.),
-    control("square", "Square", "□", 366., 166., 32., 32.),
-    control("circle", "Circle", "○", 432., 166., 32., 32.),
-    control("cross", "Cross", "×", 399., 200., 32., 32.),
-    control("l3", "L3 · Left stick press", "L3", 191., 218., 50., 50.),
-    control("r3", "R3 · Right stick press", "R3", 329., 218., 50., 50.),
-    control("ps", "PS button", "PS", 260., 205., 36., 31.),
-    control("mute", "Microphone mute", "Mute", 260., 245., 60., 24.),
+    control("dpad-up", "D-pad up", "↑", 115., 135., 28., 28.),
+    control("dpad-left", "D-pad left", "←", 81., 169., 28., 28.),
+    control("dpad-right", "D-pad right", "→", 149., 169., 28., 28.),
+    control("dpad-down", "D-pad down", "↓", 115., 203., 28., 28.),
+    control("triangle", "Triangle", "△", 405., 135., 30., 30.),
+    control("square", "Square", "□", 371., 169., 30., 30.),
+    control("circle", "Circle", "○", 439., 169., 30., 30.),
+    control("cross", "Cross", "×", 405., 203., 30., 30.),
+    control("l3", "L3 · Left stick press", "L3", 195., 205., 52., 52.),
+    control("r3", "R3 · Right stick press", "R3", 325., 205., 52., 52.),
+    control("ps", "PS button", "PS", 260., 195., 36., 30.),
+    control("mute", "Microphone mute", "Mute", 260., 233., 52., 28.),
 ];
 
 const EDGE: [(&str, &str); 4] = [
@@ -76,19 +76,7 @@ pub(crate) const GAMEPAD_TARGETS: [(&str, &str); 13] = [
     ("r2", "Right digital trigger (Generic)"),
 ];
 
-const KEYS: &[(&str, &str)] = &[
-    ("KEY_SPACE", "Space"),
-    ("KEY_ENTER", "Enter"),
-    ("KEY_ESC", "Escape"),
-    ("KEY_TAB", "Tab"),
-    ("KEY_BACKSPACE", "Backspace"),
-    ("KEY_LEFTSHIFT", "Left Shift"),
-    ("KEY_LEFTCTRL", "Left Ctrl"),
-    ("KEY_LEFTALT", "Left Alt"),
-    ("KEY_UP", "Up arrow"),
-    ("KEY_DOWN", "Down arrow"),
-    ("KEY_LEFT", "Left arrow"),
-    ("KEY_RIGHT", "Right arrow"),
+const MOUSE_BUTTONS: &[(&str, &str)] = &[
     ("BTN_LEFT", "Left mouse"),
     ("BTN_RIGHT", "Right mouse"),
     ("BTN_MIDDLE", "Middle mouse"),
@@ -143,15 +131,10 @@ fn trigger_stages(id: &str) -> [(&'static str, &'static str, String); 2] {
 }
 
 fn mapped(doc: &DocumentMut, id: &str) -> bool {
-    matches!(bindings::keyboard_binding(doc, id), Ok(Some(_)))
-        || matches!(bindings::gamepad_target(doc, id), Ok(Some(_)))
-        || (matches!(id, "l2" | "r2")
-            && trigger_stages(id).iter().any(|(_, _, spec)| {
-                matches!(
-                    bindings::binding(doc, BindingInput::Trigger(spec)),
-                    Ok(Some(_))
-                )
-            }))
+    matches!(
+        bindings::output_mode(doc, id),
+        Ok(OutputMode::Keyboard | OutputMode::Mouse | OutputMode::Legacy)
+    ) || matches!(bindings::gamepad_target(doc, id), Ok(Some(_)))
 }
 
 pub fn page(ctx: &Context) -> gtk::Widget {
@@ -183,25 +166,10 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         .content_height(308)
         .build();
     outline.set_can_target(false);
-    outline.set_draw_func(|area, cr, _, _| {
-        let color = area.style_context().color();
-        cr.set_source_rgba(
-            color.red().into(),
-            color.green().into(),
-            color.blue().into(),
-            0.09,
-        );
-        cr.move_to(115.0, 45.0);
-        cr.curve_to(58.0, 45.0, 49.0, 98.0, 46.0, 156.0);
-        cr.curve_to(37.0, 236.0, 50.0, 302.0, 99.0, 302.0);
-        cr.curve_to(155.0, 302.0, 158.0, 250.0, 207.0, 250.0);
-        cr.line_to(313.0, 250.0);
-        cr.curve_to(362.0, 250.0, 365.0, 302.0, 421.0, 302.0);
-        cr.curve_to(470.0, 302.0, 483.0, 236.0, 474.0, 156.0);
-        cr.curve_to(471.0, 98.0, 462.0, 45.0, 405.0, 45.0);
-        cr.close_path();
-        let _ = cr.fill();
-    });
+    outline.set_draw_func(draw_shell);
+    let control_style = gtk::CssProvider::new();
+    control_style
+        .load_from_data("button { min-width: 0; min-height: 0; padding: 0; font-size: 12px; }");
     diagram.put(&outline, 0.0, 0.0);
 
     let inspector = gtk::Box::new(gtk::Orientation::Vertical, 18);
@@ -209,8 +177,13 @@ pub fn page(ctx: &Context) -> gtk::Widget {
     inspector.set_margin_end(24);
     let selected = ctx.editor.borrow().selected;
 
-    let edge = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    edge.set_halign(gtk::Align::Center);
+    let edge = gtk::FlowBox::builder()
+        .halign(gtk::Align::Center)
+        .selection_mode(gtk::SelectionMode::None)
+        .max_children_per_line(4)
+        .column_spacing(6)
+        .row_spacing(6)
+        .build();
     layout.append(&edge);
     let mut first = None::<gtk::ToggleButton>;
     for (id, label, glyph, control) in FRONT
@@ -246,25 +219,19 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         if let Some(control) = control {
             let [x, y] = control.center.map(f64::from);
             let [width, height] = control.size.map(f64::from);
+            button
+                .style_context()
+                .add_provider(&control_style, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
             button.set_size_request(width as i32, height as i32);
             if matches!(
                 id,
-                "triangle"
-                    | "cross"
-                    | "square"
-                    | "circle"
-                    | "l3"
-                    | "r3"
-                    | "dpad-up"
-                    | "dpad-down"
-                    | "dpad-left"
-                    | "dpad-right"
+                "triangle" | "cross" | "square" | "circle" | "l3" | "r3" | "ps"
             ) {
                 button.add_css_class("circular");
             }
             diagram.put(&button, x - width / 2.0, y - height / 2.0);
         } else {
-            edge.append(&button);
+            edge.insert(&button, -1);
         }
     }
     layout.append(&inspector);
@@ -274,6 +241,57 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         .child(&clamp)
         .build()
         .upcast()
+}
+
+fn draw_shell(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, _: i32, _: i32) {
+    let style = area.style_context();
+    let foreground = style.color();
+    let set_color = |alpha| {
+        cr.set_source_rgba(
+            foreground.red().into(),
+            foreground.green().into(),
+            foreground.blue().into(),
+            alpha,
+        )
+    };
+    // Trace one half of each shape and mirror it around the controller center.
+    for side in [1.0, -1.0] {
+        let _ = cr.save();
+        cr.translate(260.0, 0.0);
+        cr.scale(side, 1.0);
+        cr.move_to(0.0, 43.0);
+        cr.line_to(-115.0, 43.0);
+        cr.curve_to(-166.0, 43.0, -194.0, 69.0, -205.0, 115.0);
+        cr.curve_to(-217.0, 161.0, -234.0, 234.0, -225.0, 270.0);
+        cr.curve_to(-219.0, 303.0, -193.0, 310.0, -173.0, 286.0);
+        cr.line_to(-141.0, 248.0);
+        cr.curve_to(-122.0, 226.0, -102.0, 240.0, -76.0, 249.0);
+        cr.curve_to(-53.0, 258.0, -30.0, 259.0, 0.0, 259.0);
+        cr.close_path();
+        set_color(0.14);
+        let _ = cr.fill();
+
+        cr.move_to(0.0, 139.0);
+        cr.curve_to(-63.0, 135.0, -94.0, 157.0, -113.0, 192.0);
+        cr.curve_to(-136.0, 225.0, -160.0, 257.0, -175.0, 285.0);
+        cr.curve_to(-157.0, 263.0, -147.0, 245.0, -132.0, 240.0);
+        cr.curve_to(-108.0, 231.0, -97.0, 244.0, -76.0, 249.0);
+        cr.curve_to(-53.0, 258.0, -30.0, 259.0, 0.0, 259.0);
+        cr.close_path();
+        set_color(0.16);
+        let _ = cr.fill();
+        let _ = cr.restore();
+    }
+
+    // The speaker grille sits between the touchpad and the PS button.
+    set_color(0.32);
+    for row in [154.0, 160.0, 166.0] {
+        for column in [247.0, 254.0, 260.0, 266.0, 273.0] {
+            cr.new_sub_path();
+            cr.arc(column, row, 1.25, 0.0, std::f64::consts::TAU);
+        }
+    }
+    let _ = cr.fill();
 }
 
 fn gamepad_type_row(ctx: &Context, doc: &DocumentMut) -> adw::PreferencesGroup {
@@ -318,23 +336,106 @@ fn show_bindings(
         inspector.remove(&child);
     }
     let Ok(doc) = ctx.document() else { return };
-    let button = button.downgrade();
-    let keyboard = adw::PreferencesGroup::builder()
+    let group = adw::PreferencesGroup::builder()
         .title(name(selected))
-        .description("Keyboard and mouse actions")
         .build();
-    inspector.append(&keyboard);
+    inspector.append(&group);
+    let mode = match bindings::output_mode(&doc, selected) {
+        Ok(mode) => mode,
+        Err(error) => {
+            unavailable(&group, "Output type", error);
+            return;
+        }
+    };
+    let weak_button = button.downgrade();
+    let choices = [
+        (OutputMode::Gamepad, "Virtual gamepad"),
+        (OutputMode::Keyboard, "Keyboard"),
+        (OutputMode::Mouse, "Mouse"),
+        (OutputMode::Legacy, "Existing bindings"),
+    ];
+    let mode_row = required_dropdown(
+        "Output type",
+        mode.key(),
+        choices
+            .into_iter()
+            .filter(|&(mode_option, _)| {
+                mode_option != OutputMode::Legacy || mode == OutputMode::Legacy
+            })
+            .map(|(mode, name)| (mode.key().into(), name.into())),
+        {
+            let ctx = ctx.clone();
+            let inspector = inspector.downgrade();
+            let button = weak_button.clone();
+            move |key| {
+                let mode = choices
+                    .iter()
+                    .find(|(mode, _)| mode.key() == key)
+                    .unwrap()
+                    .0;
+                if mode == OutputMode::Legacy {
+                    return;
+                }
+                if ctx.edit(|doc| bindings::set_output_mode(doc, selected, mode))
+                    && let (Some(inspector), Some(button)) = (inspector.upgrade(), button.upgrade())
+                {
+                    if let Ok(doc) = ctx.document() {
+                        mark_assigned(&button, &doc, selected);
+                    }
+                    show_bindings(&inspector, &ctx, selected, &button);
+                }
+            }
+        },
+    );
+    mode_row.set_subtitle("Changing the type removes actions assigned to other output types.");
+    group.add(&mode_row);
+    if mode == OutputMode::Legacy {
+        group.add(&message_row(
+            "Existing profile binding",
+            "Choose an output type to edit this input.",
+        ));
+        return;
+    }
+    if mode == OutputMode::Gamepad {
+        if !selected.starts_with("dpad-") {
+            match bindings::gamepad_target(&doc, selected) {
+                Ok(current) => {
+                    let ctx = ctx.clone();
+                    group.add(&dropdown(
+                        "Output button",
+                        current,
+                        "Same as controller",
+                        GAMEPAD_TARGETS
+                            .into_iter()
+                            .map(|(key, label)| (key.into(), label.into())),
+                        move |next| {
+                            edit_binding(&ctx, &weak_button, selected, |doc| {
+                                bindings::set_gamepad(doc, selected, next)
+                            })
+                        },
+                    ));
+                }
+                Err(error) => unavailable(&group, "Output button", error),
+            }
+        }
+        return;
+    }
+    let button = weak_button;
     let key_ctx = ctx.clone();
     let key_button = button.clone();
-    for row in keyboard_rows(&doc, selected, move |gesture, output| {
-        edit_binding(&key_ctx, &key_button, selected, |doc| {
-            bindings::set_key(doc, selected, gesture, output)
-        });
-    }) {
-        keyboard.add(&row);
+    for row in gesture_rows(
+        bindings::keyboard_binding(&doc, selected),
+        mode,
+        move |gesture, output| {
+            edit_binding(&key_ctx, &key_button, selected, |doc| {
+                bindings::set_key(doc, selected, gesture, output)
+            });
+        },
+    ) {
+        group.add(&row);
     }
     if matches!(selected, "l2" | "r2") {
-        keyboard.set_description(Some("Actions for the controller's digital trigger button."));
+        group.set_description(Some("Actions for the controller's digital trigger button."));
         for (title, description, spec) in trigger_stages(selected) {
             let group = adw::PreferencesGroup::builder()
                 .title(title)
@@ -346,7 +447,7 @@ fn show_bindings(
             let key_ctx = ctx.clone();
             let key_button = button.clone();
             let binding = bindings::binding(&doc, BindingInput::Trigger(&spec));
-            for row in gesture_rows(binding, move |gesture, output| {
+            for row in gesture_rows(binding, mode, move |gesture, output| {
                 edit_binding(&key_ctx, &key_button, selected, |doc| {
                     bindings::set_action(doc, BindingInput::Trigger(&spec), gesture, output)
                 });
@@ -354,31 +455,6 @@ fn show_bindings(
                 group.add(&row);
             }
             inspector.append(&group);
-        }
-    }
-    if !selected.starts_with("dpad-") {
-        let gamepad = adw::PreferencesGroup::builder()
-            .title("Virtual gamepad")
-            .build();
-        inspector.append(&gamepad);
-        match bindings::gamepad_target(&doc, selected) {
-            Ok(current) => {
-                let ctx = ctx.clone();
-                gamepad.add(&dropdown(
-                    "Output button",
-                    current,
-                    "Same as controller",
-                    GAMEPAD_TARGETS
-                        .into_iter()
-                        .map(|(key, label)| (key.into(), label.into())),
-                    move |next| {
-                        edit_binding(&ctx, &button, selected, |doc| {
-                            bindings::set_gamepad(doc, selected, next)
-                        })
-                    },
-                ));
-            }
-            Err(error) => unavailable(&gamepad, "Output button", error),
         }
     }
 }
@@ -413,11 +489,16 @@ pub(crate) fn keyboard_rows(
     input: &str,
     changed: impl Fn(Gesture, Option<&str>) + Clone + 'static,
 ) -> Vec<adw::PreferencesRow> {
-    gesture_rows(bindings::keyboard_binding(doc, input), changed)
+    gesture_rows(
+        bindings::keyboard_binding(doc, input),
+        OutputMode::Legacy,
+        changed,
+    )
 }
 
 fn gesture_rows(
     binding: Result<Option<&toml_edit::Table>, &'static str>,
+    mode: OutputMode,
     changed: impl Fn(Gesture, Option<&str>) + Clone + 'static,
 ) -> Vec<adw::PreferencesRow> {
     let binding = match binding {
@@ -433,14 +514,44 @@ fn gesture_rows(
                     .upcast();
             }
             let changed = changed.clone();
-            dropdown(
-                gesture.label(),
-                value.and_then(|item| item.as_str()),
-                "No action",
-                key_choices(),
-                move |output| changed(gesture, output),
-            )
-            .upcast()
+            let value = value.and_then(|item| item.as_str());
+            let edit = move |output: Option<&str>| changed(gesture, output);
+            if mode == OutputMode::Mouse {
+                let row = dropdown(
+                    gesture.label(),
+                    value,
+                    "No action",
+                    MOUSE_BUTTONS
+                        .iter()
+                        .map(|&(key, label)| (key.into(), label.into())),
+                    edit,
+                );
+                let unbind = gtk::Button::builder()
+                    .label("Unbind")
+                    .valign(gtk::Align::Center)
+                    .build();
+                row.bind_property("selected", &unbind, "sensitive")
+                    .transform_to(|_, selected: u32| {
+                        Some(selected != 0 && selected != gtk::INVALID_LIST_POSITION)
+                    })
+                    .sync_create()
+                    .build();
+                let row_ref = row.downgrade();
+                unbind.connect_clicked(move |_| {
+                    if let Some(row) = row_ref.upgrade() {
+                        row.set_selected(0);
+                    }
+                });
+                row.add_suffix(&unbind);
+                row.upcast()
+            } else {
+                let mouse = if mode == OutputMode::Legacy {
+                    MOUSE_BUTTONS
+                } else {
+                    &[]
+                };
+                crate::key_capture::row(gesture.label(), value, mouse, edit).upcast()
+            }
         })
         .collect()
 }
@@ -477,17 +588,6 @@ pub(crate) fn message_row(title: &str, detail: &str) -> adw::ActionRow {
         .title(title)
         .subtitle(detail)
         .build()
-}
-
-pub(crate) fn key_choices() -> impl Iterator<Item = (String, String)> {
-    KEYS.iter()
-        .map(|&(key, label)| (key.into(), label.into()))
-        .chain(
-            ('A'..='Z')
-                .chain('0'..='9')
-                .map(|key| (format!("KEY_{key}"), key.to_string())),
-        )
-        .chain((1..=12).map(|number| (format!("KEY_F{number}"), format!("F{number}"))))
 }
 
 pub(crate) fn dropdown(

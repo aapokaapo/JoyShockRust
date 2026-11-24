@@ -15,6 +15,7 @@ mod controller_input;
 mod flick_preview;
 mod gyro_activation;
 mod imu_monitor;
+mod key_capture;
 mod response_plot;
 mod sensitivity;
 mod stick_keys;

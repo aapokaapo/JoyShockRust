@@ -1328,13 +1328,30 @@ fn map_gamepad_controls(
             .flick_stick_side
             .select(&mut controls.left_stick, &mut controls.right_stick) = Default::default();
     }
+    let mut suppressed = joyshockrust_core::Buttons::default();
+    if let Some(keyboard) = &runtime.keyboard {
+        keyboard.gamepad_mask.filter_axes(&mut controls);
+        suppressed = keyboard.gamepad_mask.buttons;
+    }
     let touch_buttons = runtime
         .touchpad
         .as_ref()
         .map_or_else(Default::default, |grid| {
-            grid.map(&mut controls.buttons, report.touch_contacts, touch_click)
+            use joyshockrust_core::Button::TouchpadClick;
+            let suppress_click =
+                suppressed.contains(TouchpadClick) && controls.buttons.contains(TouchpadClick);
+            if suppress_click {
+                controls.buttons.remove(TouchpadClick);
+            }
+            let buttons = grid.map(&mut controls.buttons, report.touch_contacts, touch_click);
+            if suppress_click {
+                controls.buttons.insert(TouchpadClick);
+            }
+            buttons
         });
-    let mut controls = runtime.remaps.apply(controls, layer_state);
+    let mut controls = runtime
+        .remaps
+        .apply_filtered(controls, layer_state, suppressed);
     controls.buttons = controls.buttons.union(touch_buttons);
     controls
 }
@@ -1638,6 +1655,47 @@ mod tests {
         assert_eq!(reports, FRAMES);
         assert_eq!(batches, FRAMES);
         assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn exclusive_button_outputs_consume_only_their_physical_sources() {
+        use joyshockrust_core::{Button, DPad};
+        let source = r#"
+version = 1
+remap_buttons = ["cross=triangle", "circle=cross"]
+[keyboard.button_output]
+cross = "keyboard"
+l2 = "mouse"
+dpad-up = "keyboard"
+[[keyboard.bindings]]
+button = "cross"
+tap = "KEY_SPACE"
+[[keyboard.bindings]]
+trigger = "l2:0.95:0.85"
+hold = "BTN_LEFT"
+"#;
+        let runtime = super::profile::parse(source).unwrap();
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[5] = 255;
+        frame[8] = 0x61;
+        frame[9] = 0x04;
+        let report =
+            joyshockrust_input::parse_report(USB_EDGE.model, USB_EDGE.transport, &frame, None)
+                .unwrap();
+        let controls = super::map_gamepad_controls(
+            &runtime,
+            runtime.gyro,
+            &report,
+            &mut super::gamepad::RemapState::default(),
+            &mut super::touchpad::ClickState::default(),
+        );
+        assert!(!controls.buttons.contains(Button::North));
+        assert!(controls.buttons.contains(Button::South));
+        assert!(!controls.buttons.contains(Button::LeftTrigger));
+        assert_eq!(controls.left_trigger, 0.0);
+        assert_eq!(controls.dpad, DPad::Right);
+        assert!(super::profile::parse(&source.replace("BTN_LEFT", "KEY_A")).is_err());
     }
 
     #[test]

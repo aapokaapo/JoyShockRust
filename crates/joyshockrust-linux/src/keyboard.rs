@@ -7,7 +7,7 @@ use std::{
 use evdev::{
     AttributeSet, EventType, InputEvent, KeyCode, RelativeAxisCode, uinput::VirtualDevice,
 };
-use joyshockrust_core::{Button, Controls, DPad};
+use joyshockrust_core::{Button, Buttons, Controls, DPad};
 use joyshockrust_input::{InputReport, TouchContact};
 use serde::Deserialize;
 
@@ -34,9 +34,76 @@ pub struct Settings {
     #[serde(default)]
     keep_partial: KeepPartial,
     #[serde(default)]
+    button_output: std::collections::BTreeMap<String, ButtonOutput>,
+    #[serde(default)]
     sticks: Vec<stick::Settings>,
     touch_scroll: Option<touch_motion::ScrollSettings>,
     touch_pointer: Option<touch_motion::PointerSettings>,
+}
+
+#[derive(Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ButtonOutput {
+    Keyboard,
+    Mouse,
+}
+
+#[derive(Default, PartialEq)]
+pub struct GamepadMask {
+    pub buttons: Buttons,
+    directions: [bool; 4],
+}
+
+impl GamepadMask {
+    pub fn filter_axes(&self, controls: &mut Controls) {
+        if self.buttons.contains(Button::LeftTrigger) {
+            controls.left_trigger = 0.0;
+        }
+        if self.buttons.contains(Button::RightTrigger) {
+            controls.right_trigger = 0.0;
+        }
+        let [up, right, down, left] = self.directions;
+        use DPad::*;
+        controls.dpad = match controls.dpad {
+            Up if up => Neutral,
+            Right if right => Neutral,
+            Down if down => Neutral,
+            Left if left => Neutral,
+            UpRight if up => {
+                if right {
+                    Neutral
+                } else {
+                    Right
+                }
+            }
+            UpRight if right => Up,
+            UpLeft if up => {
+                if left {
+                    Neutral
+                } else {
+                    Left
+                }
+            }
+            UpLeft if left => Up,
+            DownRight if down => {
+                if right {
+                    Neutral
+                } else {
+                    Right
+                }
+            }
+            DownRight if right => Down,
+            DownLeft if down => {
+                if left {
+                    Neutral
+                } else {
+                    Left
+                }
+            }
+            DownLeft if left => Down,
+            direction => direction,
+        };
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -121,6 +188,7 @@ impl Action {
 
 #[derive(PartialEq)]
 pub struct Config {
+    pub gamepad_mask: GamepadMask,
     buttons: Vec<Binding>,
     sticks: Vec<stick::Binding>,
     touch_scroll: Option<touch_motion::ScrollSettings>,
@@ -349,6 +417,20 @@ impl Source {
 
 impl Settings {
     pub fn resolve(self, grid: Option<&Grid>) -> Result<Config, String> {
+        let mut gamepad_mask = GamepadMask::default();
+        for name in self.button_output.keys() {
+            match Source::parse(name, grid)? {
+                Source::Button(button) => gamepad_mask.buttons.insert(button),
+                Source::Direction(direction) => {
+                    let index = [DPad::Up, DPad::Right, DPad::Down, DPad::Left]
+                        .iter()
+                        .position(|&value| value == direction)
+                        .expect("source parser returns cardinal directions");
+                    gamepad_mask.directions[index] = true;
+                }
+                _ => return Err(format!("button_output requires a physical button: {name}")),
+            }
+        }
         let mut bindings = Vec::<Binding>::new();
         for raw in self.bindings {
             let (source, name) = match (raw.button, raw.trigger, raw.chord) {
@@ -409,6 +491,24 @@ impl Settings {
                     "keyboard binding for {name} needs at least one output"
                 ));
             }
+            let physical = name.split(':').next().unwrap_or(&name);
+            if matches!(
+                source,
+                BindingSource::Single(
+                    Source::Button(_) | Source::Direction(_) | Source::Trigger(_)
+                ) | BindingSource::PartialTrigger { .. }
+            ) && let Some(output) = self.button_output.get(physical)
+                && binding.actions().any(|action| match action {
+                    Action::Keys(keys) => keys
+                        .iter()
+                        .any(|&key| is_mouse_button(key) != (*output == ButtonOutput::Mouse)),
+                    Action::Scroll(_) => *output != ButtonOutput::Mouse,
+                })
+            {
+                return Err(format!(
+                    "keyboard binding for {name} conflicts with button_output for {physical}"
+                ));
+            }
             if raw.scroll_repeat_ms.is_some() && !matches!(binding.hold, Some(Action::Scroll(_))) {
                 return Err(format!(
                     "keyboard binding for {name}: scroll_repeat_ms requires a scroll hold action"
@@ -417,6 +517,7 @@ impl Settings {
             bindings.push(binding);
         }
         let config = Config {
+            gamepad_mask,
             buttons: bindings,
             sticks: stick::Settings::resolve_all(self.sticks)?,
             touch_scroll: self

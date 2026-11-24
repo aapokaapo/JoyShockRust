@@ -692,15 +692,24 @@ choose **New profile**. Use **Save & Apply** to make a profile active.
 The editor follows the system’s light or dark appearance. The page
 switcher moves to the bottom when the window is narrow.
 Select a physical control on the DualSense diagram or choose a DualSense
-Edge control below it. The inspector shows the selected control's tap,
-hold and double-tap keyboard or mouse actions, along with its base virtual
-gamepad remap when available. Choose **No action** to clear a gesture or
-**Same as controller** to remove the base remap. Use the **Advanced**
-page for TOML settings such as chords and layers.
+Edge control below it. Choose one **Output type** per physical button.
+**Keyboard** and **Mouse** each support separate tap, hold and double-tap
+actions and suppress that physical button on the virtual gamepad.
+For a keyboard action, choose **Bind key…** and press the desired key.
+While the editor waits, press **Esc** or click anywhere in its window to
+cancel. Listening also ends automatically after 10 seconds. Use
+**Unbind** to remove a key or mouse button. Mouse buttons are selected
+from the dropdown. The same key listener is available for stick directions,
+stick zones and touchpad gestures.
+**Virtual gamepad** shows the base remap where available. Changing type
+removes actions from the previous type. Choose **No action** to clear a
+gesture or **Same as controller** to remove the base remap. Existing
+TOML profiles retain their original routing until you choose an output
+type for the button. Use **Advanced** for chords and layers.
 
 At the top of **Buttons**, choose the **Virtual gamepad type**. Selecting
-L2 or R2 shows **Partial pull** and **Full pull** keyboard and mouse
-actions in addition to the digital button. A partial pull engages at
+L2 or R2 with **Keyboard** or **Mouse** selected shows **Partial pull**
+and **Full pull** actions of that type in addition to the digital button. A partial pull engages at
 45%, and a full pull at 95%. The release thresholds are 35% and 85%.
 Turn on **Keep partial action at full pull** to hold both assigned keys
 at full travel. The switch is off by default, so the full action takes

@@ -268,8 +268,12 @@ the speed response and calibrated IMU readings from the active controller.
 
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects
-physical controls and shows their keyboard, mouse and base gamepad
-bindings in an inspector. Advanced TOML covers the full profile schema.
+physical controls and selects an exclusive keyboard, mouse or gamepad
+output per physical button in the inspector. Keyboard pickers capture
+one key in the editor window. Esc, a click or a 10-second timeout ends
+the inline prompt. Mouse buttons use dropdowns and **Unbind** clears
+the current action.
+Advanced TOML covers the full profile schema.
 The Sticks and Gyro pages expose stepped sensitivity controls, typed gyro values, radial
 response previews and editable game calibration values. The GTK 4 editor
 uses libadwaita navigation and follows the system appearance. The tray

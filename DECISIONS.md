@@ -629,3 +629,18 @@ to preselect a destination even when profiles share a filename. Live
 loads carry path metadata and the TOML bytes. The bridge still accepts
 legacy name-only and name-free loads. Rejections preserve the current
 profile identity, and unloading clears it.
+
+The Buttons editor stores exclusive keyboard or mouse routing in
+`keyboard.button_output`. Older profiles retain their original routing
+until an output type is selected for a physical button. A claimed source
+is filtered before virtual gamepad remapping so another source can still
+send the same virtual target. Trigger claims cover both the digital button
+and the analog axis. D-pad claims preserve any remaining component of a
+diagonal. Chord and layer activation still read physical input.
+
+The editor captures one physical keyboard key in the focused Wayland window.
+The GTK Wayland backend adds 8 to the Linux keycode, so the editor removes
+that offset and serializes the evdev key name already accepted by the bridge.
+Esc, a click in the window or a 10-second timeout dismisses the capture
+without changing the binding. **Unbind** clears it explicitly.
+[GTK 4.18.6 Wayland key delivery, checked 2026-11-24](https://github.com/GNOME/gtk/blob/4.18.6/gdk/wayland/gdkseat-wayland.c#L1423-L1433)
