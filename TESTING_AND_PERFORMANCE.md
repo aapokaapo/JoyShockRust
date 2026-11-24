@@ -907,7 +907,7 @@ the in-game sensitivity stays constant. Choose a profile and save with
 Cross.
 Check Circle cancels and the tray resumes the bridge.
 
-Install the tray and bridge using the [desktop tray instructions](README.md#desktop-tray).
+Install the tray and bridge using the [combined desktop setup](README.md#install-the-service-tray-and-editor-together).
 Run JoyShockRust from the applications menu in a Wayland session with a
 StatusNotifierItem host. Verify the menu with no controller connected,
 then connect a supported controller over USB and Bluetooth. Check the

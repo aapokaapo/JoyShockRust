@@ -55,7 +55,7 @@ From the workspace root with stable Rust, rustfmt and Clippy installed. The
 Linux bridge also needs `pkg-config` and the libudev development files
 (`libudev-dev` on Debian/Ubuntu or `systemd-devel` on Fedora).
 Workspace checks include the editor and need the GTK 4 and libadwaita
-development packages listed under [Desktop tray](#desktop-tray).
+development packages listed under [Installation](#installation).
 
 Install the formatter for the Cargo toolchain you use:
 
@@ -173,6 +173,50 @@ virtual gamepad emulation for the current process, use
 `joyshockrust-linux --set-gamepad off` or `--set-gamepad on`. The command
 keeps the physical controller session, gyro and keyboard mappings active.
 The selected state persists through reconnects and profile loads.
+
+### Bindable controller inputs
+
+Use these exact lowercase names in TOML profiles.
+
+| Controls | TOML names |
+|---|---|
+| Face buttons | `cross`, `circle`, `square`, `triangle` |
+| Shoulder buttons | `l1`, `r1` |
+| Digital trigger presses | `l2`, `r2` |
+| Stick clicks | `l3`, `r3` |
+| System buttons | `create`, `options`, `ps`, `mute` |
+| Whole touchpad click | `touchpad` |
+| DualSense Edge function buttons | `fn-left`, `fn-right` |
+| DualSense Edge rear paddles | `paddle-left`, `paddle-right` |
+| D-pad directions | `dpad-up`, `dpad-right`, `dpad-down`, `dpad-left` |
+
+The digital button names above the D-pad row are valid as
+`remap_buttons` sources and as `layer_remaps` sources or modifiers.
+They also work in `gyro.binding.input` for digital activation modes, in
+`gyro.calibration_hold.button`, in `keyboard.bindings.button` and
+`keyboard.bindings.chord`, and as keys in `[keyboard.button_output]`.
+The four D-pad directions work in keyboard button bindings, keyboard
+chords and `[keyboard.button_output]`. A diagonal activates its two
+cardinal directions.
+
+For analog trigger travel, use `l2` or `r2` in
+`keyboard.bindings.trigger` or in a gyro binding with `mode = "trigger"`.
+Append press and release thresholds, as in `r2:0.60:0.40`. Keyboard
+trigger bindings can also specify separate full-pull thresholds, as in
+`l2:0.45:0.35:0.95:0.85`. A keyboard chord uses the `trigger:` prefix
+for an analog member, as in `chord = ["l1", "trigger:r2:0.60:0.40"]`.
+
+With a configured `[touchpad]` grid, `touch:ROW:COLUMN` and
+`click:ROW:COLUMN` are also valid keyboard button or chord inputs.
+Gyro activation and gyro chords accept `touch:ROW:COLUMN`. Rows and columns
+start at 1. For example, `input = "l1,touch:1:2"` with `mode = "chord"`
+requires L1 and a touch in the second column of the first row.
+
+Virtual gamepad targets for `remap_buttons`, `layer_remaps` and
+`[[touchpad.regions]]` are `cross`, `circle`, `square`, `triangle`,
+`l1`, `r1`, `l3`, `r3`, `create`, `options` and `ps`.
+The generic virtual gamepad also emits digital `l2` and `r2` targets.
+Analog axes are independent of button remaps.
 
 ### Controller selection
 
@@ -663,67 +707,102 @@ touchpad grab](#touchpad-regions). The [optional rumble
 rule](#virtual-gamepad-on-linux) covers the separate physical evdev
 force-feedback node.
 
-## systemd user service
+## Installation
 
-Stop any manually running bridge before starting the service. Install the
-binary and the [user unit](dist/systemd/joyshockrust.service) from this
-checkout. The sample profile is optional. The command below copies it
-only if the destination is absent.
+Run these commands from the repository root as your desktop user. Stop
+any bridge or tray processes you started manually. The bridge build
+requires stable Rust, `pkg-config` and libudev development files
+(`systemd-devel` on Fedora or `libudev-dev` on Debian/Ubuntu).
+
+For the desktop installation, use a Wayland session and install GTK 4
+and libadwaita 1.5 or newer with their development packages
+(`gtk4-devel libadwaita-devel` on Fedora or
+`libgtk-4-dev libadwaita-1-dev` on Debian/Ubuntu). If diagnostics reports
+a permission error, see the [optional device access rules](#optional-device-access-rules).
+
+### Install the service, tray and editor together
+
+Copy and run this block to install or update the desktop setup. It starts
+both user services and adds JoyShockRust to the application menu. Existing
+profiles remain in place. Without a profile, the bridge uses default
+mappings.
 
 ```sh
-cargo install --locked --path crates/joyshockrust-linux --root "$HOME/.local"
-config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
-profile="$config_dir/joyshockrust/profile.toml"
-if [ ! -e "$profile" ]; then
-  install -Dm644 profiles/dualsense-edge.example.toml "$profile"
-fi
-install -Dm644 dist/systemd/joyshockrust.service "$config_dir/systemd/user/joyshockrust.service"
-systemctl --user daemon-reload
-systemctl --user start joyshockrust.service
-journalctl --user -u joyshockrust.service -f
+(
+  set -e
+  config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+  data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
+  cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-linux
+  cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-tray
+  cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-editor
+  install -Dm644 dist/systemd/joyshockrust.service "$config_dir/systemd/user/joyshockrust.service"
+  install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
+  install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+  systemctl --user daemon-reload
+  systemctl --user restart joyshockrust.service joyshockrust-tray.service
+)
 ```
+
+For a headless setup, use the [systemd user service](#systemd-user-service)
+instructions. To add desktop controls to an existing bridge, use the
+[desktop tray](#desktop-tray) instructions.
+
+### systemd user service
+
+Install or update just the bridge and its user unit.
+
+```sh
+(
+  set -e
+  config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+  cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-linux
+  install -Dm644 dist/systemd/joyshockrust.service "$config_dir/systemd/user/joyshockrust.service"
+  systemctl --user daemon-reload
+  systemctl --user restart joyshockrust.service
+)
+```
+
+View the service log with `journalctl --user -u joyshockrust.service -f`.
 
 The service starts with default mappings when the startup profile is
 absent. Controller selection and `--load-profile` are available in that
 state. To set up a startup profile, create or edit
-`joyshockrust/profile.toml` there and run
+`${XDG_CONFIG_HOME:-$HOME/.config}/joyshockrust/profile.toml` and run
 `systemctl --user reload joyshockrust.service` to load the changes. The
 command waits for the result and exits with an error if the bridge rejects
 the profile. The journal includes the rejection reason. Reload
 keeps the virtual gamepad. Changing gyro settings may recreate the mouse
 and restart its calibration. If the profile is invalid or unreadable at
 startup, the service stops. Correct the profile, check it with
-`$HOME/.local/bin/joyshockrust-linux --check-profile "$profile"`, then start
-the service again.
+`joyshockrust-linux --check-profile PATH` using the profile file, then
+start the service again.
 Use `systemctl --user enable joyshockrust.service` to start it with the
 user manager, or `systemctl --user stop joyshockrust.service` to stop it.
 The service needs the same hidraw and uinput access as a manual run.
 
 ### Desktop tray
 
-Use the desktop tray and its GTK 4 profile editor from a Wayland session.
-Building the editor requires GTK 4 and libadwaita 1.5 or newer. Install
-`gtk4-devel libadwaita-devel` on Fedora, or `libgtk-4-dev libadwaita-1-dev`
-on Debian and Ubuntu.
-
-Install the tray beside the bridge binary and its launcher beside the
-desktop's other applications. Keep the bridge user unit installed.
+Use this block if the [bridge and its user unit](#systemd-user-service)
+are already installed. It adds or updates the tray, GTK editor, tray
+unit and desktop launcher.
 
 ```sh
-cargo install --locked --path crates/joyshockrust-tray --root "$HOME/.local"
-cargo install --locked --path crates/joyshockrust-editor --root "$HOME/.local"
-config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
-data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
-install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
-install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
-systemctl --user daemon-reload
+(
+  set -e
+  config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+  data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
+  cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-tray
+  cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-editor
+  install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
+  install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+  systemctl --user daemon-reload
+  systemctl --user restart joyshockrust-tray.service
+)
 ```
 
-Open **JoyShockRust** from the application menu or run
-`systemctl --user start joyshockrust-tray.service`. The tray starts the
-bridge and shows the connection icon and decoded report rate in Hz.
-After updating an existing installation, reinstall both user unit files
-and run `systemctl --user daemon-reload` before restarting the services.
+The tray starts the bridge and shows the connection icon and decoded
+report rate in Hz. To launch it again, open **JoyShockRust** from the
+application menu or run `systemctl --user start joyshockrust-tray.service`.
 On Bluetooth, the same row shows the battery icon and the percentage
 while discharging. Under **Active controller**, open the submenu to
 choose a connected controller with an HID ID or select **Automatic**.
@@ -1164,10 +1243,8 @@ Use `--gyro-double-tap r3` to toggle only after two short taps. Each tap
 must be shorter than 200 ms and the releases at most 300 ms apart.
 Use `--gyro-chord l1,r1` to aim while holding both buttons, in either order.
 
-Supported button names are `cross`, `circle`, `square`, `triangle`,
-`l1`, `r1`, `l2`, `r2`, `l3`, `r3`, `create`, `options`, `ps`,
-`touchpad`, `mute`, `fn-left`, `fn-right`, `paddle-left` and
-`paddle-right`. L2 and R2 use their digital button states.
+See [bindable controller inputs](#bindable-controller-inputs) for the
+digital button names used by the gyro flags.
 
 [USB gyro test](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
 
