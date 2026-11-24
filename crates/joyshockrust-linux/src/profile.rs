@@ -1,7 +1,10 @@
 use joyshockrust_config::{
     PROFILE_VERSION,
     paths::{APP_DIRECTORY, PROFILE_FILE, config_home_from_env},
-    profile::{Profile, TriggerProfile, relative_trigger_stages},
+    profile::{
+        CalibrationHold, Gyro, GyroBinding, Profile, Touchpad, TriggerProfile,
+        relative_trigger_stages,
+    },
 };
 use joyshockrust_motion::aim_response::{
     GyroResponse, MAX_FLICK_DURATION_MS, MIN_FLICK_DURATION_MS, MIN_FLICK_ENGAGE_PERCENT,
@@ -33,7 +36,7 @@ use crate::{
     keyboard, touchpad,
 };
 
-type LinuxProfile = Profile<BridgeFile, Gyro, touchpad::Config, keyboard::Settings, Effect>;
+type LinuxProfile = Profile<BridgeFile, Gyro, Touchpad, keyboard::Settings, Effect>;
 
 fn resolve_trigger(
     settings: &TriggerProfile<Effect>,
@@ -84,68 +87,19 @@ fn resolve_trigger(
     })
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Gyro {
-    #[serde(default)]
-    calibrate: bool,
-    aim_mode: Option<String>,
-    calibration_hold: Option<CalibrationHold>,
-    flick_stick: Option<f64>,
-    flick_stick_side: Option<String>,
-    flick_engage_percent: Option<f64>,
-    flick_duration_ms: Option<f64>,
-    flick_axial_threshold_deg: Option<f64>,
-    flick_steering_sensitivity: Option<f64>,
-    threshold_dps: Option<f64>,
-    accel_start_dps: Option<f64>,
-    accel_end_dps: Option<f64>,
-    accel_multiplier: Option<f64>,
-    accel_enabled: Option<bool>,
-    sensitivity_x: Option<f32>,
-    sensitivity_y: Option<f32>,
-    real_world_calibration: Option<f64>,
-    in_game_sens: Option<f64>,
-    binding: Option<GyroBinding>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CalibrationHold {
-    button: String,
-    hold_ms: Option<u64>,
-}
-
-impl CalibrationHold {
-    fn resolve(self) -> Result<gyro_mouse::HoldBinding, &'static str> {
-        let button = gyro_gate::button_by_name(&self.button)
-            .ok_or("gyro.calibration_hold.button must name a physical controller button")?;
-        let ms = self.hold_ms.unwrap_or(1500);
-        if !(250..=10_000).contains(&ms) {
-            return Err("gyro.calibration_hold.hold_ms must be between 250 and 10000");
-        }
-        Ok(gyro_mouse::HoldBinding {
-            button,
-            duration: std::time::Duration::from_millis(ms),
-        })
+fn resolve_calibration_hold(
+    settings: CalibrationHold,
+) -> Result<gyro_mouse::HoldBinding, &'static str> {
+    let button = gyro_gate::button_by_name(&settings.button)
+        .ok_or("gyro.calibration_hold.button must name a physical controller button")?;
+    let ms = settings.hold_ms.unwrap_or(1500);
+    if !(250..=10_000).contains(&ms) {
+        return Err("gyro.calibration_hold.hold_ms must be between 250 and 10000");
     }
-}
-
-#[derive(Deserialize)]
-#[serde(
-    tag = "mode",
-    content = "input",
-    rename_all = "kebab-case",
-    deny_unknown_fields
-)]
-enum GyroBinding {
-    Hold(String),
-    DisableWhileHeld(String),
-    Toggle(String),
-    TapHold(String),
-    DoubleTap(String),
-    Chord(String),
-    Trigger(String),
+    Ok(gyro_mouse::HoldBinding {
+        button,
+        duration: std::time::Duration::from_millis(ms),
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -425,13 +379,10 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
     for rule in &profile.layer_remaps {
         remaps.add_layer(rule)?;
     }
-    let touchpad = profile
-        .touchpad
-        .map(touchpad::Config::resolve)
-        .transpose()?;
+    let touchpad = profile.touchpad.map(touchpad::resolve).transpose()?;
     let gyro = profile
         .gyro
-        .map(|gyro| gyro.resolve(touchpad.as_ref()))
+        .map(|gyro| resolve_gyro(gyro, touchpad.as_ref()))
         .transpose()?;
     let grab_touchpad = profile
         .keyboard
@@ -479,103 +430,101 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
     })
 }
 
-impl Gyro {
-    fn resolve(
-        self,
-        touchpad: Option<&touchpad::Grid>,
-    ) -> Result<gyro_mouse::Options, Box<dyn Error>> {
-        let flick_stick = self
-            .flick_stick
-            .map(gyro_mouse::validate_flick_scale)
-            .transpose()?;
-        if self
-            .flick_engage_percent
-            .is_some_and(|value| !(MIN_FLICK_ENGAGE_PERCENT..=100.0).contains(&value))
-        {
-            return Err("Flick Stick engagement must be between 30 and 100 percent".into());
-        }
-        if self
-            .flick_duration_ms
-            .is_some_and(|value| !(MIN_FLICK_DURATION_MS..=MAX_FLICK_DURATION_MS).contains(&value))
-        {
-            return Err("Flick Stick duration must be between 10 and 500 ms".into());
-        }
-        if self
-            .flick_steering_sensitivity
-            .is_some_and(|value| !(0.0..=1.0).contains(&value))
-        {
-            return Err("Flick Stick steering sensitivity must be between 0 and 1".into());
-        }
-        let resolve_input = |name: &str| -> Result<DigitalInput, String> {
-            if let Some(spec) = name.strip_prefix("touch:") {
-                let region = touchpad
-                    .ok_or("gyro touch binding requires a [touchpad] grid")?
-                    .parse_region(spec)?;
-                return Ok(DigitalInput::Touch(region));
-            }
-            gyro_gate::button_by_name(name)
-                .map(DigitalInput::Button)
-                .ok_or_else(|| format!("unknown gyro binding button: {name}"))
-        };
-        let binding = match self.binding {
-            None => Binding::Always,
-            Some(GyroBinding::Hold(name)) => Binding::Hold(resolve_input(&name)?),
-            Some(GyroBinding::DisableWhileHeld(name)) => {
-                Binding::DisableWhileHeld(resolve_input(&name)?)
-            }
-            Some(GyroBinding::Toggle(name)) => Binding::Toggle(resolve_input(&name)?),
-            Some(GyroBinding::TapHold(name)) => Binding::TapHold(resolve_input(&name)?),
-            Some(GyroBinding::DoubleTap(name)) => Binding::DoubleTap(resolve_input(&name)?),
-            Some(GyroBinding::Chord(spec)) => gyro_gate::parse_chord(&spec, resolve_input)?,
-            Some(GyroBinding::Trigger(spec)) => Binding::AnalogTrigger(TriggerGate::parse(&spec)?),
-        };
-        let [threshold, start, end, multiplier] = GyroResponse::default().values();
-        let mut response = GyroResponse::new(
-            self.threshold_dps.unwrap_or(threshold),
-            self.accel_start_dps.unwrap_or(start),
-            self.accel_end_dps.unwrap_or(end),
-            self.accel_multiplier.unwrap_or(multiplier),
-        )?;
-        if let Some(enabled) = self.accel_enabled {
-            response = response.with_acceleration_enabled(enabled);
-        }
-        Ok(gyro_mouse::Options {
-            calibrate: self.calibrate,
-            aim_mode: self
-                .aim_mode
-                .as_deref()
-                .map(str::parse)
-                .transpose()?
-                .unwrap_or_default(),
-            calibration_hold: self
-                .calibration_hold
-                .map(CalibrationHold::resolve)
-                .transpose()?,
-            binding,
-            flick_stick,
-            flick_engage_percent: self.flick_engage_percent,
-            flick_duration_ms: self.flick_duration_ms,
-            flick_stick_side: match self.flick_stick_side.as_deref() {
-                Some("left") => joyshockrust_core::StickSide::Left,
-                None | Some("right") => joyshockrust_core::StickSide::Right,
-                Some(_) => return Err("gyro.flick_stick_side must be left or right".into()),
-            },
-            flick_axial_threshold_deg: self
-                .flick_axial_threshold_deg
-                .map(validate_flick_axial_threshold)
-                .transpose()?,
-            flick_steering_sensitivity: self.flick_steering_sensitivity,
-            response,
-            game_calibration: GameCalibration::new(
-                self.real_world_calibration.unwrap_or(1.0),
-                self.in_game_sens.unwrap_or(1.0),
-            )?,
-            sensitivity: gyro_mouse::Sensitivity::from_profile(
-                self.sensitivity_x,
-                self.sensitivity_y,
-            )?,
-        })
+fn resolve_gyro(
+    settings: Gyro,
+    touchpad: Option<&touchpad::Grid>,
+) -> Result<gyro_mouse::Options, Box<dyn Error>> {
+    let flick_stick = settings
+        .flick_stick
+        .map(gyro_mouse::validate_flick_scale)
+        .transpose()?;
+    if settings
+        .flick_engage_percent
+        .is_some_and(|value| !(MIN_FLICK_ENGAGE_PERCENT..=100.0).contains(&value))
+    {
+        return Err("Flick Stick engagement must be between 30 and 100 percent".into());
     }
+    if settings
+        .flick_duration_ms
+        .is_some_and(|value| !(MIN_FLICK_DURATION_MS..=MAX_FLICK_DURATION_MS).contains(&value))
+    {
+        return Err("Flick Stick duration must be between 10 and 500 ms".into());
+    }
+    if settings
+        .flick_steering_sensitivity
+        .is_some_and(|value| !(0.0..=1.0).contains(&value))
+    {
+        return Err("Flick Stick steering sensitivity must be between 0 and 1".into());
+    }
+    let resolve_input = |name: &str| -> Result<DigitalInput, String> {
+        if let Some(spec) = name.strip_prefix("touch:") {
+            let region = touchpad
+                .ok_or("gyro touch binding requires a [touchpad] grid")?
+                .parse_region(spec)?;
+            return Ok(DigitalInput::Touch(region));
+        }
+        gyro_gate::button_by_name(name)
+            .map(DigitalInput::Button)
+            .ok_or_else(|| format!("unknown gyro binding button: {name}"))
+    };
+    let binding = match settings.binding {
+        None => Binding::Always,
+        Some(GyroBinding::Hold(name)) => Binding::Hold(resolve_input(&name)?),
+        Some(GyroBinding::DisableWhileHeld(name)) => {
+            Binding::DisableWhileHeld(resolve_input(&name)?)
+        }
+        Some(GyroBinding::Toggle(name)) => Binding::Toggle(resolve_input(&name)?),
+        Some(GyroBinding::TapHold(name)) => Binding::TapHold(resolve_input(&name)?),
+        Some(GyroBinding::DoubleTap(name)) => Binding::DoubleTap(resolve_input(&name)?),
+        Some(GyroBinding::Chord(spec)) => gyro_gate::parse_chord(&spec, resolve_input)?,
+        Some(GyroBinding::Trigger(spec)) => Binding::AnalogTrigger(TriggerGate::parse(&spec)?),
+    };
+    let [threshold, start, end, multiplier] = GyroResponse::default().values();
+    let mut response = GyroResponse::new(
+        settings.threshold_dps.unwrap_or(threshold),
+        settings.accel_start_dps.unwrap_or(start),
+        settings.accel_end_dps.unwrap_or(end),
+        settings.accel_multiplier.unwrap_or(multiplier),
+    )?;
+    if let Some(enabled) = settings.accel_enabled {
+        response = response.with_acceleration_enabled(enabled);
+    }
+    Ok(gyro_mouse::Options {
+        calibrate: settings.calibrate,
+        aim_mode: settings
+            .aim_mode
+            .as_deref()
+            .map(str::parse)
+            .transpose()?
+            .unwrap_or_default(),
+        calibration_hold: settings
+            .calibration_hold
+            .map(resolve_calibration_hold)
+            .transpose()?,
+        binding,
+        flick_stick,
+        flick_engage_percent: settings.flick_engage_percent,
+        flick_duration_ms: settings.flick_duration_ms,
+        flick_stick_side: match settings.flick_stick_side.as_deref() {
+            Some("left") => joyshockrust_core::StickSide::Left,
+            None | Some("right") => joyshockrust_core::StickSide::Right,
+            Some(_) => return Err("gyro.flick_stick_side must be left or right".into()),
+        },
+        flick_axial_threshold_deg: settings
+            .flick_axial_threshold_deg
+            .map(validate_flick_axial_threshold)
+            .transpose()?,
+        flick_steering_sensitivity: settings.flick_steering_sensitivity,
+        response,
+        game_calibration: GameCalibration::new(
+            settings.real_world_calibration.unwrap_or(1.0),
+            settings.in_game_sens.unwrap_or(1.0),
+        )?,
+        sensitivity: gyro_mouse::Sensitivity::from_profile(
+            settings.sensitivity_x,
+            settings.sensitivity_y,
+        )?,
+    })
 }
 
 #[cfg(test)]

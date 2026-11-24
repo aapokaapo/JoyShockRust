@@ -6,9 +6,9 @@ use std::{
 };
 
 use evdev::{AbsoluteAxisCode, AttributeSetRef, PropType, raw_stream::RawDevice};
+use joyshockrust_config::profile::Touchpad;
 use joyshockrust_core::{Button, Buttons};
 use joyshockrust_input::{DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH, TouchContact};
-use serde::Deserialize;
 
 use crate::hidraw;
 
@@ -91,24 +91,6 @@ fn matches_touchpad(
         })
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Config {
-    columns: usize,
-    rows: usize,
-    #[serde(default)]
-    regions: Vec<RegionConfig>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RegionConfig {
-    column: usize,
-    row: usize,
-    touch: Option<String>,
-    click: Option<String>,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Region {
     touch: Option<Button>,
@@ -157,35 +139,33 @@ pub enum ClickState {
     Mapped(Button),
 }
 
-impl Config {
-    pub fn resolve(self) -> Result<Grid, &'static str> {
-        let size = GridSize::new(self.rows, self.columns)
-            .ok_or("touchpad grid must have between 1 and 25 cells")?;
-        let mut regions = vec![None; size.count()];
-        for region in self.regions {
-            let index = size
-                .cell_index(region.row, region.column)
-                .ok_or("touchpad region row or column is outside the grid")?;
-            if regions[index].is_some() {
-                return Err("duplicate touchpad region");
-            }
-            let touch = region
-                .touch
-                .as_deref()
-                .map(super::gamepad::parse_target)
-                .transpose()?;
-            let click = region
-                .click
-                .as_deref()
-                .map(super::gamepad::parse_target)
-                .transpose()?;
-            if touch.is_none() && click.is_none() {
-                return Err("touchpad region needs a touch or click binding");
-            }
-            regions[index] = Some(Region { touch, click });
+pub fn resolve(settings: Touchpad) -> Result<Grid, &'static str> {
+    let size = GridSize::new(settings.rows, settings.columns)
+        .ok_or("touchpad grid must have between 1 and 25 cells")?;
+    let mut regions = vec![None; size.count()];
+    for region in settings.regions {
+        let index = size
+            .cell_index(region.row, region.column)
+            .ok_or("touchpad region row or column is outside the grid")?;
+        if regions[index].is_some() {
+            return Err("duplicate touchpad region");
         }
-        Ok(Grid { size, regions })
+        let touch = region
+            .touch
+            .as_deref()
+            .map(super::gamepad::parse_target)
+            .transpose()?;
+        let click = region
+            .click
+            .as_deref()
+            .map(super::gamepad::parse_target)
+            .transpose()?;
+        if touch.is_none() && click.is_none() {
+            return Err("touchpad region needs a touch or click binding");
+        }
+        regions[index] = Some(Region { touch, click });
     }
+    Ok(Grid { size, regions })
 }
 
 impl Grid {

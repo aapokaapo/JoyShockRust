@@ -85,3 +85,70 @@ impl<Effect: Default> TriggerProfile<Effect> {
         trigger_travel_limit(self.travel_limit_percent.or(self.full_travel_percent))
     }
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Gyro {
+    #[serde(default)]
+    pub calibrate: bool,
+    pub aim_mode: Option<String>,
+    pub calibration_hold: Option<CalibrationHold>,
+    pub flick_stick: Option<f64>,
+    pub flick_stick_side: Option<String>,
+    pub flick_engage_percent: Option<f64>,
+    pub flick_duration_ms: Option<f64>,
+    pub flick_axial_threshold_deg: Option<f64>,
+    pub flick_steering_sensitivity: Option<f64>,
+    pub threshold_dps: Option<f64>,
+    pub accel_start_dps: Option<f64>,
+    pub accel_end_dps: Option<f64>,
+    pub accel_multiplier: Option<f64>,
+    pub accel_enabled: Option<bool>,
+    pub sensitivity_x: Option<f32>,
+    pub sensitivity_y: Option<f32>,
+    pub real_world_calibration: Option<f64>,
+    pub in_game_sens: Option<f64>,
+    pub binding: Option<GyroBinding>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalibrationHold {
+    pub button: String,
+    pub hold_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(
+    tag = "mode",
+    content = "input",
+    rename_all = "kebab-case",
+    deny_unknown_fields
+)]
+pub enum GyroBinding {
+    Hold(String),
+    DisableWhileHeld(String),
+    Toggle(String),
+    TapHold(String),
+    DoubleTap(String),
+    Chord(String),
+    Trigger(String),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Touchpad {
+    pub columns: usize,
+    pub rows: usize,
+    #[serde(default)]
+    pub regions: Vec<RegionConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegionConfig {
+    pub column: usize,
+    pub row: usize,
+    pub touch: Option<String>,
+    pub click: Option<String>,
+}
