@@ -1,30 +1,45 @@
 # Product requirements
 
 ## Users and platform
-Linux gamers using controllers with gyroscopes, especially DualSense Edge over USB on Fedora/Wayland with Steam/Proton. The daemon must also work without a desktop session where permissions permit. GUI comes later.
 
-## P0 (minimum usable product)
-- Discover and connect one wired DualSense Edge using hidraw.
-- Read and normalize buttons, sticks, triggers, gyroscope and accelerometer with validated reports.
-- Perform gyro calibration and persistent profile load/save outside the motion crate.
-- Map gyro to relative mouse movement; basic buttons/sticks to virtual output.
-- Handle disconnect/reconnect cleanly, without stuck buttons.
-- Load TOML profile, provide basic CLI diagnostics and run as a systemd user service.
-- Produce deterministic replay tests and timing benchmarks.
+JoyShockRust targets Linux gamers using a DualSense or DualSense Edge.
+The primary desktop test environment is Fedora on Wayland with
+Steam/Proton. The bridge also runs without the desktop companions when the
+user has the required device access.
 
-## P1
-- Advanced mappings: tap/hold/double-tap, layers, chords, trigger thresholds, response curves, gyro gating, flick stick.
-- Per-game profiles and reload, USB DualSense, Bluetooth Edge, multi-controller support.
-- Virtual Xbox-compatible output where games recognize it; compatibility testing.
+## Release scope
 
-## P2
-- Other Sony/Nintendo controllers, touchpad, feedback/rumble, battery, additional virtual controller profiles, GUI.
+- Run in the background with a tray control and optional login startup.
+  Offer a headless user service and CLI for diagnostics and profile control.
+- Use one active physical controller over USB or Bluetooth. On startup,
+  prefer the remembered controller, fall back to an eligible device, or
+  wait for hotplug. Switch controllers without coupling the choice to the
+  active profile.
+- Output a virtual gamepad and optional relative mouse or keyboard. Keep
+  output lifetime, release events and reconnect behavior predictable.
+  Offer Xbox Series X|S compatibility and retain generic and Xbox 360 choices.
+- Support controller and keyboard/mouse mappings, including gestures,
+  layers, analog trigger stages, touch zones, and per-stick direction keys
+  with inner and outer zones. The editor selects one output type for a
+  physical button, with independent gestures within that type.
+- Offer device-axis gyro aim, gravity-referenced fusion aim, per-axis
+  sensitivity and Flick Stick. Guide stationary gyro calibration and
+  per-game real-world calibration, with visible feedback and controller
+  navigation.
+- Let users create, edit and apply TOML profiles. In the tray, show
+  controller status and report rate, and battery information on Bluetooth.
+  Offer separate gyro mouse and gamepad switches plus a shared master switch.
+- Treat rumble, calibration haptics and input visibility as
+  transport- or game-dependent compatibility features.
 
-## Out of scope for first release
-- Full proprietary DualSense emulation without evidence and interoperability tests.
-- Universal physical-controller hiding through environment variables.
-- Root-required daemon as default; custom real-time scheduling as default.
-- Cross-platform abstractions that compromise the Linux implementation.
+## Acceptance and future scope
 
-## Feature parity
-Use `FEATURE_MATRIX.md` to track original JSM behavior, Rust implementation status and test evidence; do not equate conceptual similarity with parity.
+The [implementation plan](IMPLEMENTATION_PLAN.md) tracks current work and
+release priorities. The [feature matrix](FEATURE_MATRIX.md) shows the
+evidence per feature, including where hardware or game tests are still
+needed.
+
+Simultaneous active controllers, additional controller families, native
+DualSense HID emulation, system-wide device hiding and cross-platform
+support are outside the current release scope. Use the
+[visibility contract](OUTPUT_AND_VISIBILITY.md) for the per-launch SDL option.

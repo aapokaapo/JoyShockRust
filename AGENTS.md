@@ -23,7 +23,7 @@ You are implementing a new Rust project, not translating C++ mechanically. Read 
 - Never silently change locked architecture decisions; propose an ADR first.
 
 ## Required documentation
-Maintain `docs/FEATURE_MATRIX.md`, `docs/DECISIONS.md`, and `docs/IMPLEMENTATION_PLAN.md` as work proceeds. Add a source link and date to external technical claims.
+Maintain the root files `FEATURE_MATRIX.md`, `DECISIONS.md`, and `IMPLEMENTATION_PLAN.md` as work proceeds. Add a source link and date to external technical claims.
 
 ## Scope and permissions
 Do not push commits, modify upstream repositories, install udev rules, change permissions or alter system configuration without explicit user approval. Do not hide devices globally by default.

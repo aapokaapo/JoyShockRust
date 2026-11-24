@@ -1,56 +1,68 @@
 # Architecture and flow
 
+The Linux bridge owns one active DualSense or DualSense Edge session over
+USB or Bluetooth. The GTK editor and system tray run as separate processes.
+The bridge can also run from the CLI or as a user service without the tray.
+
 ```mermaid
-flowchart TD
-  HID[DualSense Edge USB / Bluetooth] --> RAW[hidraw fd]
-  RAW --> READY[epoll readiness / report read]
-  READY --> PARSE[Transport-specific parser]
-  PARSE --> NORM[Normalized timestamped report]
-  NORM --> ENGINE[Dedicated per-controller processing thread]
-  TIMER[Deadline scheduler] --> ENGINE
-  ENGINE --> MOTION[Pure deterministic motion crate]
-  ENGINE --> MAP[Mapping state machines]
-  MOTION --> DISPATCH[Output state / dispatch]
-  MAP --> DISPATCH
-  DISPATCH --> UINPUT[uinput keyboard/mouse/gamepad]
-  DISPATCH --> UHID[Optional UHID virtual HID]
-  UINPUT --> GAMES[Linux games / Proton]
-  UHID --> GAMES
-  CLI[CLI / future GUI] <--> IPC[Unix socket control plane]
-  IPC --> CONFIG[TOML + validated snapshots]
-  CONFIG --> ENGINE
-  SYSTEMD[systemd --user] -. lifecycle .-> ENGINE
+flowchart LR
+  PAD[DualSense / DualSense Edge] --> HID[hidraw and udev]
+  HID --> LOOP[Single-session readiness loop]
+  LOOP --> INPUT[Report decoder and device timebase]
+  INPUT --> MOTION[Gyro aim / sensor fusion]
+  INPUT --> MAP[Button, stick and touch mapping]
+  MOTION --> OUT[uinput]
+  MAP --> OUT
+  OUT --> GAME[Desktop and games]
+  OUT -. rumble .-> EVDEV[Physical evdev]
+  EVDEV -. feedback .-> PAD
+  UI[CLI / tray / editor] <--> IPC[Unix status and command sockets]
+  IPC <--> LOOP
+  SETTINGS[Profiles, controller preference and stored bias] <--> LOOP
+  SYSTEMD[systemd user units] -. lifecycle .-> UI
+  SYSTEMD -. lifecycle .-> LOOP
 ```
 
-## Current implementation
+## Runtime and scheduling
 
-The Linux bridge owns one wired controller session, waits for hidraw readiness
-with `poll`, and drains reports in bounded batches. Udev supplies discovery
-and reconnect. The input and motion libraries are separate from Linux I/O.
-The diagram above shows the target architecture, including the planned deadline
-scheduler, control plane and additional transports.
+The bridge waits with `poll` on hidraw, IPC and optional force-feedback
+descriptors. Udev discovery waits for hotplug when no eligible controller
+is open. Readable hidraw reports are decoded in order in bounded
+nonblocking batches. The next keyboard gesture deadline is part of the
+same wait. Status requests can be served between full batches. This keeps
+device reads, configuration changes and output state on one owner.
+[Report loop](crates/joyshockrust-linux/src/main.rs) · [Wait and reload](crates/joyshockrust-linux/src/reload.rs)
 
-## Threads and scheduling
-Start with one processing thread per controller. It owns the parser, mapping and motion state, and preferably submits output directly. A control-plane thread owns IPC, configuration persistence and diagnostics. Timer deadlines are integrated into the same processing event loop; don't spin when idle. A read-ready event may contain multiple reports: drain until EAGAIN, preserving order. Bound the amount of work per wakeup to avoid starvation; benchmark any batching.
+The logical control plane uses local Unix sockets. There is no separate
+IPC thread for the bridge's command and status loop. Controller selection,
+mapping profile and calibration are stored separately. Session setup can
+open device handles and read settings. Calibration persistence and PCM
+haptics use worker paths when needed. The steady-state report path avoids
+filesystem work, blocking IPC and shared configuration locks.
+[Discovery](crates/joyshockrust-linux/src/discovery.rs) · [Calibration storage](crates/joyshockrust-linux/src/gyro_calibration.rs) · [Haptics](crates/joyshockrust-linux/src/haptics.rs)
 
-## Suggested workspace (adjust only with evidence)
-- `joyshockrust-core`: normalized controller types.
-- `joyshockrust-input`: device-specific report decoding, factory calibration and sensor timebase.
-- `joyshockrust-motion`: pure deterministic calibration, fusion and gyro mapping math.
-- `joyshockrust-mapping`: buttons, triggers, sticks and deadline-driven actions.
-- `joyshockrust-output`: output traits and state diffing.
-- `joyshockrust-linux`: uinput/UHID, udev, fd/event-loop helpers.
-- `joyshockrust-config`: TOML, validation, migration and persistence.
-- `joyshockrust-ipc`: versioned Unix socket protocol.
-- `joyshockrust-daemon`: lifecycle and orchestration.
-- `joyshockrust-cli`: inspection and commands.
+The tray starts and stops the user service and uses XDG autostart for its
+login preference. The editor validates and applies profiles through the
+bridge CLI. The bridge exposes a calibrated IMU snapshot through its
+status socket. The stick preview reads the selected hidraw node while
+visible. Desktop refresh timers are independent of bridge report timing.
+[Desktop lifecycle](DECISIONS.md#desktop-process-lifecycle) · [Live IMU](crates/joyshockrust-editor/src/imu_monitor.rs) · [Stick preview](crates/joyshockrust-editor/src/flick_preview.rs)
 
-Do not create all crates prematurely; a few coherent crates are better than artificial boundaries. GUI is a separate future client of IPC.
+## Workspace
+
+| Crate | Responsibility |
+|---|---|
+| `joyshockrust-core` | Transport-neutral controller state. |
+| `joyshockrust-input` | USB and Bluetooth parsing, factory conversion and device timebase. |
+| `joyshockrust-motion` | Deterministic stationary calibration, gyro and fusion aim, aim response and game calibration math. |
+| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, TOML, status/control IPC, mapping, uinput and feedback. |
+| `joyshockrust-tray` | StatusNotifierItem, desktop lifecycle and calibration launch. |
+| `joyshockrust-editor` | GTK 4/libadwaita profile editing and Wayland calibration windows. |
 
 ## Key invariants
-- One owner of each controller's mutable runtime state.
-- No mutex shared with IPC in the per-report path.
-- Input samples are timestamped and ordered; output changes are explicit.
-- Physical transport, normalization, motion, mapping and output are separately testable.
-- On disconnect: release active virtual inputs and close resources deterministically.
-- Virtual devices must not be rediscovered as physical inputs.
+
+- Keep transport decoding, normalized controls, motion, mappings and output independently testable.
+- Preserve decoded report order. Handle repeated sensor timestamps, resets, gaps and wraparound explicitly.
+- Release held virtual inputs on disconnect or controller switch and close old devices before opening replacements.
+- Keep controller selection independent of the active profile. A session uses one physical controller.
+- Keep the virtual devices outside physical discovery. Apply game visibility policies separately from the input loop.

@@ -2,14 +2,24 @@
 
 Each phase requires tests, documentation, a runnable demonstration when appropriate, and a clear hardware-validation status. Do not advance on unverified assumptions.
 
-## Status on 2026-11-22
+## Current status
 
-Phase 6 compatibility is the current development focus. Phases 0–3 established
-source evidence, captured USB replay, a Linux USB input/output bridge and
-opt-in gyro aiming. Hardware evidence is partial. Residual bias calibration,
-per-axis aiming accuracy and timing benchmarks still need validation.
-Profiles, service integration and the control plane are Phase 5 work.
-See the [minimum usable product requirements](PRODUCT_REQUIREMENTS.md#p0-minimum-usable-product).
+Updated 2026-11-24 against `d761a87`. The desktop tray and editor
+(Phase 8) are implemented and are the current acceptance focus. Device and
+game compatibility (Phase 6) and measured performance (Phase 7) still have
+open work. Phase numbers group related deliverables. They do not imply
+that every acceptance check in an earlier phase has passed.
+
+| Area | Shipped | Next acceptance step |
+|---|---|---|
+| Desktop controls | Tray lifecycle and telemetry, independent controller/profile selection, guided calibration, and a GTK/Wayland editor with live previews and exclusive per-button routing. | Verify the latest editor on Fedora with a physical controller. Check keyboard capture, output isolation, tray profile restore, and calibration navigation. |
+| Motion and calibration | Device-axis and fusion aim, stationary bias storage, RWC, gyro response and selectable Flick Stick. | Retest rest drift and slow aiming with acceleration on/off in both aim modes. Verify IMU telemetry, calibrated turn angles and haptic cues. |
+| Compatibility | One active DualSense or Edge, USB/Bluetooth, uinput identities, rumble and optional SDL filtering. | Exercise controller switching, repeat hotplug and record named native SDL and Proton game results. |
+| Performance | Report counters, zero-allocation tests on two synthetic paths, and a live benchmark CLI. | Record USB/Bluetooth idle, active and contention baselines with the host, firmware and transport identified. |
+
+Use the [current acceptance priorities](TESTING_AND_PERFORMANCE.md#current-acceptance-priorities)
+for the physical test sequence and the [feature matrix](FEATURE_MATRIX.md)
+for evidence by feature.
 
 ## Phase 0 — research and feasibility
 Review both JSM repositories and Linux hid-playstation for scheduling, protocol, calibration, permissions, kernel coexistence, mapping semantics and licensing. The [reference analysis](docs/REFERENCE_ANALYSIS.md) records exact source revisions. The [feature matrix](FEATURE_MATRIX.md) and [decision log](DECISIONS.md) record findings and open items.
@@ -47,17 +57,38 @@ The Linux bridge accepts a hidraw node explicitly or uses udev discovery with au
 ## Phase 3 — pure motion engine
 Implement deterministic IMU processing, calibration, sensor fusion and gyro-to-mouse with replay fixtures. **Exit:** calibrated gyro aiming verified on real hardware and replay tests.
 
-The motion engine accepts calibrated IMU samples, applies a supplied gyro bias, and computes deterministic aim deltas and a gravity direction. The opt-in Linux gyro mouse reads USB factory calibration, applies the conversion, and submits relative uinput motion. An additional opt-in startup mode estimates residual bias over a stable window on each connection. Synthetic tests cover motion, bias estimation and the calibration-to-mouse calculation. Persistent profiles, auto-bias learning and [remaining physical gyro checks](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance) remain open.
+The motion crate provides deterministic device-axis aim, gravity-referenced
+fusion aim and stationary bias estimation. The Linux adapter applies factory
+calibration, selects the aim path, and emits relative mouse events. Guided and
+hold-triggered calibration can store a correction per controller. Replay
+covers the math and calibration-to-mouse path. Physical follow-up covers
+drift with acceleration, slow movement, and aim across controller poses.
+[Motion contract](MOTION_CONTRACT.md) · [Gyro acceptance](TESTING_AND_PERFORMANCE.md#usb-gyro-mouse-acceptance)
 
 ## Phase 4 — mapping engine
 Add remapping, tap/hold/double-tap, chords, layers, trigger modes, stick curves and Flick Stick with deadline scheduler. **Exit:** deterministic state-machine tests and no unnecessary global polling.
 
-Digital holds and toggles passed the user's hardware check. The next increment adds analog L2/R2 gating with separate engagement and release thresholds. Automated tests cover hysteresis, invalid thresholds and fresh session state. The analog gate passed the user's hardware test. The tap/hold gyro binding classifies a press at the 200 ms deadline using monotonic report arrival time. Its effects apply at report boundaries. Double-tap gyro toggling also uses monotonic report times and a 300 ms release-to-release window. A two-button gyro chord is available with either press order. The user reported that the gyro chord worked on hardware. Both virtual sticks now support an optional radial power curve, covered by synthetic tests. The user reported that the stick curve worked as expected. Virtual gamepad button remapping supports simultaneous rules and shared output buttons. The user reported that button remapping worked on hardware. Multiple modifiers can each select a button layer over the base remaps. The selected layer remains active until its modifier is released. A fresh modifier press selects the next layer. Flick Stick emits experimental right-stick turns through the virtual mouse. Initial turn, angle wrap and gap handling are synthetic-tested. Physical game calibration and general deadline-driven output remain open.
+Digital and analog gyro activation, base remaps, a single active hold
+layer, radial stick curves and calibrated Flick Stick are implemented.
+Keyboard and mouse gesture deadlines run in the readiness loop, including
+when hidraw is idle. The editor can assign one output family per physical
+button, suppressing passthrough for explicit keyboard or mouse routes.
+Existing TOML profiles keep their previous routing until edited. The user
+verified early gyro activation, remaps, layers and stick curves. Current
+output isolation and Flick Stick tuning remain physical acceptance items.
+[Remap layer acceptance](TESTING_AND_PERFORMANCE.md#remap-layer-acceptance) · [Keyboard and mouse acceptance](TESTING_AND_PERFORMANCE.md#keyboard-and-mouse-profile-acceptance)
 
 ## Phase 5 — config, IPC, CLI and systemd
 Versioned TOML, snapshots, Unix socket protocol, diagnostics, udev permissions, systemd user service. **Exit:** live reload at sample boundaries and service restart/reconnect tested.
 
-The first Phase 5 increment loads a versioned TOML profile at startup and validates it before opening devices. An offline profile check and a device diagnostics command are available. Diagnostics reports udev candidates and open errors for hidraw and uinput. A systemd user unit can launch a startup profile. The user verified startup and USB reconnect in a Fedora user session. SIGHUP reload validates the profile before replacing settings and applies them between report batches. The user verified valid and invalid reloads on Fedora. Read-only IPC reports USB session and gyro configuration status through the service socket. The user verified that USB status changes on Fedora. The status snapshot now reports the last reload result, and the service stops retrying an invalid startup profile. The first write command reloads the current profile and returns its result to the caller. The systemd user unit uses this command for reload. The user verified synchronous reload success and rejection on Fedora. The user verified valid and invalid preset installation on Fedora. Per-controller gyro calibration persistence remains planned.
+TOML v1 startup and live profile loads validate before replacing active
+settings. The control socket supports reload, load, unload and output
+toggles. Separate status queries show connection and reload results.
+The user's Fedora tests covered user-service startup, USB reconnect,
+valid and rejected reloads, synchronous systemd reload results and
+atomic preset installation. Controller preferences, the selected profile
+and stationary calibration use separate persistence paths.
+[Profile reload acceptance](TESTING_AND_PERFORMANCE.md#profile-reload-acceptance) · [User service](README.md#systemd-user-service)
 
 ## Phase 6 — compatibility and transports
 Bluetooth DualSense Edge, DualSense, additional controllers, virtual output compatibility, optional game-launch visibility helpers. **Exit:** per-device and per-game compatibility evidence.
@@ -68,11 +99,11 @@ including the Series trigger range and Share button. The user confirmed
 Xbox Series output on hardware. Per-game compatibility still needs evidence.
 [Xbox output acceptance](TESTING_AND_PERFORMANCE.md#xbox-output-acceptance)
 
-The opt-in Bluetooth path discovers a paired DualSense Edge through udev and
+The Bluetooth path discovers a paired DualSense Edge through udev and
 checks the descriptor bus and model. The parser verifies full input and
 factory calibration CRCs. The user verified Bluetooth on hardware.
-Automatic transport selection prefers an accessible USB node when opening a
-session and falls back to Bluetooth. The user verified switching after
+Automatic transport selection first looks for the remembered eligible
+controller. Without a match it prefers USB candidates before Bluetooth. The user verified switching after
 disconnect. The Linux bridge also supports standard DualSense `0ce6` on
 both transports. The common layout and model-specific button handling
 have synthetic coverage. The user verified both models on hardware.
@@ -93,7 +124,8 @@ evdev. The event loop serves feedback while controller input is idle.
 The user verified that forwarding survives reconnection over USB and
 Bluetooth. Version 1 profiles can set the output identity and rumble for
 a user service. Controller transport is configured separately. The user
-verified USB and Bluetooth pulse tests. Output changes apply on restart.
+verified USB and Bluetooth pulse tests. Rumble settings apply on restart.
+Gamepad identity can change via a live profile load.
 [Rumble forwarding acceptance](TESTING_AND_PERFORMANCE.md#rumble-forwarding-acceptance)
 
 Battery and charging state are decoded on both transports and exposed in
@@ -102,12 +134,13 @@ the new fields on Fedora. [Battery status acceptance](TESTING_AND_PERFORMANCE.md
 
 The optional SDL launcher applies a per-process ignore list for supported
 physical DualSense IDs. Automated tests cover argument forwarding, existing
-filters and launch errors. Named game and backend checks remain open.
+filters and launch errors. The user verified the Steam controller list
+with the filter. Named game and backend checks remain open.
 [SDL visibility acceptance](TESTING_AND_PERFORMANCE.md#per-game-sdl-visibility-acceptance)
 
 Profiles define independent horizontal and vertical gyro scales. A CLI
-request can also apply a preset to the running service for the current
-session. The startup file remains available through the existing reload
+request can also apply a preset to the running service, which remembers its selection for
+service startup. The startup file remains available through the existing reload
 command. [Live gyro sensitivity acceptance](TESTING_AND_PERFORMANCE.md#live-gyro-sensitivity-acceptance)
 
 The profile scales gyro and Flick Stick with a per-game factor. The
@@ -117,8 +150,8 @@ result to the selected profile. The user verified measurement and saving
 after four full in-game turns. The angular accuracy check after applying
 the profile remains open. [Game calibration acceptance](TESTING_AND_PERFORMANCE.md#game-sensitivity-calibration-acceptance)
 
-## Phase 7 — optimize, harden, prepare GUI
-Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates, multiple controllers. Stabilize IPC for GUI. **Exit:** measured performance report and documented limitations.
+## Phase 7 — performance and robustness
+Benchmark p50/p95/p99 and jitter, memory, allocations and CPU. Stress hotplug, errors, high report rates and switching among connected candidates with one active controller. **Exit:** measured performance report and documented limitations.
 
 The first increment adds per-connection HID decoder counts and an
 approximate host-side decoded report rate to the service status reply.
@@ -310,8 +343,8 @@ keyboard or mouse trigger actions. Each trigger can keep both stages active
 at full travel. Live profile application replaces the virtual gamepad when
 its type changes.
 
-Next, verify the tactile cues, Bluetooth behavior and both desktop
-calibration workflows on hardware.
+Next, run the [current acceptance priorities](TESTING_AND_PERFORMANCE.md#current-acceptance-priorities)
+against the current branch on Fedora/Wayland.
 
 ## Change control
-Update `docs/DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.
+Update `DECISIONS.md` before architectural deviations. Never fake hardware results or benchmark numbers.

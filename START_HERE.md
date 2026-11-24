@@ -1,18 +1,20 @@
-# Original project kickoff
+# Start here
 
-The prompt below records the Phase 0 assignment. For current work, start with
-the [implementation plan](IMPLEMENTATION_PLAN.md), [feature matrix](FEATURE_MATRIX.md)
-and [test evidence](TESTING_AND_PERFORMANCE.md). The current focus is
-desktop controls for the background controller bridge.
+JoyShockRust is a Linux controller bridge for DualSense and DualSense Edge.
+It can run on its own as a user service or with a tray and a Wayland profile
+editor.
 
-You are the lead engineer building **JoyShockRust**, a new Linux-first Rust controller mapper. The attached project guide is authoritative. First read `AGENTS.md`, `README.md`, and every file in `docs/`.
+1. For installation, use the [systemd user service](README.md#systemd-user-service)
+   and [desktop tray](README.md#desktop-tray) instructions.
+2. For the current development focus, read the
+   [implementation plan](IMPLEMENTATION_PLAN.md#current-status).
+3. For what is implemented and how it was checked, read the
+   [feature matrix](FEATURE_MATRIX.md) and
+   [current acceptance priorities](TESTING_AND_PERFORMANCE.md#current-acceptance-priorities).
+4. For development, read the [repository instructions](AGENTS.md),
+   [architecture](ARCHITECTURE.md) and [local checks](README.md#local-checks).
 
-Start with **Phase 0 only**. Analyze these source repositories at specific commit SHAs:
-- https://github.com/aapokaapo/JoyShockMapper-systemd
-- https://github.com/Electronicks/JoyShockMapper
-
-Also inspect Linux `hid-playstation` and hidraw documentation. Identify which JoyShockMapper paths are callback-driven versus periodically polled, and distinguish source-confirmed reasons from hypotheses. Verify DualSense Edge USB HID report format, IMU timestamps/calibration, input permissions, kernel driver coexistence, and potential duplicate physical/virtual device exposure. Research licensing implications before borrowing implementation details.
-
-Create `docs/REFERENCE_ANALYSIS.md` with links to exact files/functions/commits; fill `FEATURE_MATRIX.md`; update `DECISIONS.md` with any open questions. Propose an evidence-backed minimal Rust workspace and a detailed Phase 1 task list with acceptance tests.
-
-**Do not implement the full application yet.** Ask for hardware captures or diagnostic output only when truly necessary. Do not invent tests, measurements or unsupported protocol details. When Phase 0 is complete, summarize evidence, unresolved risks and the precise next coding milestone, then await approval to begin Phase 1.
+The original project investigation is recorded in the
+[Phase 0 reference analysis](docs/REFERENCE_ANALYSIS.md). The
+[decision log](DECISIONS.md) retains the historical design decisions and
+implementation notes.

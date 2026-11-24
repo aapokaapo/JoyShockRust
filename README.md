@@ -1,6 +1,10 @@
 # JoyShockRust — development guide
 
-JoyShockRust is a **new Linux-first Rust controller mapper**, inspired by the behavior of [JoyShockMapper-systemd](https://github.com/aapokaapo/JoyShockMapper-systemd) and [upstream JoyShockMapper](https://github.com/Electronicks/JoyShockMapper). The initial workspace provides a pure DualSense Edge USB report parser and device timebase.
+JoyShockRust maps a DualSense or DualSense Edge on Linux to a virtual
+gamepad, keyboard or mouse. It supports USB and Bluetooth, a background
+user service, a tray and a native Wayland profile editor. The project draws
+on behavior from JoyShockMapper and JoyShockMapper-systemd.
+[JoyShockMapper-systemd](https://github.com/aapokaapo/JoyShockMapper-systemd) · [JoyShockMapper](https://github.com/Electronicks/JoyShockMapper)
 
 ## License
 
@@ -15,10 +19,10 @@ Correct controller behavior first; then low input-to-output latency, low jitter,
 - Rust stable, edition 2024; Linux first.
 - Direct **hidraw** controller acquisition for DualSense and DualSense Edge over USB or Bluetooth.
 - Event-driven report acquisition (`epoll`/nonblocking reads or equivalent), plus deadline-based timers for timed actions. **No global periodic polling loop by default.**
-- One dedicated processing thread per active controller initially; benchmark before changing.
+- One active controller session owns input, motion and output state.
 - Platform-agnostic, deterministic `joyshockrust-motion` crate; no I/O or runtime dependencies.
 - Linux `uinput` for keyboard/mouse/generic gamepad, and investigate `UHID` for protocol-faithful virtual controllers.
-- Independent control plane, Unix socket IPC, TOML profiles, systemd user service.
+- Local Unix socket control plane, TOML profiles and a systemd user service. The tray and editor run separately.
 - No Tokio in the hot path; use it in the control plane only if warranted.
 - Controller hiding through launch-environment settings is **optional, per-game, backend-specific**, never presumed universal.
 
@@ -35,16 +39,15 @@ Correct controller behavior first; then low input-to-output latency, low jitter,
 
 ## Status
 
-Development has started **Phase 6**, controller and game compatibility. The USB parser replays a
-300-report capture. The Linux virtual gamepad, USB reconnect, gyro mouse
-startup, and digital hold and toggle gates have user-reported hardware tests.
-The analog trigger gate also passed the user's hardware check. Tap/hold and
-double-tap have also passed the user's hardware check. The user also verified
-Xbox Series virtual output, Edge Bluetooth input and automatic transport
-switching. The user also verified standard DualSense input on hardware.
+The current focus is physical acceptance of the desktop controls and the
+latest button routing, gyro and Flick Stick changes. Earlier user tests
+confirmed controller input, reconnect and rumble on USB and Bluetooth,
+Xbox Series virtual output, Steam filtering and a four-turn game calibration
+run. See the test record for their scope. Hardware sign-off for the current
+editor and calibrated aim, game-specific compatibility and measured
+performance baselines remain open.
 
-See the [implementation plan](IMPLEMENTATION_PLAN.md), [test evidence](TESTING_AND_PERFORMANCE.md)
-and [source analysis](docs/REFERENCE_ANALYSIS.md).
+[Implementation plan](IMPLEMENTATION_PLAN.md#current-status) · [Feature matrix](FEATURE_MATRIX.md) · [Acceptance priorities](TESTING_AND_PERFORMANCE.md#current-acceptance-priorities)
 
 ## Local checks
 
@@ -115,9 +118,12 @@ relative. The command creates parent directories as needed and replaces an
 existing regular file. Symbolic link destinations are rejected. Reload the
 running service to apply the installed profile.
 
-The profile is loaded at startup. Send SIGHUP to the running bridge PID
-to reload it. Invalid edits leave the last valid configuration active. Choose the profile or the equivalent CLI
-mapping flags for that run. You can still pass a hidraw path with `--profile`.
+The profile is loaded at startup. Use `--reload-profile` or
+`systemctl --user reload joyshockrust.service` for a synchronous reload
+result. Invalid edits preserve the last valid configuration. A manually
+started bridge with reload support can also reload on SIGHUP. Choose the
+profile or the equivalent CLI mapping flags for that run. You can still
+pass a hidraw path with `--profile`.
 
 Set horizontal and vertical gyro sensitivity independently in the
 `[gyro]` table.
@@ -133,7 +139,7 @@ A value of 0 disables gyro motion on that axis. A sensitivity-only change
 keeps the existing gyro mouse and calibration. Flick Stick has its own
 sensitivity setting.
 
-With the user service running, load a preset into the current session.
+With the user service running, load a preset into the active bridge.
 
 ```sh
 "$HOME/.local/bin/joyshockrust-linux" --load-profile profiles/gyro-except-l2.toml
@@ -142,13 +148,13 @@ With the user service running, load a preset into the current session.
 This replaces the live mappings and gyro settings as a complete profile.
 The service replies after applying or rejecting it. Loading a preset or
 reloading the startup profile keeps the current controller selection.
-The profile can omit `[bridge]` to retain the running output settings.
-The loaded preset remains active until another profile command or a
-service restart. Use `--unload-profile` to restore default mappings and
-turn off profile-driven gyro and keyboard or mouse button output. The
-service keeps the selected controller and startup virtual gamepad settings.
-Use `--reload-profile` to restore the startup profile from disk.
-Use `--install-profile` to persist a preset for the next start.
+A profile that omits `[bridge].gamepad` uses the startup gamepad identity.
+The service remembers the loaded file or the **Default mappings** choice
+across restarts. If the remembered file cannot be loaded, it falls back to
+the startup profile. Use `--unload-profile` to select default mappings and
+clear profile-driven gyro and keyboard/mouse button output. Use
+`--reload-profile` to read and select the startup profile from disk.
+`--install-profile` writes the preset to disk.
 
 Use `[bridge]` for virtual output settings such as Xbox Series output
 and rumble.
@@ -209,6 +215,14 @@ To override the settings at startup for a single run, use `--usb`, `--bluetooth`
 `--auto-transport`, `--controller-model MODEL` or `--controller-id ID`.
 
 ### Keyboard and mouse profiles
+
+The editor stores exclusive physical-button routes in
+`[keyboard.button_output]`. For example, `cross = "keyboard"` keeps
+physical Cross out of virtual gamepad passthrough and allows keyboard
+gestures for that source. Use `"mouse"` for mouse actions. Assign the
+gesture separately in `[[keyboard.bindings]]`. Existing profiles without
+this setting retain their original passthrough behavior. For L2 or R2,
+an exclusive route also suppresses the analog gamepad axis.
 
 The [gyro and keyboard example](profiles/gyro-keyboard.toml) enables gyro
 mouse and Flick Stick, maps the left stick to WASD, and assigns three gestures
@@ -847,7 +861,9 @@ the loaded profile. A hold or toggle binding can still suppress mouse output.
 The `battery_state` and `battery_percent` fields report the controller's
 latest battery reading. The percentage is an estimate in coarse steps.
 A missing reading is shown as `none`, including when the controller is
-disconnected.
+disconnected. When factory calibration and a sample are available, the
+`imu` field contains gyro X/Y/Z in °/s followed by acceleration X/Y/Z in g.
+The active stationary bias is applied to the gyro values.
 The `reports_decoded` and `reports_rejected` fields count HID decoder
 results for the current connection. The `report_rate_hz` field estimates
 decoded reports per second using host time after the first successful read
@@ -971,8 +987,9 @@ The game's input backend determines whether the hint takes effect.
 
 ## DualSense and DualSense Edge over Bluetooth
 
-Pair the controller in the Linux Bluetooth settings, then select the
-Bluetooth bridge explicitly. USB discovery remains the default.
+Pair the controller in the Linux Bluetooth settings. The default
+automatic filter includes both USB and Bluetooth. Use `--bluetooth`
+to restrict this run to Bluetooth.
 
 ```sh
 cargo run --locked -p joyshockrust-linux -- --diagnose --bluetooth
@@ -984,10 +1001,10 @@ for pointer output. Bluetooth discovery accepts full reports with a valid
 checksum and waits for reconnection after the device disconnects.
 
 Use `--auto-transport` to accept either connection in one run. When opening
-a session, the bridge tries USB first and then Bluetooth. It keeps the chosen
-connection until it disconnects and creates fresh virtual devices for the
-next session. When both models are available on the same transport, the
-bridge tries the Edge first. The standard DualSense uses USB product ID
+a session, the bridge checks for the remembered eligible controller first.
+Without a match, it prefers USB before Bluetooth and Edge before standard
+DualSense within each transport. A session stays on its chosen controller
+until disconnect or an explicit controller change. The standard DualSense uses USB product ID
 `0ce6`. `--diagnose --auto-transport` lists candidates for both transports.
 
 ## Experimental gyro mouse

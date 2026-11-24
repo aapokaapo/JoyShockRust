@@ -1,15 +1,24 @@
 # HIDRAW input and hardware research
 
 ## Chosen interface
-Use `/dev/hidraw*` directly; discovery/hotplug through udev. Open nonblocking, register fd with `epoll` (or an equivalently measured Linux event API), read complete HID reports, and decode based on device identity, transport, report ID and length. Treat errors and device removal explicitly.
+Use `/dev/hidraw*` directly; discovery/hotplug through udev. Open nonblocking, wait for fd readiness with `poll`, read complete HID reports, and decode based on device identity, transport, report ID and length. Treat errors and device removal explicitly.
 
 ## Current evidence
 
-The stationary USB capture covers the wired report layout. The Linux bridge
-has been tested with a wired Edge. It uses USB ancestry and `HIDIOCGRAWINFO`
-to select a node, then waits for reads with `poll`. Annotated control and
-motion captures, versioned calibration evidence, and Bluetooth validation
-remain open. See the [hardware test record](TESTING_AND_PERFORMANCE.md).
+The bridge supports DualSense (`054c:0ce6`) and DualSense Edge
+(`054c:0df2`) over USB and Bluetooth. Discovery checks candidates through
+udev and verifies the opened node with `HIDIOCGRAWINFO`. The parser accepts
+full USB input reports (`0x01`, 64 bytes) and full Bluetooth input reports
+(`0x31`, 78 bytes with CRC). Battery and touch contacts are decoded on
+both transports. Factory calibration uses the transport-specific feature
+report parser. [Input parser](crates/joyshockrust-input/src/lib.rs) · [Factory calibration](crates/joyshockrust-input/src/calibration.rs) · [hidraw adapter](crates/joyshockrust-linux/src/hidraw.rs)
+
+The recorded Edge USB fixture contains stationary reports. Synthetic tests
+cover active controls, Bluetooth framing and timebase behavior. The user
+verified both controller models and validated USB and Bluetooth reconnect
+paths on their hardware. Labelled input and motion captures, firmware-specific
+calibration comparisons and broader permission checks remain open.
+[Hardware evidence](TESTING_AND_PERFORMANCE.md#current-acceptance-priorities)
 
 ## Hardware verification checklist
 - Confirm actual DualSense Edge VID/PID, USB interface selection and report formats against Linux `hid-playstation`, kernel headers, USB captures and real hardware. **Do not hard-code previously discussed report IDs/lengths without verification.**
@@ -24,7 +33,7 @@ remain open. See the [hardware test record](TESTING_AND_PERFORMANCE.md).
 Pure parser takes `(device_model, transport, &[u8], optional_receive_timestamp)` and returns a validated normalized report or structured error. No I/O, no allocations per report. Parse raw units separately from calibrated physical units. Verify CRC for formats that require it.
 
 ## Timing
-Prefer device timestamps when reliable; map them into a monotonic timebase with explicit rollover and resynchronization logic. Otherwise use `CLOCK_MONOTONIC` receive timestamps, noting added acquisition jitter. Never infer sample rate solely from daemon wakeup rate.
+Motion uses the device clock through the deterministic timebase. Device wrap, repeated or backward timestamps and gaps are explicit events. Structurally valid reports can still update controls when an IMU timestamp is rejected. Host receive time is maintained separately for gesture timing, report-rate estimates and benchmarks. [Timebase](crates/joyshockrust-input/src/timebase.rs)
 
 ## Security and robustness
 Validate lengths before indexing, check ranges and malformed packets, cap work per read cycle, and never trust device-reported counts without bounds. Detect hotplug and recover without stale device references.
