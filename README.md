@@ -3,8 +3,8 @@
 JoyShockRust maps a DualSense or DualSense Edge on Linux to a virtual
 gamepad, keyboard or mouse. It supports USB and Bluetooth, a background
 user service, a tray and a native Wayland profile editor. The project draws
-on behavior from JoyShockMapper and JoyShockMapper-systemd.
-[JoyShockMapper-systemd](https://github.com/aapokaapo/JoyShockMapper-systemd) · [JoyShockMapper](https://github.com/Electronicks/JoyShockMapper)
+on behavior from JoyShockMapper.
+[JoyShockMapper](https://github.com/Electronicks/JoyShockMapper)
 
 ## License
 
@@ -893,6 +893,84 @@ while the controller is disconnected.
 path when available and reads `none` when the device is absent.
 The status and reload sockets are under `$XDG_RUNTIME_DIR/joyshockrust/`
 and are removed when the service stops.
+
+## Uninstall
+
+These steps apply to the user installation above. Run them as the user
+who installed JoyShockRust. Use the same install root and XDG directories
+you used during installation.
+
+### Remove JoyShockRust and keep profiles and calibration
+
+1. Save any open profile edits and close the editor and calibration
+   windows. Stop any bridge or tray you started manually. If you installed
+   the tray unit, stop it first so it cannot start the bridge again.
+   Disable and stop the bridge while its unit file is still installed.
+
+   ```sh
+   systemctl --user stop joyshockrust-tray.service
+   systemctl --user disable --now joyshockrust.service
+   ```
+
+2. Remove the installed user units, application launcher and login
+   autostart entry. The systemd unit removes its runtime directory and
+   sockets on stop. For manual runs, remove any leftover sockets at the
+   paths you supplied to `--status-socket` and `--reload-socket` after all
+   JoyShockRust processes have exited.
+
+   ```sh
+   config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+   data_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
+   rm -f -- \
+     "$config_dir/systemd/user/joyshockrust.service" \
+     "$config_dir/systemd/user/joyshockrust-tray.service" \
+     "$config_dir/autostart/io.github.aapokaapo.JoyShockRust.desktop" \
+     "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+   systemctl --user daemon-reload
+   ```
+
+3. Uninstall the Cargo packages. If you installed only the bridge, pass
+   only `joyshockrust-linux`. For binaries installed by copying them
+   manually, remove the corresponding executable copies instead.
+
+   ```sh
+   cargo uninstall --root "$HOME/.local" \
+     joyshockrust-linux joyshockrust-tray joyshockrust-editor
+   ```
+
+4. If you installed the optional rumble rule, remove it, reload udev rules
+   and reconnect the controller. If you added `--launch-sdl` wrappers to
+   Steam launch options or other launchers, remove those entries as well.
+
+   ```sh
+   sudo rm -f -- /etc/udev/rules.d/70-joyshockrust-rumble.rules
+   sudo udevadm control --reload-rules
+   ```
+
+Your profiles, remembered controller and profile selection, and saved
+gyro calibration are kept under
+`${XDG_CONFIG_HOME:-$HOME/.config}/joyshockrust/`. To restore login startup
+after reinstalling, turn on **Start with system** again in the tray.
+
+### Also remove profiles and calibration
+
+Run the steps above first. Back up any profiles or calibration you want
+to keep. Then remove the JoyShockRust configuration directory. This
+deletes the startup profile, saved profiles, controller preferences,
+remembered active profile and per-controller gyro bias.
+
+```sh
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+if [ -e "$config_dir/joyshockrust" ] || [ -L "$config_dir/joyshockrust" ]; then
+  rm -rI -- "$config_dir/joyshockrust"
+fi
+```
+
+Review and remove any JoyShockRust profiles you saved elsewhere, such as
+files chosen in the editor or passed as explicit installation destinations.
+If you built JoyShockRust from a source checkout, run `cargo clean` there
+to remove its build artifacts. The source checkout can be deleted
+separately after saving any local work.
 
 ## Virtual gamepad on Linux
 

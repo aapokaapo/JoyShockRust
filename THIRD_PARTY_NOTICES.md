@@ -1,10 +1,8 @@
 # Third-party notices
 
-JoyShockRust takes inspiration from JoyShockMapper and JoyShockMapper-systemd.
-Their source was consulted for features such as Flick Stick and game
-sensitivity calibration. Both source revisions carry the same MIT notice,
-reproduced below. [JoyShockMapper](https://github.com/Electronicks/JoyShockMapper/blob/e148efe0b6ff4ad2ce0fc8c2560fa1028097b1a7/LICENSE.md)
-· [JoyShockMapper-systemd](https://github.com/aapokaapo/JoyShockMapper-systemd/blob/bb69784488937e0a5e21988b966eccd9f04d504e/LICENSE.md)
+JoyShockRust takes inspiration from JoyShockMapper. Its source documents
+features such as Flick Stick and game sensitivity calibration. Its MIT
+notice appears below. [JoyShockMapper](https://github.com/Electronicks/JoyShockMapper/blob/e148efe0b6ff4ad2ce0fc8c2560fa1028097b1a7/LICENSE.md)
 
 The [reference analysis](docs/REFERENCE_ANALYSIS.md) identifies the
 controller protocol and platform sources. The [USB replay fixture](crates/joyshockrust-input/tests/fixtures/dualsense_edge_usb.bin)
