@@ -20,6 +20,11 @@ paths on their hardware. Labelled input and motion captures, firmware-specific
 calibration comparisons and broader permission checks remain open.
 [Hardware evidence](TESTING_AND_PERFORMANCE.md#current-acceptance-priorities)
 
+Use diagnostics as the desktop user to check the effective access before
+installing any additional udev rules. The repository provides separate
+active-seat rules for supported hidraw nodes and for virtual input
+creation via uinput. [Device access setup](README.md#optional-device-access-rules)
+
 ## Hardware verification checklist
 - Confirm actual DualSense Edge VID/PID, USB interface selection and report formats against Linux `hid-playstation`, kernel headers, USB captures and real hardware. **Do not hard-code previously discussed report IDs/lengths without verification.**
 - Identify what hidraw exposes when `hid-playstation` is bound, and whether simultaneous kernel input devices cause double input.

@@ -279,6 +279,16 @@ connected, diagnostics reported a readable wired DualSense Edge at
 `/dev/hidraw6`. After unplugging, diagnostics reported no wired Edge nodes.
 `/dev/uinput` opened in read-write mode in both runs.
 
+Check the optional access rules statically with
+`udevadm verify dist/udev/*.rules` on a host with that subcommand. On a
+local desktop host without equivalent rules, run diagnostics over USB
+and Bluetooth for each supported controller. If a device reports
+`Permission denied`, install the corresponding fallback and rerun
+diagnostics as the same desktop user. Verify readable hidraw and
+read-write uinput access separately. Check the virtual output with the
+kernel uinput acceptance test. The ACL checks require physical device
+nodes and an active seat. [Optional access setup](README.md#optional-device-access-rules)
+
 ## User service acceptance
 
 Install and start the unit using the [service instructions](README.md#systemd-user-service).

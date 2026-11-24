@@ -90,6 +90,11 @@ atomic preset installation. Controller preferences, the selected profile
 and stationary calibration use separate persistence paths.
 [Profile reload acceptance](TESTING_AND_PERFORMANCE.md#profile-reload-acceptance) · [User service](README.md#systemd-user-service)
 
+Optional active-seat udev rules cover hidraw and uinput independently.
+Diagnostics determines which fallback the user needs. A desktop host
+without existing device rules is needed to verify real ACL changes.
+[Device access acceptance](TESTING_AND_PERFORMANCE.md#device-diagnostics-acceptance)
+
 ## Phase 6 — compatibility and transports
 Bluetooth DualSense Edge, DualSense, additional controllers, virtual output compatibility, optional game-launch visibility helpers. **Exit:** per-device and per-game compatibility evidence.
 

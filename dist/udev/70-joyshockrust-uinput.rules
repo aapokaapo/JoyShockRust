@@ -1,0 +1,2 @@
+# Optional fallback for virtual input creation by the active local user.
+ACTION!="remove", SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"

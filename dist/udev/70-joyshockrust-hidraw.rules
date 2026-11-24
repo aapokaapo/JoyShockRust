@@ -1,0 +1,2 @@
+# Optional fallback for active-seat access to DualSense and DualSense Edge HID reports.
+ACTION!="remove", SUBSYSTEM=="hidraw", KERNEL=="hidraw*", SUBSYSTEMS=="hid", KERNELS=="000[35]:054C:0CE6.*|000[35]:054C:0DF2.*", TAG+="uaccess"
