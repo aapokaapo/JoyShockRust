@@ -1,5 +1,42 @@
 # Testing, instrumentation and performance
 
+## Shared-library refactor verification
+
+2026-11-25. The locked offline workspace suite passed 247 tests and
+doctests, with 16 ignored by default. The example suite passed the
+legacy vibration wire test. Five ignored editor tests passed separately
+on headless Wayland, covering trigger bindings, profile selection,
+touchpad regions, gyro activation and sensitivity. The workspace suite
+also passed the steady-state zero-allocation replay.
+
+For the release-build smoke comparison, the same temporary harness
+decoded the captured DualSense Edge USB reports and mapped them with
+a stick curve, a button remap, a digital trigger stage and synthetic
+touch contacts. A block contains 64 reports. The harness discarded 100
+warm-up blocks and retained 10,000 blocks per run. Twelve retained runs
+per revision alternated order on one CPU on an AMD EPYC 9V74 host
+with Linux 6.18.57 and Rust 1.100.0. The baseline was `99c95f8`
+and the candidate was `2696ba4`. Both produced the same output
+checksum in every run.
+
+| Metric | Baseline | Candidate |
+|---|---:|---:|
+| Median run p50 (ns per report) | 79 | 79 |
+| Median run p95 (ns per report) | 80 | 80 |
+| Median run p99 (ns per report) | 111 | 109.5 |
+| Median run p99.9 (ns per report) | 715.5 | 687 |
+| Largest observed block average (ns per report) | 30,733 | 28,939 |
+| Median user CPU per run (ms) | 55.54 | 55.52 |
+| Median system CPU per run (ms) | 0 | 0 |
+| Median peak RSS per run (KiB) | 10,624 | 10,624 |
+
+The run-level p99 ranges overlapped (91–126 ns baseline and 89–136 ns
+candidate). Timing is for the average report in each block. CPU and
+RSS include the test harness. The run covers in-process input decoding
+and gamepad mapping. End-to-end USB and Bluetooth latency, kernel
+virtual output, haptics, and status polling under contention still need
+measurement on a physical test host.
+
 ## Initial targets (provisional, one controller)
 | Metric | Target | Definition |
 |---|---|---|

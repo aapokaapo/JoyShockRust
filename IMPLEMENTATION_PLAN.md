@@ -10,6 +10,12 @@ game compatibility (Phase 6) and measured performance (Phase 7) still have
 open work. Phase numbers group related deliverables. They do not imply
 that every acceptance check in an earlier phase has passed.
 
+The 2026-11-25 duplication refactor introduced shared input and motion
+types, common profile structures, desktop paths and local IPC codecs.
+Characterization tests cover compatibility at their boundaries.
+Synthetic replay and headless editor checks cover the implementation.
+Physical acceptance is tracked separately. [Refactor verification](TESTING_AND_PERFORMANCE.md#shared-library-refactor-verification)
+
 | Area | Shipped | Next acceptance step |
 |---|---|---|
 | Desktop controls | Tray lifecycle and telemetry, independent controller/profile selection, guided calibration, and a GTK/Wayland editor with live previews and exclusive per-button routing. | Verify the latest editor on Fedora with a physical controller. Check keyboard capture, output isolation, tray profile restore, and calibration navigation. |

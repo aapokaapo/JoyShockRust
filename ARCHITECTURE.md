@@ -52,12 +52,18 @@ visible. Desktop refresh timers are independent of bridge report timing.
 
 | Crate | Responsibility |
 |---|---|
-| `joyshockrust-core` | Transport-neutral controller state. |
+| `joyshockrust-core` | Transport-neutral controller state, canonical input names, analog trigger gates and touch-grid geometry. |
+| `joyshockrust-config` | Raw common profile schema, profile version, trigger compatibility rules and desktop paths. |
 | `joyshockrust-input` | USB and Bluetooth parsing, factory conversion and device timebase. |
-| `joyshockrust-motion` | Deterministic stationary calibration, gyro and fusion aim, aim response and game calibration math. |
-| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, TOML, status/control IPC, mapping, uinput and feedback. |
+| `joyshockrust-ipc` | Local status fields, control payload codecs and socket names. |
+| `joyshockrust-motion` | Deterministic calibration, gyro and fusion aim, gyro sensitivity and stick response. |
+| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, device-dependent profile compilation, socket servicing, mapping, uinput and feedback. |
 | `joyshockrust-tray` | StatusNotifierItem, desktop lifecycle and calibration launch. |
-| `joyshockrust-editor` | GTK 4/libadwaita profile editing and Wayland calibration windows. |
+| `joyshockrust-editor` | GTK 4/libadwaita profile editing with `toml_edit`, live charts and Wayland calibration windows. |
+
+Applications use shared codecs at the control boundary. The bridge
+validates profile input before installing runtime state. HID report
+processing uses resolved gates, settings and bitsets.
 
 ## Key invariants
 

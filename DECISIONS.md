@@ -5,6 +5,22 @@ Use [Architecture](ARCHITECTURE.md) for current runtime behavior and the
 [implementation plan](IMPLEMENTATION_PLAN.md#current-status) for current
 acceptance work.
 
+## Shared configuration and IPC
+
+2026-11-25. Use shared core input names and geometry, and keep
+deterministic gyro sensitivity and radial stick response in motion.
+The config crate owns common raw profile structures, trigger
+compatibility and desktop paths. Linux resolves keyboard outputs and
+virtual-device capabilities, and the editor continues to edit TOML
+documents in place. Gesture state and timers stay in the application
+paths that own their effects. [Workspace boundaries](ARCHITECTURE.md#workspace)
+
+The IPC crate defines the existing wire keys and codecs. Socket
+lifecycle, addressed versus unnamed request handling, polling and
+preview expiry stay with the bridge. Legacy TOML shapes and field
+precedence, status ordering, socket paths and request sizes retain
+their existing contracts. [IPC codecs](crates/joyshockrust-ipc/src)
+
 ## ADR-001 — Linux-first Rust 2024
 **Accepted.** New implementation, not direct C++ port. Keep safe Rust and clear module boundaries.
 
