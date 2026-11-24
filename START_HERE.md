@@ -13,7 +13,9 @@ editor.
 3. For what is implemented and how it was checked, read the
    [feature matrix](FEATURE_MATRIX.md) and
    [current acceptance priorities](TESTING_AND_PERFORMANCE.md#current-acceptance-priorities).
-4. For development, read the [repository instructions](AGENTS.md),
+4. For a visual tour of the profile editor, see the
+   [editor screenshot gallery](docs/EDITOR_SCREENSHOTS.md).
+5. For development, read the [repository instructions](AGENTS.md),
    [architecture](ARCHITECTURE.md) and [local checks](README.md#local-checks).
 
 Use `test` for changes under validation and `main` for accepted changes.

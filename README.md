@@ -823,6 +823,12 @@ bridge process. The corresponding CLI flags are
 followed by `on` or `off`.
 
 **Profile editor** opens the editor on the active file when available.
+
+![JoyShockRust profile editor showing the DualSense layout and keyboard bindings for Cross](docs/screenshots/editor-buttons.png)
+
+The [editor screenshot gallery](docs/EDITOR_SCREENSHOTS.md) also shows stick
+mapping, touchpad regions, gyro settings and the Advanced TOML view.
+
 Use the profile dropdown inside the editor to open a saved profile or
 choose **New profile**. Use **Save & Apply** to make a profile active.
 The editor follows the system’s light or dark appearance. The page
