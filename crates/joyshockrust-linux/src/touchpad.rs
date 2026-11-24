@@ -1,3 +1,4 @@
+use joyshockrust_core::touch_region::{GridSize, parse_cell};
 use std::{
     fs::{File, OpenOptions},
     io,
@@ -129,12 +130,6 @@ pub struct Grid {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct GridSize {
-    columns: usize,
-    rows: usize,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct TouchRegion {
     size: GridSize,
     index: usize,
@@ -149,26 +144,17 @@ impl TouchRegion {
     }
 
     pub fn contains(self, contact: TouchContact) -> bool {
-        self.size.index(contact) == self.index
+        contact_index(self.size, contact) == self.index
     }
 }
 
-impl GridSize {
-    fn index(self, contact: TouchContact) -> usize {
-        let column = usize::from(contact.x) * self.columns / usize::from(DUALSENSE_TOUCHPAD_WIDTH);
-        let row = usize::from(contact.y) * self.rows / usize::from(DUALSENSE_TOUCHPAD_HEIGHT);
-        row * self.columns + column
-    }
-
-    fn region(self, row: usize, column: usize) -> Result<TouchRegion, &'static str> {
-        if !(1..=self.rows).contains(&row) || !(1..=self.columns).contains(&column) {
-            return Err("touchpad region row or column is outside the grid");
-        }
-        Ok(TouchRegion {
-            size: self,
-            index: (row - 1) * self.columns + column - 1,
-        })
-    }
+fn contact_index(size: GridSize, contact: TouchContact) -> usize {
+    size.contact_index(
+        usize::from(contact.x),
+        usize::from(contact.y),
+        usize::from(DUALSENSE_TOUCHPAD_WIDTH),
+        usize::from(DUALSENSE_TOUCHPAD_HEIGHT),
+    )
 }
 
 #[derive(Default)]
@@ -181,18 +167,13 @@ pub enum ClickState {
 
 impl Config {
     pub fn resolve(self) -> Result<Grid, &'static str> {
-        let cells = self
-            .columns
-            .checked_mul(self.rows)
-            .filter(|count| (1..=25).contains(count))
+        let size = GridSize::new(self.rows, self.columns)
             .ok_or("touchpad grid must have between 1 and 25 cells")?;
-        let mut regions = vec![None; cells];
-        let size = GridSize {
-            columns: self.columns,
-            rows: self.rows,
-        };
+        let mut regions = vec![None; size.count()];
         for region in self.regions {
-            let index = size.region(region.row, region.column)?.index;
+            let index = size
+                .cell_index(region.row, region.column)
+                .ok_or("touchpad region row or column is outside the grid")?;
             if regions[index].is_some() {
                 return Err("duplicate touchpad region");
             }
@@ -217,14 +198,15 @@ impl Config {
 
 impl Grid {
     pub fn parse_region(&self, spec: &str) -> Result<TouchRegion, &'static str> {
-        let (row, column) = spec
-            .split_once(':')
-            .ok_or("expected ROW:COLUMN for a touchpad region")?;
-        let row = row.parse().map_err(|_| "invalid touchpad region row")?;
-        let column = column
-            .parse()
-            .map_err(|_| "invalid touchpad region column")?;
-        self.size.region(row, column)
+        let (row, column) = parse_cell(spec)?;
+        let index = self
+            .size
+            .cell_index(row, column)
+            .ok_or("touchpad region row or column is outside the grid")?;
+        Ok(TouchRegion {
+            size: self.size,
+            index,
+        })
     }
 
     pub fn map(
@@ -236,7 +218,7 @@ impl Grid {
         let mut regions = contacts
             .into_iter()
             .flatten()
-            .map(|contact| self.regions[self.size.index(contact)]);
+            .map(|contact| self.regions[contact_index(self.size, contact)]);
         let primary = regions.next().flatten();
         let mut outputs = Buttons::default();
         for region in primary.into_iter().chain(regions.flatten()) {

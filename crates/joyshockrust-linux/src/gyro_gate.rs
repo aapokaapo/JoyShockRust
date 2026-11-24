@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+pub use joyshockrust_core::trigger::{TriggerGate, TriggerSide};
 use joyshockrust_core::{Button, Controls};
 use joyshockrust_input::TouchContact;
 
@@ -30,94 +31,6 @@ pub enum DigitalInput {
 impl From<Button> for DigitalInput {
     fn from(button: Button) -> Self {
         Self::Button(button)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub struct TriggerGate {
-    side: TriggerSide,
-    press: f32,
-    release: f32,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum TriggerSide {
-    Left,
-    Right,
-}
-
-impl TriggerGate {
-    pub(crate) fn from_percent(side: TriggerSide, press: u8, release: u8) -> Self {
-        Self {
-            side,
-            press: f32::from(press) / 100.0,
-            release: f32::from(release) / 100.0,
-        }
-    }
-
-    pub(crate) fn within_travel(mut self, percent: u8) -> Self {
-        let scale = f32::from(percent) / 100.0;
-        self.press *= scale;
-        self.release *= scale;
-        self
-    }
-
-    pub fn parse(spec: &str) -> Result<Self, &'static str> {
-        let mut fields = spec.split(':');
-        let side = match fields.next() {
-            Some("l2") => TriggerSide::Left,
-            Some("r2") => TriggerSide::Right,
-            _ => return Err("expected analog trigger l2 or r2"),
-        };
-        let (press, release) = match (fields.next(), fields.next(), fields.next()) {
-            (None, None, None) => (0.45, 0.35),
-            (Some(press), Some(release), None) => (
-                press
-                    .parse()
-                    .map_err(|_| "invalid trigger press threshold")?,
-                release
-                    .parse()
-                    .map_err(|_| "invalid trigger release threshold")?,
-            ),
-            _ => return Err("expected l2 or r2 with optional :PRESS:RELEASE thresholds"),
-        };
-        if !(0.0..=1.0).contains(&release) || !(0.0..=1.0).contains(&press) || release >= press {
-            return Err("trigger thresholds must satisfy 0 <= release < press <= 1");
-        }
-        Ok(Self {
-            side,
-            press,
-            release,
-        })
-    }
-
-    pub(crate) fn partial(spec: &str) -> Result<Option<(Self, Self)>, &'static str> {
-        let fields = spec.split(':').collect::<Vec<_>>();
-        let &[side, press, release, full_press, full_release] = fields.as_slice() else {
-            return Ok(None);
-        };
-        let lower = Self::parse(&format!("{side}:{press}:{release}"))?;
-        let upper = Self::parse(&format!("{side}:{full_press}:{full_release}"))?;
-        if lower.press >= upper.release {
-            return Err("partial trigger thresholds must satisfy partial press < full release");
-        }
-        Ok(Some((lower, upper)))
-    }
-
-    pub(crate) fn side(self) -> TriggerSide {
-        self.side
-    }
-
-    pub(crate) fn pressed(self, controls: &Controls, was_pressed: bool) -> bool {
-        let travel = match self.side {
-            TriggerSide::Left => controls.left_trigger,
-            TriggerSide::Right => controls.right_trigger,
-        };
-        if was_pressed {
-            travel > self.release
-        } else {
-            travel >= self.press
-        }
     }
 }
 
@@ -234,28 +147,7 @@ pub fn parse_chord<E: From<&'static str>>(
 }
 
 pub fn button_by_name(name: &str) -> Option<Button> {
-    Some(match name {
-        "cross" => Button::South,
-        "circle" => Button::East,
-        "square" => Button::West,
-        "triangle" => Button::North,
-        "l1" => Button::LeftShoulder,
-        "r1" => Button::RightShoulder,
-        "l2" => Button::LeftTrigger,
-        "r2" => Button::RightTrigger,
-        "l3" => Button::LeftStick,
-        "r3" => Button::RightStick,
-        "create" => Button::Select,
-        "options" => Button::Start,
-        "ps" => Button::Home,
-        "touchpad" => Button::TouchpadClick,
-        "mute" => Button::MicrophoneMute,
-        "fn-left" => Button::LeftFunction,
-        "fn-right" => Button::RightFunction,
-        "paddle-left" => Button::LeftPaddle,
-        "paddle-right" => Button::RightPaddle,
-        _ => return None,
-    })
+    Button::from_name(name).filter(|&button| !joyshockrust_core::DPad::BUTTONS.contains(button))
 }
 
 #[cfg(test)]
@@ -444,7 +336,7 @@ mod tests {
             assert!(TriggerGate::parse(spec).is_err(), "{spec}");
         }
         let default = TriggerGate::parse("l2").unwrap();
-        assert_eq!((default.press, default.release), (0.45, 0.35));
+        assert_eq!(default, TriggerGate::parse("l2:0.45:0.35").unwrap());
         assert!(TriggerGate::parse("r2:1:0").is_ok());
     }
 }

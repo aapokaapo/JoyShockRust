@@ -186,17 +186,11 @@ impl ButtonRemaps {
 }
 
 pub fn dpad_button_by_name(name: &str) -> Option<Button> {
-    Some(match name {
-        "dpad-up" => Button::DPadUp,
-        "dpad-right" => Button::DPadRight,
-        "dpad-down" => Button::DPadDown,
-        "dpad-left" => Button::DPadLeft,
-        _ => return None,
-    })
+    Button::from_name(name).filter(|&button| DPad::BUTTONS.contains(button))
 }
 
 fn remap_button_by_name(name: &str) -> Option<Button> {
-    super::gyro_gate::button_by_name(name).or_else(|| dpad_button_by_name(name))
+    Button::from_name(name)
 }
 
 fn parse_rule(spec: &str) -> Result<(Button, Button), &'static str> {

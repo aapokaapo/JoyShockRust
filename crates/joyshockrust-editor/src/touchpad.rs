@@ -10,7 +10,7 @@ use crate::{
     ui::{self, Context},
 };
 
-const MAX_CELLS: i64 = 25;
+use joyshockrust_core::touch_region::{GridSize, MAX_CELLS};
 const ADVANCED: &str = "Edit this touchpad configuration in Advanced TOML.";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -72,7 +72,12 @@ fn grid(doc: &DocumentMut) -> Result<Cell, &'static str> {
 }
 
 fn validate_size(size: Cell) -> Result<(), &'static str> {
-    if size.row < 1 || size.column < 1 || size.row.saturating_mul(size.column) > MAX_CELLS {
+    if GridSize::new(
+        usize::try_from(size.row).unwrap_or_default(),
+        usize::try_from(size.column).unwrap_or_default(),
+    )
+    .is_none()
+    {
         return Err("The touchpad grid must have between 1 and 25 cells.");
     }
     Ok(())

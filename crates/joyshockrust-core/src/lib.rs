@@ -2,6 +2,12 @@
 
 #![no_std]
 
+mod button_names;
+pub mod touch_region;
+pub mod trigger;
+
+pub use trigger::{DEFAULT_TRIGGER_THRESHOLDS, validate_trigger_thresholds};
+
 /// Face buttons are named by their position on the controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {
@@ -113,21 +119,6 @@ impl DPad {
             (-1, -1) => Self::UpLeft,
             _ => Self::Neutral,
         }
-    }
-}
-
-/// Pull and release points in percent, in partial then full order.
-pub const DEFAULT_TRIGGER_THRESHOLDS: [u8; 4] = [45, 35, 95, 85];
-
-pub fn validate_trigger_thresholds(
-    [partial, partial_release, full, full_release]: [u8; 4],
-) -> Result<(), &'static str> {
-    if partial_release < partial && partial < full_release && full_release < full && full <= 100 {
-        Ok(())
-    } else {
-        Err(
-            "Trigger thresholds must satisfy partial release < partial pull < full release < full pull ≤ 100%.",
-        )
     }
 }
 

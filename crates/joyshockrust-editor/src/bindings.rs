@@ -44,12 +44,10 @@ fn keyboard_bindings(doc: &DocumentMut) -> Result<Option<&ArrayOfTables>, &'stat
 }
 
 pub(crate) fn region_input(input: &str) -> Option<(&str, i64, i64)> {
-    let (kind, location) = input.split_once(':')?;
-    if !matches!(kind, "touch" | "click") {
-        return None;
-    }
-    let (row, column) = location.split_once(':')?;
-    Some((kind, row.parse().ok()?, column.parse().ok()?))
+    use joyshockrust_core::touch_region::{TouchAction, parse_cell};
+    let (kind, location) = TouchAction::split(input)?;
+    let (row, column) = parse_cell(location).ok()?;
+    Some((kind.name(), row, column))
 }
 
 #[derive(Clone, Copy)]
