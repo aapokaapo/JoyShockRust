@@ -1,6 +1,6 @@
 # Phase 0 reference analysis
 
-Reviewed 2026-11-22. Evidence in this document comes from source inspection. The cloud instance had no `/dev/hidraw*`, `/dev/uinput` or `/dev/uhid`. USB wire data, firmware-specific behavior, permissions, cadence and input latency remain unmeasured.
+Phase 0 reviewed 2026-11-22. This record preserves source inspection and the original Phase 0 scope. See the [current input implementation](../INPUT_HIDRAW.md) and [test evidence](../TESTING_AND_PERFORMANCE.md#current-acceptance-priorities) for later changes and user hardware results. The cloud instance had no `/dev/hidraw*`, `/dev/uinput` or `/dev/uhid`. USB wire data, firmware-specific behavior, permissions, cadence and input latency remain unmeasured.
 
 | Source | Reviewed revision |
 |---|---|

@@ -1,5 +1,10 @@
 # Architecture decision log
 
+The dated phase entries record decisions and implementation at the time.
+Use [Architecture](ARCHITECTURE.md) for current runtime behavior and the
+[implementation plan](IMPLEMENTATION_PLAN.md#current-status) for current
+acceptance work.
+
 ## ADR-001 — Linux-first Rust 2024
 **Accepted.** New implementation, not direct C++ port. Keep safe Rust and clear module boundaries.
 
@@ -10,13 +15,13 @@
 **Accepted.** Read on fd readiness; use deadline timers for timed mapping actions. No artificial global polling tick.
 
 ## ADR-004 — dedicated controller processing thread
-**Accepted provisionally.** One thread per active controller, benchmark scaling and scheduling jitter before changing.
+**Accepted provisionally.** One owner for active controller state. The current bridge uses one active session in its readiness loop. Measure scheduling and latency before changing ownership.
 
 ## ADR-005 — pure deterministic motion library
 **Accepted.** No I/O, clock access, threads, Tokio or per-sample allocations. Calibration persistence outside library.
 
 ## ADR-006 — separate control plane
-**Accepted.** Unix socket IPC, TOML, systemd user service. Tokio not required and prohibited from hot path.
+**Accepted.** Unix socket IPC, TOML and systemd user service. The tray and editor are separate clients. The current bridge serves status and control descriptors in its readiness loop. Tokio stays outside that path.
 
 ## ADR-007 — output and visibility
 **Accepted.** uinput initially, UHID researched for protocol emulation. Per-game environment filtering preferred when proven; no claim of universal HID/evdev hiding.

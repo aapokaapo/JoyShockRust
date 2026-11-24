@@ -20,6 +20,30 @@ These are **engineering targets**, not established measurements. Measure USB and
 - Hardware-in-loop: wired DualSense Edge first, then Bluetooth and others.
 - Compatibility: Steam/Proton/native game discovery and filtering.
 
+## Current acceptance priorities
+
+Use the latest `joyshockrust/phase-6-compat` build. For the revisions
+through `d761a87`, workspace tests and eight headless Wayland editor tests
+passed. Those editor tests exercise GTK controls and synthetic events.
+Use the sequence below to verify the current physical behavior. Record
+the commit, controller model, USB/Bluetooth, Fedora/kernel, and game and
+input backend where relevant.
+
+| Order | Check | Pass condition |
+|---|---|---|
+| 1 | Buttons and keyboard capture | Choose Keyboard, Mouse and Virtual gamepad in turn for Cross. Each route emits only its configured family. Esc, click and timeout preserve an existing binding. Unbind clears it. Check L2 partial/full actions and D-pad diagonals. |
+| 2 | Gyro and IMU | With the same saved gyro bias, compare both aim modes with acceleration enabled and disabled. At rest the cursor stays still and deliberate slow rotation moves it. Tilt and rotate to verify the live axes. Disconnecting clears the reading. |
+| 3 | Both calibration flows and Flick Stick | Navigate the windows with the controller. Save stationary bias and verify reuse on reconnect. Check the haptic cues and USB detents. Measure several whole turns for RWC, apply the saved profile and verify an approximately 90° flick. Test both stick selections. |
+| 4 | Tray and session lifecycle | Check controller and profile selection independently, output switches, profile restore, login startup and Quit. Repeat hotplug with a held button and check that the old virtual device releases and disappears. |
+| 5 | Compatibility and performance | Repeat core checks on Bluetooth and the other controller model. Test one named SDL game and one Proton game, and record idle, active and contention benchmarks separately. |
+
+Earlier hardware evidence includes USB uinput press/release and Steam
+reconnect, standard DualSense and Edge support, USB/Bluetooth rumble
+and reconnect, Steam controller visibility with the SDL filter, and one
+successful four-turn RWC measure/save. These results precede the current
+editor changes. The detailed procedures below retain their recorded
+scope. [Desktop test procedure](#desktop-tray-acceptance) · [Benchmark procedure](#live-bridge-benchmark)
+
 ## Virtual gamepad acceptance
 
 The kernel round-trip test feeds a synthetic Cross press into the USB parser,
@@ -405,6 +429,9 @@ remains available during the same session. The user confirmed the battery
 status with `ff56188`.
 
 ## Per-game SDL visibility acceptance
+
+The user reported that Steam started with the SDL filter showed only the
+virtual Xbox Series controller. Named game and Proton results remain open.
 
 Keep the Xbox Series virtual gamepad running. Choose a native SDL game with
 an input screen or a repeatable action. Use a temporary profile remap such

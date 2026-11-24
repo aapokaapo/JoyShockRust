@@ -7,14 +7,17 @@
 - Diff output state and avoid redundant writes, but preserve required release events and synchronization boundaries.
 - Test correct output lifetime, reconnect, stuck-key prevention and virtual-device identification.
 
-The bridge emits a generic virtual gamepad and optional relative mouse.
-The [test record](TESTING_AND_PERFORMANCE.md) covers uinput press/release and
-Steam USB reconnect. Per-game visibility still needs its own acceptance run.
+The bridge supports `generic`, `xbox-series` and `xbox360` uinput gamepad
+identities, plus a gyro/Flick Stick mouse and optional profile-driven
+keyboard and mouse outputs. The gamepad can be disabled at runtime or
+replaced when the loaded profile specifies a different identity. Rumble,
+when enabled at startup, uses evdev to forward effects to the physical
+controller. [Linux output setup](README.md#virtual-gamepad-on-linux) · [Hardware evidence](TESTING_AND_PERFORMANCE.md#current-acceptance-priorities)
 
 ## Physical controller visibility
 The daemon reads physical devices through hidraw. Games may also discover the physical controller through evdev, SDL, Steam Input, Wine/Proton or other paths, causing duplicate input.
 
-**Decision:** default to *per-game environment-based filtering* when supported, not global device hiding. This is a compatibility feature of launch tooling, not part of the low-latency engine.
+**Decision:** keep controller visibility unchanged by default. The optional launcher configures an ignore list for the command and its child processes.
 
 The Linux launcher appends Sony IDs `054c:0ce6` and `054c:0df2` to
 `SDL_GAMECONTROLLER_IGNORE_DEVICES` for the launched command. The filter
@@ -29,6 +32,9 @@ joyshockrust-linux --launch-sdl -- GAME [ARGS...]
 ```
 
 The bridge runs separately and continues reading the physical controller.
+The user reported that starting Steam through the SDL filter exposed only
+the virtual Xbox Series controller in Steam. Named native game and Proton
+tests remain open.
 See the [SDL visibility test](TESTING_AND_PERFORMANCE.md#per-game-sdl-visibility-acceptance).
 
 ## Acceptance

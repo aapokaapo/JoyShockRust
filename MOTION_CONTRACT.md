@@ -36,15 +36,6 @@ counts carry between accepted samples. Mode changes clear integration
 and fractional state at the report boundary while retaining gyro bias.
 The adapter submits integer relative X/Y events in one uinput batch.
 
-## Planned extensions
-1. Validate finite values, timestamp ordering and plausible ranges.
-2. Apply static/device calibration and learned gyro bias.
-3. Detect stillness using calibrated sensor noise and accelerometer conditions.
-4. Update fusion state, gravity estimate and orientation.
-5. Transform axes and reference frame; apply sensitivity independently for X/Y.
-6. Apply carefully measured smoothing/deadzones and emit motion deltas.
-7. Return updated calibration state/proposals without persisting them.
-
 ## Determinism
 Identical initial state, configuration and ordered samples must produce identical results on a defined build/numeric environment. No system-clock reads, RNG, I/O, threads or hidden global state. Explicitly define behavior for duplicate/out-of-order timestamps, long gaps, wraparound and invalid samples. Bit-identical cross-architecture floating-point output is not initially promised.
 
@@ -53,9 +44,12 @@ Identical initial state, configuration and ordered samples must produce identica
 while the user keeps the controller still. It needs at least five uninterrupted seconds and
 64 samples of stable gyro and accelerometer readings. A gap above 50 ms,
 invalid reading or motion outside the quality limits discards the window.
-Once accepted, the bias is fixed for the session. The Linux adapter withholds
-pointer output during calibration and starts a new window after reconnect.
-Bias persistence and bounded auto-bias learning remain planned.
+The accepted bias is used until a new calibration is applied. The Linux
+bridge can estimate bias at session start when requested and no saved
+calibration is available. Guided calibration and the physical hold
+shortcut can persist the correction by controller ID. Subsequent sessions
+prefer that correction. Continuous automatic bias learning remains future
+work. [Linux calibration workflow](README.md#controller-gyroscope-calibration)
 
 ## Performance
 No steady-state heap allocations. Benchmarks must cover high sample rates and worst-case input sequences; mathematical accuracy and stability are more important than micro-optimizations.
