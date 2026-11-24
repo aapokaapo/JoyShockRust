@@ -53,7 +53,7 @@ pub fn watch_status(
     let update = Rc::new(update);
     let polling = Rc::new(RefCell::new(None::<glib::JoinHandle<()>>));
     let on_map = polling.clone();
-    widget.connect_map(move |_| {
+    let start = move || {
         let update = update.clone();
         let task = glib::MainContext::default().spawn_local(async move {
             update(Ok(None));
@@ -69,12 +69,18 @@ pub fn watch_status(
             }
         });
         on_map.replace(Some(task));
-    });
+    };
+    let on_map = start.clone();
+    widget.connect_map(move |_| on_map());
     widget.connect_unmap(move |_| {
         if let Some(task) = polling.borrow_mut().take() {
             task.abort();
         }
     });
+    // The inspector can attach a chart to an already visible preferences group.
+    if widget.as_ref().is_mapped() {
+        start();
+    }
 }
 
 pub fn open(path: &Path) -> io::Result<File> {

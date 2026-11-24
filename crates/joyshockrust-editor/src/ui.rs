@@ -1079,7 +1079,6 @@ pub(crate) mod tests {
         adw::init().unwrap();
         let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
         editor.text.push_str("[bridge]\nrumble = true\n");
-        editor.selected = "l2";
         let ctx = Context {
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
@@ -1100,11 +1099,30 @@ pub(crate) mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(diagram.width() > 0);
-        assert!(
-            descendants::<gtk::DrawingArea>(&page)
-                .iter()
-                .any(|area| area.widget_name() == "trigger-travel-chart" && area.width() > 0)
-        );
+        for side in ["R2", "L2"] {
+            let button = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
+                .into_iter()
+                .find(|button| button.label().as_deref() == Some(side))
+                .unwrap();
+            button.set_active(true);
+            let chart = descendants::<gtk::DrawingArea>(&page)
+                .into_iter()
+                .find(|area| area.widget_name() == "trigger-travel-chart")
+                .unwrap();
+            assert!(chart.is_mapped());
+            let started = Rc::new(Cell::new(false));
+            crate::controller_input::watch_status(
+                &chart,
+                "trigger_travel=",
+                std::time::Duration::from_millis(33),
+                {
+                    let started = started.clone();
+                    move |_| started.set(true)
+                },
+            );
+            while context.iteration(false) {}
+            assert!(started.get(), "{side} chart should start without remapping");
+        }
         let bounds = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
             .into_iter()
             .map(|button| {

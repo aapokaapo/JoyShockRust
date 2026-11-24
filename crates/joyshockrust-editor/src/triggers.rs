@@ -138,7 +138,11 @@ pub fn append(
             return;
         }
     };
-    let travel = trigger_travel::add(&group, side, initial);
+    let overlap = values
+        .and_then(|table| table.get("keep_partial"))
+        .and_then(Item::as_bool)
+        .unwrap_or_else(|| legacy_overlap(doc, side));
+    let travel = trigger_travel::add(&group, side, initial, overlap);
 
     let rows = [
         "Partial pull (%)",
@@ -160,6 +164,7 @@ pub fn append(
     group.add(&error);
     let weak = rows.each_ref().map(|row| row.downgrade());
     let edit = ctx.clone();
+    let thresholds_chart = travel.clone();
     let update = move |_: &adw::SpinRow| {
         let [Some(a), Some(b), Some(c), Some(d)] = weak.each_ref().map(|row| row.upgrade()) else {
             return;
@@ -176,28 +181,26 @@ pub fn append(
         if let Err(message) = result {
             error.set_text(&message);
         } else {
-            travel.set_thresholds(proposed);
+            thresholds_chart.set_thresholds(proposed);
         }
     };
     for row in rows {
         row.connect_value_notify(update.clone());
     }
 
-    let overlap = values
-        .and_then(|table| table.get("keep_partial"))
-        .and_then(Item::as_bool)
-        .unwrap_or_else(|| legacy_overlap(doc, side));
     let keep = adw::SwitchRow::builder()
         .title("Keep partial action at full pull")
         .active(overlap)
         .build();
     let edit = ctx.clone();
     keep.connect_active_notify(move |row| {
-        edit.edit(|doc| {
+        if edit.edit(|doc| {
             migrate_stages(doc, side)?;
             settings_mut(doc, side)?.insert("keep_partial", value(row.is_active()));
             Ok(())
-        });
+        }) {
+            travel.set_keep_partial(row.is_active());
+        }
     });
     group.add(&keep);
     for (title, stage, field, legacy) in STAGES {

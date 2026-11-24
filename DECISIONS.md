@@ -90,7 +90,10 @@ restoration of the active profile's effects. A new controller session
 starts with the active profile.
 
 2026-11-24. Trigger travel uses the bridge's raw normalized input
-snapshot. The focused editor sends the selected trigger's draft
+snapshot. Polling starts when the chart is mapped, including when the
+user selects a trigger in an inspector that is already visible. The
+Partial band shows suppression from the Full Pull threshold when stage
+overlap is disabled. The focused editor sends the selected trigger's draft
 thresholds through the control socket and refreshes them while the
 chart is mapped. The bridge applies the existing hysteresis at report
 cadence and queues a detent only on a stage transition. The preview

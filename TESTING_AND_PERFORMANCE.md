@@ -964,7 +964,11 @@ at full pull** for L2 and save. Verify Q stays held when E engages, then
 ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
 
-With L2 selected in the focused editor, slowly pull and release L2.
+On the Buttons tab, select L2 from a different control and confirm live
+travel appears without switching tabs. Toggle **Keep partial action at
+full pull** and confirm the Partial band stays colored to 100% only when
+the switch is on. With L2 selected in the focused editor, slowly pull
+and release L2.
 Check that the marker follows the pull and that a short haptic tick
 plays at each solid line on the way down and at each dashed line on the
 way back. Hold the trigger between a stage's two lines and check that

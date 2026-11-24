@@ -886,9 +886,10 @@ Custom trigger gestures from older profiles can still be edited in **Advanced**.
 The **Trigger travel** chart shows the live position of the selected L2
 or R2 and separate partial and full bands. Solid lines mark engagement,
 dashed lines mark release, and the lighter band shows the gap between
-them. While the editor is focused, entering or leaving either stage
-plays a short haptic tick on the controller. Valid threshold edits take
-effect in this preview immediately.
+them. The Partial band turns gray from the Full Pull threshold when
+**Keep partial action at full pull** is off. While the editor is focused,
+entering or leaving either stage plays a short haptic tick on the
+controller. Valid threshold edits take effect in this preview immediately.
 
 Under **Adaptive trigger**, choose **Resistance** and set the start zone
 and strength for the selected trigger, or choose **Off**. The editor

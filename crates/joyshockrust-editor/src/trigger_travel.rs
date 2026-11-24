@@ -14,6 +14,7 @@ const PREVIEW_MESSAGE: &[u8] = b"\0preview-trigger-travel\n";
 pub struct Chart {
     area: gtk::DrawingArea,
     thresholds: Rc<Cell<[u8; 4]>>,
+    keep_partial: Rc<Cell<bool>>,
     side: u8,
 }
 
@@ -25,11 +26,22 @@ impl Chart {
             send(self.side, thresholds);
         }
     }
+
+    pub fn set_keep_partial(&self, keep: bool) {
+        self.keep_partial.set(keep);
+        self.area.queue_draw();
+    }
 }
 
-pub fn add(group: &adw::PreferencesGroup, side: &str, initial: [u8; 4]) -> Chart {
+pub fn add(
+    group: &adw::PreferencesGroup,
+    side: &str,
+    initial: [u8; 4],
+    keep_partial: bool,
+) -> Chart {
     let side = u8::from(side == "r2");
     let thresholds = Rc::new(Cell::new(initial));
+    let keep_partial = Rc::new(Cell::new(keep_partial));
     let live = Rc::new(Cell::new(None));
     let panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -44,8 +56,18 @@ pub fn add(group: &adw::PreferencesGroup, side: &str, initial: [u8; 4]) -> Chart
     )]);
     area.set_draw_func({
         let thresholds = thresholds.clone();
+        let keep_partial = keep_partial.clone();
         let live = live.clone();
-        move |area, cr, width, _| draw(area, cr, width, thresholds.get(), live.get())
+        move |area, cr, width, _| {
+            draw(
+                area,
+                cr,
+                width,
+                thresholds.get(),
+                keep_partial.get(),
+                live.get(),
+            )
+        }
     });
     panel.append(&area);
     let legend = gtk::Label::new(Some(
@@ -104,6 +126,7 @@ pub fn add(group: &adw::PreferencesGroup, side: &str, initial: [u8; 4]) -> Chart
     Chart {
         area,
         thresholds,
+        keep_partial,
         side,
     }
 }
@@ -138,6 +161,7 @@ fn draw(
     cr: &gtk::cairo::Context,
     width: i32,
     [partial, partial_release, full, full_release]: [u8; 4],
+    keep_partial: bool,
     live: Option<f64>,
 ) {
     let left = 57.0;
@@ -160,12 +184,14 @@ fn draw(
     };
 
     cr.set_font_size(11.0);
-    for (label, top, pull, release) in [
-        ("Partial", 12.0, partial, partial_release),
-        ("Full", 40.0, full, full_release),
+    let partial_end = if keep_partial { 100 } else { full };
+    for (label, top, pull, release, active_end) in [
+        ("Partial", 12.0, partial, partial_release, partial_end),
+        ("Full", 40.0, full, full_release, 100),
     ] {
         let pull = x(f64::from(pull) / 100.0);
         let release = x(f64::from(release) / 100.0);
+        let active_end = x(f64::from(active_end) / 100.0);
         color(foreground, 0.1);
         cr.rectangle(left, top, end - left, 18.0);
         let _ = cr.fill();
@@ -173,7 +199,10 @@ fn draw(
         cr.rectangle(release, top, pull - release, 18.0);
         let _ = cr.fill();
         color(accent, 0.48);
-        cr.rectangle(pull, top, end - pull, 18.0);
+        cr.rectangle(pull, top, active_end - pull, 18.0);
+        let _ = cr.fill();
+        color(foreground, 0.22);
+        cr.rectangle(active_end, top, end - active_end, 18.0);
         let _ = cr.fill();
         color(accent, 1.0);
         cr.set_line_width(1.5);
