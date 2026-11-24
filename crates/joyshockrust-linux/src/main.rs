@@ -771,7 +771,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             }
                             None
                         }
-                        None => return Ok(None),
+                        Some(reload::Update::TriggerPreview(_)) | None => return Ok(None),
                     };
                     reload.applied(status);
                     Ok(selection)
@@ -1029,6 +1029,15 @@ fn serve_session(
                     let current_filter = filter;
                     let next = match reload.resolve(current_filter) {
                         Some(reload::Update::Profile(next)) => next,
+                        Some(reload::Update::TriggerPreview(preview)) => {
+                            adaptive.preview(
+                                path,
+                                reload_input.as_ref().expect("reload descriptor"),
+                                runtime.adaptive_triggers,
+                                preview,
+                            );
+                            return Ok(ControlFlow::Continue(()));
+                        }
                         Some(reload::Update::Selection(selection))
                             if selection != current_filter =>
                         {

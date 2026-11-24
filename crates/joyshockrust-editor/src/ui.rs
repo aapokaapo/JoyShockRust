@@ -236,6 +236,7 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let confirmed = Rc::new(Cell::new(false));
     window.connect_close_request(move |window| {
         if confirmed.get() || !close_ctx.editor.borrow().has_unsaved_changes() {
+            close_ctx.editor.borrow_mut().clear_trigger_preview();
             return glib::Propagation::Proceed;
         }
         let window_ref = window.downgrade();

@@ -28,6 +28,7 @@ use nix::{
 };
 
 use crate::{
+    adaptive_trigger::Preview,
     discovery::{ControllerFilter, ModelSelection, Selection},
     hidraw::ControllerId,
     profile::{self, BridgeOptions, RuntimeOptions},
@@ -45,6 +46,7 @@ const SET_GYRO_MOUSE_PREFIX: &[u8] = b"\0set-gyro-mouse\n";
 const SET_EMULATION_PREFIX: &[u8] = b"\0set-emulation\n";
 const SET_EMULATION_MASTER_PREFIX: &[u8] = b"\0set-emulation-master\n";
 const SET_OUTPUTS_PREFIX: &[u8] = b"\0set-outputs\n";
+const TRIGGER_PREVIEW_PREFIX: &[u8] = b"\0preview-trigger\n";
 
 pub struct Reload {
     path: Option<PathBuf>,
@@ -143,6 +145,7 @@ pub struct Request<'a> {
 enum Client {
     Reload(UnixStream),
     Load(SocketAddr, Vec<u8>),
+    TriggerPreview(Preview),
 }
 
 pub enum Update {
@@ -150,6 +153,7 @@ pub enum Update {
     Selection(ControllerFilter),
     Emulation(OutputTarget, bool),
     OutputsPaused(bool),
+    TriggerPreview(Preview),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,6 +280,9 @@ impl Request<'_> {
     }
 
     pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
+        if let Some(Client::TriggerPreview(preview)) = &self.client {
+            return Some(Update::TriggerPreview(*preview));
+        }
         if let Some(payload) = self.command_payload(SET_OUTPUTS_PREFIX) {
             if !self.reload.allow_controller_switch {
                 self.rejected("pausing outputs requires automatic discovery");
@@ -455,7 +462,7 @@ impl Request<'_> {
                     let _ = socket.send_to_addr(response, address);
                 }
             }
-            None => {}
+            Some(Client::TriggerPreview(_)) | None => {}
         }
     }
 }
@@ -740,11 +747,17 @@ pub fn wait<'a>(
                     + 1
             ];
             match socket.recv_from(&mut data) {
-                Ok((len, address)) if !address.is_unnamed() => {
+                Ok((len, address)) if address.is_unnamed() => {
+                    if let Some(payload) = data[..len].strip_prefix(TRIGGER_PREVIEW_PREFIX)
+                        && let Ok(preview) = Preview::parse(payload)
+                    {
+                        client = Some(Client::TriggerPreview(preview));
+                    }
+                }
+                Ok((len, address)) => {
                     data.truncate(len);
                     client = Some(Client::Load(address, data));
                 }
-                Ok(_) => {}
                 Err(err)
                     if matches!(
                         err.kind(),
@@ -946,6 +959,64 @@ mod tests {
         request.applied(None);
         let len = client.recv(&mut reply).unwrap();
         assert_eq!(&reply[..len], b"applied\n");
+    }
+
+    #[test]
+    fn trigger_preview_is_received_without_a_profile_reload() {
+        use crate::adaptive_trigger::Effect;
+
+        let address =
+            SocketAddr::from_abstract_name(format!("joyshockrust-preview-{}", process::id()))
+                .unwrap();
+        let load_socket = UnixDatagram::bind_addr(&address).unwrap();
+        let reload = Reload {
+            path: None,
+            selection_path: None,
+            bridge_at_startup: BridgeOptions::default(),
+            allow_controller_switch: true,
+            signal: SignalFd::new(&SigSet::empty()).unwrap(),
+            listener: None,
+            load_socket: Some(load_socket),
+            outcome: Cell::new(Outcome::Applied),
+        };
+        let client = UnixDatagram::unbound().unwrap();
+        let (_sender, input) = UnixStream::pair().unwrap();
+        let read = |message: &[u8]| {
+            client.send_to_addr(message, &address).unwrap();
+            let (_, request, _) = wait(
+                input.as_fd(),
+                Some(&reload),
+                None,
+                None,
+                Some(Instant::now() + Duration::from_secs(1)),
+            )
+            .unwrap();
+            request.and_then(|request| request.resolve(ControllerFilter::default()))
+        };
+        assert!(matches!(
+            read(b"\0preview-trigger\n\x01\x03\x07"),
+            Some(Update::TriggerPreview(Preview::Set {
+                side: 1,
+                effect: Effect::Resistance {
+                    start: 3,
+                    strength: 7
+                },
+            }))
+        ));
+        assert!(matches!(
+            read(b"\0preview-trigger\n\x00\x00\x00"),
+            Some(Update::TriggerPreview(Preview::Set {
+                side: 0,
+                effect: Effect::Off
+            }))
+        ));
+        assert!(matches!(
+            read(b"\0preview-trigger\n"),
+            Some(Update::TriggerPreview(Preview::Reset))
+        ));
+        assert!(read(b"\0preview-trigger\n\x00\x0a\x07").is_none());
+        assert!(read(b"version = 1\n").is_none());
+        assert_eq!(reload.outcome(), "applied");
     }
 
     #[test]

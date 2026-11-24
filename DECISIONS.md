@@ -75,10 +75,19 @@ apply, including an identical reapply. It addresses only configured
 actuators and actuators it needs to clear. Trigger-only HID reports leave
 rumble and lights under kernel control. DualSense and Edge use the same
 trigger framing in the reference implementation reviewed 2026-11-24.
-The CLI can test either side without a profile. DualSense resistance was
-reported working. Edge resistance is still unverified.
+The CLI can test either side without a JoyShockRust profile. The user
+confirmed resistance on DualSense and DualSense Edge. On Edge, the
+active onboard profile's **Trigger Effect Intensity** was **Off** during
+the failed test. Enabling it restored resistance.
 [Linux report framing](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L1235-L1306) · [DualSense payload reference](https://github.com/x-iso/FlexInput/blob/6efeb8945f2edcb4591c7920d02915b6579cee8a/crates/devices/src/gyro.rs#L2418-L2457)
 [DualSense and Edge detection](https://github.com/nowrep/dualsensectl/blob/d3ae2fa272e1bf9a5c08a0ded3f374b40f7c73ac/main.c#L346-L364) · [Trigger reports](https://github.com/nowrep/dualsensectl/blob/d3ae2fa272e1bf9a5c08a0ded3f374b40f7c73ac/main.c#L795-L882)
+
+2026-11-24. The editor sends trigger previews asynchronously through the
+local control socket. The bridge writes the selected side in the
+control event, leaving the profile, virtual device state and last
+reload status alone. Closing the editor or switching drafts requests
+restoration of the active profile's effects. A new controller session
+starts with the active profile.
 
 ## Optional desktop device access
 

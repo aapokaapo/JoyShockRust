@@ -884,14 +884,19 @@ choose a key, mouse button or virtual gamepad button using **Output type**.
 Custom trigger gestures from older profiles can still be edited in **Advanced**.
 
 Under **Adaptive trigger**, choose **Resistance** and set the start zone
-and strength for the selected trigger, or choose **Off**. The bridge
-sends the effect to a DualSense or DualSense Edge when you **Save & Apply**
-and reapplies it on reconnect. This setting needs write access to hidraw.
+and strength for the selected trigger, or choose **Off**. The editor
+previews these changes immediately on the controller connected to the
+running bridge. **Save & Apply** keeps them in the active profile.
+Closing the editor or switching the draft restores the active profile's
+effects. Reconnecting also applies the active profile. The bridge needs
+write access to hidraw.
 
-On DualSense Edge, set the rear L2 and R2 travel sliders to the longest
-setting and check that **Trigger Effect Intensity** is enabled in the
-controller's active hardware profile. To isolate the effect from your
-JoyShockRust profile, close the bridge and test each trigger separately.
+On DualSense Edge, enable **Trigger Effect Intensity** in the
+controller's active onboard profile. When this is **Off**, a successful
+HID write can still produce no resistance. Set the rear L2 and R2
+travel sliders to the longest setting for the test. To isolate the
+effect from your JoyShockRust profile, close the bridge and test each
+trigger separately.
 
 ```sh
 cargo run --locked -p joyshockrust-linux -- --test-adaptive-triggers left

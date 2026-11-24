@@ -1,3 +1,9 @@
+use std::{
+    io,
+    os::unix::net::UnixDatagram,
+    path::{Path, PathBuf},
+};
+
 use adw::{gtk, prelude::*};
 use joyshockrust_core::{DEFAULT_TRIGGER_THRESHOLDS, validate_trigger_thresholds};
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, TableLike, Value, value};
@@ -18,6 +24,25 @@ const STAGES: [(&str, &str, &str, &str); 2] = [
     ),
     ("Full pull", "full", "full_button", "0.95:0.85"),
 ];
+
+pub fn send_preview(payload: &[u8]) -> io::Result<()> {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
+    send_preview_to(
+        &PathBuf::from(runtime).join("joyshockrust/reload.sock.load"),
+        payload,
+    )
+}
+
+fn send_preview_to(path: &Path, payload: &[u8]) -> io::Result<()> {
+    let socket = UnixDatagram::unbound()?;
+    socket.set_nonblocking(true)?;
+    let mut message = b"\0preview-trigger\n".to_vec();
+    message.extend_from_slice(payload);
+    socket.send_to(&message, path)?;
+    Ok(())
+}
 
 pub fn settings<'a>(
     doc: &'a DocumentMut,
@@ -274,7 +299,7 @@ fn add_adaptive(
 ) {
     let group = adw::PreferencesGroup::builder()
         .title("Adaptive trigger")
-        .description("Physical trigger resistance for DualSense and DualSense Edge. Use Save &amp; Apply to send it to the controller.")
+        .description("Changes preview immediately on the connected controller. Save &amp; Apply to keep them in the active profile.")
         .build();
     inspector.append(&group);
     let effect = settings.and_then(|table| table.get("adaptive"));
@@ -291,6 +316,12 @@ fn add_adaptive(
     };
     let start = spin("Start zone (0–9)", 0, 9, numeric("start", 3));
     let strength = spin("Resistance strength", 1, 8, numeric("strength", 3));
+    let feedback = gtk::Label::builder()
+        .wrap(true)
+        .xalign(0.0)
+        .visible(false)
+        .css_classes(["error"])
+        .build();
     let mode = controller::required_dropdown(
         "Effect",
         current,
@@ -303,10 +334,12 @@ fn add_adaptive(
             let edit = ctx.clone();
             let start = start.downgrade();
             let strength = strength.downgrade();
+            let feedback = feedback.clone();
             move |mode| {
                 if let (Some(start), Some(strength)) = (start.upgrade(), strength.upgrade()) {
                     save_effect(
                         &edit,
+                        &feedback,
                         side,
                         mode == "resistance",
                         start.value() as u8,
@@ -326,6 +359,7 @@ fn add_adaptive(
         let mode = mode.downgrade();
         let start = start.downgrade();
         let strength = strength.downgrade();
+        let feedback = feedback.clone();
         row.connect_value_notify(move |_| {
             if let (Some(mode), Some(start), Some(strength)) =
                 (mode.upgrade(), start.upgrade(), strength.upgrade())
@@ -333,6 +367,7 @@ fn add_adaptive(
             {
                 save_effect(
                     &edit,
+                    &feedback,
                     side,
                     true,
                     start.value() as u8,
@@ -342,10 +377,18 @@ fn add_adaptive(
         });
         group.add(row);
     }
+    group.add(&feedback);
 }
 
-fn save_effect(ctx: &Context, side: &str, enabled: bool, start: u8, strength: u8) {
-    ctx.edit(|doc| {
+fn save_effect(
+    ctx: &Context,
+    feedback: &gtk::Label,
+    side: &str,
+    enabled: bool,
+    start: u8,
+    strength: u8,
+) {
+    if !ctx.edit(|doc| {
         let table = settings_mut(doc, side)?;
         if enabled {
             let mut effect = InlineTable::new();
@@ -357,12 +400,48 @@ fn save_effect(ctx: &Context, side: &str, enabled: bool, start: u8, strength: u8
             table.remove("adaptive");
         }
         Ok(())
-    });
+    }) {
+        return;
+    }
+    let side = u8::from(side == "r2");
+    let [start, strength] = if enabled { [start, strength] } else { [0, 0] };
+    let result = ctx
+        .editor
+        .borrow_mut()
+        .preview_trigger([side, start, strength]);
+    feedback.set_visible(result.is_err());
+    if let Err(error) = result {
+        feedback.set_text(&format!(
+            "Could not send the live preview to JoyShockRust: {error}"
+        ));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trigger_preview_sends_effect_and_reset_as_separate_datagrams() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reload.sock.load");
+        let listener = UnixDatagram::bind(&path).unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+
+        for (payload, expected) in [
+            (&[1, 3, 7][..], &b"\0preview-trigger\n\x01\x03\x07"[..]),
+            (&[0, 0, 0][..], &b"\0preview-trigger\n\x00\x00\x00"[..]),
+            (&[][..], &b"\0preview-trigger\n"[..]),
+        ] {
+            send_preview_to(&path, payload).unwrap();
+            let mut buffer = [0; 32];
+            let (len, sender) = listener.recv_from(&mut buffer).unwrap();
+            assert!(sender.is_unnamed());
+            assert_eq!(&buffer[..len], expected);
+        }
+    }
 
     #[test]
     fn editing_default_legacy_stages_keeps_actions_and_overlap() {

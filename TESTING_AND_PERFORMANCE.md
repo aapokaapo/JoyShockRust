@@ -965,14 +965,19 @@ ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
 
 On USB and Bluetooth, select **Resistance** under **Adaptive trigger**
-for one side and save. Check that resistance starts in the selected zone
-and only affects that side. Change the strength, reconnect, and confirm
-the profile reapplies. Select **Off** and save to check normal travel.
-Repeat on DualSense and DualSense Edge.
+for one side. Change the start zone and strength. Check each change
+before saving and verify the other side stays as it was. Select **Off**
+and confirm that normal travel returns immediately. Close the editor
+and discard the draft to verify the active profile's effects are
+restored. Open the editor again, use **Save & Apply**, and confirm the
+saved effect is applied on reconnect. Repeat on DualSense and DualSense
+Edge.
 
-If there is no resistance on Edge, set both travel sliders to the
-longest position and enable trigger effects in its active hardware
-profile. Stop the bridge and run the
+The user confirmed Edge resistance after enabling **Trigger Effect
+Intensity** in the active onboard profile. The earlier USB test
+reported successful HID writes on both sides with this setting **Off**
+and produced no physical resistance. For a repeat test, set both
+travel sliders to the longest position, stop the bridge and run the
 [standalone adaptive trigger test](README.md#desktop-tray) once per
 side. Record the transport, whether the report write succeeded and
 whether you felt resistance. Repeat on the other transport if available.

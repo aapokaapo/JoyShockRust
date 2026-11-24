@@ -58,6 +58,32 @@ impl Effect {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum Preview {
+    Set { side: usize, effect: Effect },
+    Reset,
+}
+
+impl Preview {
+    pub fn parse(payload: &[u8]) -> Result<Self, &'static str> {
+        match payload {
+            [] => Ok(Self::Reset),
+            &[side @ 0..=1, start, strength] => {
+                let effect = if start == 0 && strength == 0 {
+                    Effect::Off
+                } else {
+                    Effect::Resistance { start, strength }.validate()?
+                };
+                Ok(Self::Set {
+                    side: usize::from(side),
+                    effect,
+                })
+            }
+            _ => Err("invalid adaptive trigger preview"),
+        }
+    }
+}
+
 fn packet(
     transport: Transport,
     sequence: u8,
@@ -113,8 +139,8 @@ impl AdaptiveTriggers {
         }
     }
 
-    fn apply(&mut self, path: &Path, input: &File, effects: [Effect; 2]) -> io::Result<()> {
-        if self.output.is_none() && effects != [Effect::Off; 2] {
+    fn open_output(&mut self, path: &Path, input: &File) -> io::Result<()> {
+        if self.output.is_none() {
             let output = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -130,22 +156,50 @@ impl AdaptiveTriggers {
             }
             self.output = Some(output);
         }
+        Ok(())
+    }
+
+    fn apply(&mut self, path: &Path, input: &File, effects: [Effect; 2]) -> io::Result<()> {
+        if effects != [Effect::Off; 2] {
+            self.open_output(path, input)?;
+        }
         self.write(effects)
     }
 
-    fn write(&mut self, effects: [Effect; 2]) -> io::Result<()> {
-        let Some(output) = &mut self.output else {
-            return Ok(());
+    pub fn preview(&mut self, path: &Path, input: &File, profile: [Effect; 2], preview: Preview) {
+        let result = match preview {
+            Preview::Set { side, effect } => self.open_output(path, input).and_then(|()| {
+                let mut updates = [None; 2];
+                updates[side] = Some(effect);
+                self.write_updates(updates)
+            }),
+            Preview::Reset => self.apply(path, input, profile),
         };
+        if let Err(error) = result {
+            eprintln!(
+                "Adaptive trigger preview unavailable on {}: {error}",
+                path.display()
+            );
+        }
+    }
+
+    fn write(&mut self, effects: [Effect; 2]) -> io::Result<()> {
         // Re-send enabled effects on each profile apply. A controller or
         // another HID client can reset them between profile updates.
         let updates = std::array::from_fn(|side| {
             (effects[side] != Effect::Off || self.applied[side] != Effect::Off)
                 .then_some(effects[side])
         });
+        self.write_updates(updates)
+    }
+
+    fn write_updates(&mut self, updates: [Option<Effect>; 2]) -> io::Result<()> {
         if updates == [None; 2] {
             return Ok(());
         }
+        let Some(output) = &mut self.output else {
+            return Ok(());
+        };
         let (buffer, length) = packet(self.transport, self.sequence, updates);
         if output.write(&buffer[..length])? != length {
             return Err(io::Error::new(
@@ -154,7 +208,11 @@ impl AdaptiveTriggers {
             ));
         }
         self.sequence = (self.sequence + 1) & 0x0f;
-        self.applied = effects;
+        for (applied, update) in self.applied.iter_mut().zip(updates) {
+            if let Some(effect) = update {
+                *applied = effect;
+            }
+        }
         Ok(())
     }
 }
@@ -311,6 +369,60 @@ mod tests {
             assert_eq!(report[1], 0x08);
             assert_eq!(report[11], 0);
             assert_eq!(report[22], mode);
+        }
+    }
+
+    #[test]
+    fn preview_writes_the_selected_side_and_reset_restores_the_profile() {
+        use std::{os::fd::OwnedFd, os::unix::net::UnixDatagram, time::Duration};
+
+        let (sink, source) = UnixDatagram::pair().unwrap();
+        sink.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let input = File::open("/dev/null").unwrap();
+        let path = Path::new("/dev/null");
+        let mut controller = AdaptiveTriggers::new(Transport::Usb);
+        controller.output = Some(File::from(OwnedFd::from(source)));
+        let saved = Effect::Resistance {
+            start: 3,
+            strength: 4,
+        };
+        let live = Effect::Resistance {
+            start: 4,
+            strength: 7,
+        };
+        let profile = [saved, Effect::Off];
+        controller.apply(path, &input, profile).unwrap();
+        controller.preview(
+            path,
+            &input,
+            profile,
+            Preview::Set {
+                side: 0,
+                effect: Effect::Off,
+            },
+        );
+        controller.preview(
+            path,
+            &input,
+            profile,
+            Preview::Set {
+                side: 1,
+                effect: live,
+            },
+        );
+        controller.preview(path, &input, profile, Preview::Reset);
+
+        let mut report = [0; 78];
+        for (flags, right, left) in [
+            (0x08, [0; 11], saved.encode()),
+            (0x08, [0; 11], Effect::Off.encode()),
+            (0x04, live.encode(), [0; 11]),
+            (0x0c, Effect::Off.encode(), saved.encode()),
+        ] {
+            assert_eq!(sink.recv(&mut report).unwrap(), 63);
+            assert_eq!(report[1], flags);
+            assert_eq!(report[11..22], right);
+            assert_eq!(report[22..33], left);
         }
     }
 }
