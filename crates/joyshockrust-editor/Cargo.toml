@@ -9,13 +9,13 @@ publish.workspace = true
 joyshockrust-ipc = { path = "../joyshockrust-ipc" }
 joyshockrust-config = { path = "../joyshockrust-config", features = ["profile"] }
 adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
-evdev = "0.13.2"
+evdev.workspace = true
 joyshockrust-core = { path = "../joyshockrust-core" }
 joyshockrust-input = { path = "../joyshockrust-input" }
 joyshockrust-motion = { path = "../joyshockrust-motion" }
 libc = "0.2"
 tempfile = "3"
-toml_edit = { version = "0.24", default-features = false, features = ["parse", "display"] }
+toml_edit.workspace = true
 
 [lints]
 workspace = true

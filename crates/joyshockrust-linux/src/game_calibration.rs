@@ -43,11 +43,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
                 "expected sensitivity, controller node and calibration window process ID".into(),
             );
         }
-        // Release the calibration mouse even if its window is killed.
-        nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL)?;
-        if nix::unistd::getppid().as_raw() != parent {
-            return Err("calibration window has closed".into());
-        }
+        crate::gyro_calibration::guard_window_process(parent)?;
         let mut stdout = io::stdout().lock();
         let counts = measure_with_stick(sensitivity, Some(Path::new(&hidraw)), |progress| {
             writeln!(stdout, "{}", progress.token())?;

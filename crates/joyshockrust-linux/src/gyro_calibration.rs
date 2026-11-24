@@ -65,6 +65,15 @@ pub fn load(device: &File) -> Option<Calibration> {
     }
 }
 
+pub(crate) fn guard_window_process(parent: i32) -> Result<(), Box<dyn Error>> {
+    // Release calibration resources if the window exits, even during setup.
+    nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL)?;
+    if nix::unistd::getppid().as_raw() != parent {
+        return Err("calibration window has closed".into());
+    }
+    Ok(())
+}
+
 pub fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
     let mode = args.next();
     match mode.as_deref().and_then(|arg| arg.to_str()) {
@@ -74,10 +83,7 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error
             if args.next().is_some() || parent <= 1 {
                 return Err("expected a controller node and calibration window process ID".into());
             }
-            nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL)?;
-            if nix::unistd::getppid().as_raw() != parent {
-                return Err("calibration window has closed".into());
-            }
+            guard_window_process(parent)?;
             measure(Path::new(&node))?;
         }
         Some("--save") => {
@@ -205,7 +211,8 @@ impl Sampler {
     fn new(factory: FactoryCalibration) -> Self {
         Self {
             factory,
-            clock: Timebase::new(150_000).expect("valid 50 ms sensor gap"),
+            clock: Timebase::new(joyshockrust_input::ticks_in_nanoseconds(50_000_000) as u32)
+                .expect("valid 50 ms sensor gap"),
             estimate: StationaryCalibration::default(),
         }
     }

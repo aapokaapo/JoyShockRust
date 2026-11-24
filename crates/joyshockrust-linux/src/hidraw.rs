@@ -37,6 +37,27 @@ pub(crate) fn hid_parent(node: &File) -> io::Result<udev::Device> {
         })
 }
 
+pub(crate) fn input_enumerator(hid: &udev::Device) -> io::Result<udev::Enumerator> {
+    let mut devices = udev::Enumerator::new()?;
+    devices.match_parent(hid)?;
+    devices.match_subsystem("input")?;
+    Ok(devices)
+}
+
+pub(crate) fn input_event_candidate(
+    node: &udev::Device,
+) -> io::Result<Option<(&std::path::Path, udev::Device)>> {
+    if !node.sysname().as_encoded_bytes().starts_with(b"event") {
+        return Ok(None);
+    }
+    let Some(path) = node.devnode() else {
+        return Ok(None);
+    };
+    Ok(node
+        .parent_with_subsystem("input")?
+        .map(|parent| (path, parent)))
+}
+
 pub(crate) fn wait_for_evdev<T>(
     hidraw: &File,
     probe: impl FnMut() -> io::Result<T>,

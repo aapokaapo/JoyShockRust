@@ -14,7 +14,7 @@ pub use calibration::{
     CalibratedImu, CalibrationReportError, DUALSENSE_USB_CALIBRATION_REPORT_ID,
     DUALSENSE_USB_CALIBRATION_REPORT_LEN, FactoryCalibration, UsbFactoryCalibration,
 };
-pub use timebase::{InvalidForwardLimit, Timebase, TimestampUpdate};
+pub use timebase::{InvalidForwardLimit, Timebase, TimestampUpdate, ticks_in_nanoseconds};
 
 /// The frame size including the numbered HID report ID.
 pub const DUALSENSE_EDGE_USB_REPORT_LEN: usize = 64;
@@ -27,6 +27,10 @@ const TOUCH_CONTACTS_OFFSET: usize = 32;
 const BATTERY_STATUS_OFFSET: usize = 52;
 const COMMON_REPORT_LEN: usize = DUALSENSE_EDGE_USB_REPORT_LEN - 1;
 
+const DUALSENSE_ID: (u16, u16) = (0x054c, 0x0ce6);
+const DUALSENSE_EDGE_ID: (u16, u16) = (0x054c, 0x0df2);
+pub const SUPPORTED_CONTROLLER_IDS: [(u16, u16); 2] = [DUALSENSE_ID, DUALSENSE_EDGE_ID];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceModel {
     DualSense,
@@ -37,8 +41,8 @@ pub enum DeviceModel {
 impl DeviceModel {
     pub const fn from_vid_pid(vendor_id: u16, product_id: u16) -> Self {
         match (vendor_id, product_id) {
-            (0x054c, 0x0ce6) => Self::DualSense,
-            (0x054c, 0x0df2) => Self::DualSenseEdge,
+            DUALSENSE_ID => Self::DualSense,
+            DUALSENSE_EDGE_ID => Self::DualSenseEdge,
             _ => Self::Other {
                 vendor_id,
                 product_id,

@@ -24,7 +24,8 @@ impl FlickStick {
         Self {
             counts_per_degree,
             axial_threshold: DEFAULT_FLICK_AXIAL_THRESHOLD_DEG.to_radians(),
-            timebase: Timebase::new(150_000).expect("valid 50 ms sensor gap"),
+            timebase: Timebase::new(joyshockrust_input::ticks_in_nanoseconds(50_000_000) as u32)
+                .expect("valid 50 ms sensor gap"),
             direction: FlickDirection::default(),
             steering_sensitivity: DEFAULT_FLICK_STEERING_SENSITIVITY,
             flick_duration: Duration::from_secs_f64(DEFAULT_FLICK_DURATION_MS / 1000.0),

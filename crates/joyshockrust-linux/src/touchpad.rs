@@ -25,18 +25,10 @@ pub fn try_grab_native(hidraw: &File) -> Option<RawDevice> {
 }
 
 fn probe_native(hid: &udev::Device) -> io::Result<RawDevice> {
-    let mut devices = udev::Enumerator::new()?;
-    devices.match_parent(hid)?;
-    devices.match_subsystem("input")?;
+    let mut devices = hidraw::input_enumerator(hid)?;
     let mut last_error = None;
     for node in devices.scan_devices()? {
-        if !node.sysname().as_encoded_bytes().starts_with(b"event") {
-            continue;
-        }
-        let Some(path) = node.devnode() else {
-            continue;
-        };
-        let Some(parent) = node.parent_with_subsystem("input")? else {
+        let Some((path, parent)) = hidraw::input_event_candidate(&node)? else {
             continue;
         };
         if !parent

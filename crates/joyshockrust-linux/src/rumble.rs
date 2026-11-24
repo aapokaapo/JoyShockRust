@@ -40,20 +40,12 @@ impl Rumble {
     }
 
     fn probe(hid: &udev::Device) -> io::Result<(Device, PathBuf)> {
-        let mut devices = udev::Enumerator::new()?;
-        devices.match_parent(hid)?;
-        devices.match_subsystem("input")?;
+        let mut devices = hidraw::input_enumerator(hid)?;
         let mut open_error = None;
         let mut has_candidate = false;
         for device in devices.scan_devices()? {
-            if !device.sysname().as_encoded_bytes().starts_with(b"event") {
-                continue;
-            }
-            let Some(path) = device.devnode() else {
-                continue;
-            };
             // Inspect the input parent before opening any sibling event nodes.
-            let Some(input) = device.parent_with_subsystem("input")? else {
+            let Some((path, input)) = hidraw::input_event_candidate(&device)? else {
                 continue;
             };
             if !has_force_feedback(input.attribute_value("capabilities/ff")) {

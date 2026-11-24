@@ -361,7 +361,7 @@ impl GyroAim {
     ) -> Self {
         let config = Self::config();
         // The sensor clock advances at three ticks per microsecond.
-        let max_gap_ticks = (config.max_gap_ns * 3 / 1_000) as u32;
+        let max_gap_ticks = joyshockrust_input::ticks_in_nanoseconds(config.max_gap_ns) as u32;
         Self {
             factory,
             timebase: Timebase::new(max_gap_ticks).expect("valid default sensor gap limit"),

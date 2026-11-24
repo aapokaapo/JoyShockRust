@@ -5,6 +5,12 @@ const TICKS_PER_MICROSECOND: u64 = 3;
 const NANOS_PER_MICROSECOND: u64 = 1_000;
 
 /// Classification of a timestamp from a successfully parsed report.
+/// Convert a duration to whole device ticks, rounding down.
+pub const fn ticks_in_nanoseconds(nanos: u64) -> u64 {
+    nanos / NANOS_PER_MICROSECOND * TICKS_PER_MICROSECOND
+        + nanos % NANOS_PER_MICROSECOND * TICKS_PER_MICROSECOND / NANOS_PER_MICROSECOND
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimestampUpdate {
     /// A new segment starts with zero elapsed time and no integration delta.
