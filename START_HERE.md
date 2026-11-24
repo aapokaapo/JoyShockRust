@@ -16,6 +16,8 @@ editor.
 4. For development, read the [repository instructions](AGENTS.md),
    [architecture](ARCHITECTURE.md) and [local checks](README.md#local-checks).
 
+Use `test` for changes under validation and `main` for accepted changes.
+
 The original project investigation is recorded in the
 [Phase 0 reference analysis](docs/REFERENCE_ANALYSIS.md). The
 [decision log](DECISIONS.md) retains the historical design decisions and

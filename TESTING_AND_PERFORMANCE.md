@@ -22,7 +22,7 @@ These are **engineering targets**, not established measurements. Measure USB and
 
 ## Current acceptance priorities
 
-Use the latest `joyshockrust/phase-6-compat` build. For the revisions
+Use the latest build from the `test` branch. For the revisions
 through `d761a87`, workspace tests and eight headless Wayland editor tests
 passed. Those editor tests exercise GTK controls and synthetic events.
 Use the sequence below to verify the current physical behavior. Record
