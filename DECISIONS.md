@@ -41,6 +41,15 @@ Reviewed 2026-11-22. The existing ADRs stand. Source revisions and physical vali
 
 For changes, add a dated ADR with context, alternatives, consequences and validation plan.
 
+## Live editor input previews
+
+2026-11-24. The editor polls the existing bridge status socket while the
+corresponding preview is mapped. The bridge retains only the latest touch
+positions for display, using the same decoded reports as the touch mappings.
+The editor draws those positions over its draft grid. This keeps the preview
+independent of profile activation and avoids a second hidraw reader.
+The touch snapshot distinguishes finger release from connection loss.
+
 ## Optional desktop device access
 
 Reviewed 2026-11-24. Ship separate hidraw and uinput fallback rules for

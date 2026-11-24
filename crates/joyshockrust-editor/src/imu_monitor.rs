@@ -1,71 +1,74 @@
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::time::Duration;
 
-use adw::{gio, glib, gtk, prelude::*};
+use adw::{gtk, prelude::*};
 
 use crate::controller_input;
+
+const VELOCITY_DISPLAY_LIMIT: f64 = 180.0;
 
 pub fn group() -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
         .title("Live calibrated IMU")
         .description("Controller axes with factory calibration and any measured gyro bias applied.")
         .build();
-    let rows = ["Angular velocity (°/s)", "Acceleration (g)"].map(|title| {
-        let row = adw::ActionRow::builder().title(title).subtitle("—").build();
+    let velocity = ["X", "Y", "Z"].map(|axis| {
+        let row = adw::ActionRow::builder()
+            .title(format!("{axis} angular velocity (°/s)"))
+            .subtitle("—")
+            .build();
+        let scale = gtk::Scale::with_range(
+            gtk::Orientation::Horizontal,
+            -VELOCITY_DISPLAY_LIMIT,
+            VELOCITY_DISPLAY_LIMIT,
+            0.01,
+        );
+        scale.set_value(0.0);
+        scale.set_draw_value(false);
+        scale.set_has_origin(false);
+        scale.add_mark(0.0, gtk::PositionType::Bottom, None);
+        scale.set_width_request(120);
+        scale.set_hexpand(true);
+        scale.set_valign(gtk::Align::Center);
+        scale.set_can_target(false);
+        scale.set_focusable(false);
+        scale.update_property(&[gtk::accessible::Property::Label(axis)]);
+        row.add_suffix(&scale);
         group.add(&row);
-        row
+        (row, scale)
     });
+    let acceleration = adw::ActionRow::builder()
+        .title("Acceleration (g)")
+        .subtitle("—")
+        .build();
+    group.add(&acceleration);
     let status = gtk::Label::builder()
         .wrap(true)
         .css_classes(["dim-label"])
         .build();
     group.add(&status);
 
-    let polling = Rc::new(RefCell::new(None::<glib::JoinHandle<()>>));
-    let on_map = polling.clone();
-    group.connect_map(move |_| {
-        let task = glib::MainContext::default().spawn_local(poll(rows.clone(), status.clone()));
-        on_map.replace(Some(task));
-    });
-    group.connect_unmap(move |_| {
-        if let Some(task) = polling.borrow_mut().take() {
-            task.abort();
-        }
-    });
-    group
-}
-
-async fn poll(rows: [adw::ActionRow; 2], status: gtk::Label) {
-    let update = |sample: Option<[[f32; 3]; 2]>, message: &str| {
+    controller_input::watch_status(&group, "imu=", Duration::from_millis(33), move |result| {
+        let (sample, message) = match result {
+            Ok(value) => match value.as_deref().and_then(parse_sample) {
+                Some(sample) => (Some(sample), ""),
+                None => (None, "Waiting for calibrated reports…"),
+            },
+            Err(()) => (None, "Bridge status is unavailable."),
+        };
         status.set_text(message);
         status.set_visible(!message.is_empty());
-        for (index, row) in rows.iter().enumerate() {
-            let text = sample.map_or_else(
-                || "—".into(),
-                |sample| {
-                    let [x, y, z] = sample[index];
-                    format!("X {x:+.3}    Y {y:+.3}    Z {z:+.3}")
-                },
-            );
-            row.set_subtitle(&text);
+        for (index, (row, scale)) in velocity.iter().enumerate() {
+            let value = sample.map(|sample| sample[0][index]);
+            scale.set_value(f64::from(value.unwrap_or_default()));
+            scale.set_opacity(if value.is_some() { 1.0 } else { 0.45 });
+            row.set_subtitle(&value.map_or_else(|| "—".into(), |value| format!("{value:+.3}")));
         }
-    };
-    update(None, "Waiting for calibrated reports…");
-    let Some(address) = controller_input::status_address() else {
-        update(None, "Bridge status is unavailable.");
-        return;
-    };
-    let client = gio::SocketClient::new();
-    client.set_timeout(1);
-    loop {
-        match controller_input::status_value(&client, &address, "imu=").await {
-            Ok(value) => match value.as_deref().and_then(parse_sample) {
-                Some(sample) => update(Some(sample), ""),
-                None => update(None, "Waiting for calibrated reports…"),
-            },
-            Err(_) => update(None, "Bridge status is unavailable."),
-        }
-        glib::timeout_future(Duration::from_millis(100)).await;
-    }
+        acceleration.set_subtitle(&sample.map_or_else(
+            || "—".into(),
+            |[_, [x, y, z]]| format!("X {x:+.3}    Y {y:+.3}    Z {z:+.3}"),
+        ));
+    });
+    group
 }
 
 fn parse_sample(value: &str) -> Option<[[f32; 3]; 2]> {

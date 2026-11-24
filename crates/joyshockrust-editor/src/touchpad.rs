@@ -1,9 +1,12 @@
+use std::{cell::Cell as State, rc::Rc, time::Duration};
+
 use adw::{gtk, prelude::*};
+use joyshockrust_input::{DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH};
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike, Value, value};
 
 use crate::{
     bindings::{self, Gesture, region_input, replace_value},
-    controller,
+    controller, controller_input,
     ui::{self, Context},
 };
 
@@ -352,6 +355,8 @@ fn show_cells(ctx: &Context, size: Cell, layout: &gtk::Box, actions: &gtk::Box) 
     while let Some(child) = layout.first_child() {
         layout.remove(&child);
     }
+    let selected = Rc::new(State::new(FIRST_CELL));
+    let preview = live_preview(size, selected.clone(), layout);
     let grid = gtk::Grid::builder()
         .column_homogeneous(true)
         .column_spacing(4)
@@ -378,10 +383,16 @@ fn show_cells(ctx: &Context, size: Cell, layout: &gtk::Box, actions: &gtk::Box) 
             }
             let ctx = ctx.clone();
             let actions = actions.downgrade();
+            let selected = selected.clone();
+            let preview = preview.downgrade();
             button.connect_toggled(move |button| {
                 if button.is_active()
                     && let Some(actions) = actions.upgrade()
                 {
+                    selected.set(cell);
+                    if let Some(preview) = preview.upgrade() {
+                        preview.queue_draw();
+                    }
                     show_actions(&ctx, cell, &actions);
                 }
             });
@@ -389,6 +400,121 @@ fn show_cells(ctx: &Context, size: Cell, layout: &gtk::Box, actions: &gtk::Box) 
         }
     }
     show_actions(ctx, FIRST_CELL, actions);
+}
+
+type Contacts = [Option<(f64, f64)>; 2];
+
+fn parse_contacts(value: &str) -> Option<Contacts> {
+    let mut contacts = [None; 2];
+    if !value.is_empty() {
+        for (index, point) in value.split(';').enumerate() {
+            let (x, y) = point.split_once(',')?;
+            let x = x.parse::<u16>().ok()?;
+            let y = y.parse::<u16>().ok()?;
+            if x >= DUALSENSE_TOUCHPAD_WIDTH || y >= DUALSENSE_TOUCHPAD_HEIGHT {
+                return None;
+            }
+            *contacts.get_mut(index)? = Some((
+                f64::from(x) / f64::from(DUALSENSE_TOUCHPAD_WIDTH),
+                f64::from(y) / f64::from(DUALSENSE_TOUCHPAD_HEIGHT),
+            ));
+        }
+    }
+    Some(contacts)
+}
+
+fn live_preview(size: Cell, selected: Rc<State<Cell>>, layout: &gtk::Box) -> gtk::DrawingArea {
+    let preview = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    preview.set_margin_bottom(12);
+    let area = gtk::DrawingArea::builder().content_height(160).build();
+    area.update_property(&[gtk::accessible::Property::Label("Live touchpad preview")]);
+    preview.append(&area);
+    let status = gtk::Label::builder()
+        .wrap(true)
+        .css_classes(["dim-label"])
+        .build();
+    preview.append(&status);
+    layout.append(&preview);
+
+    let contacts = Rc::new(State::new(Contacts::default()));
+    let drawn_contacts = contacts.clone();
+    area.set_draw_func(move |area, cr, width, height| {
+        let style = area.style_context();
+        let fg = style.color();
+        let accent = style.lookup_color("accent_color").unwrap_or(fg);
+        let color = |c: gtk::gdk::RGBA, alpha| {
+            cr.set_source_rgba(
+                f64::from(c.red()),
+                f64::from(c.green()),
+                f64::from(c.blue()),
+                alpha,
+            );
+        };
+        let ratio = f64::from(DUALSENSE_TOUCHPAD_WIDTH) / f64::from(DUALSENSE_TOUCHPAD_HEIGHT);
+        let w = (f64::from(width) - 20.0).min((f64::from(height) - 20.0) * ratio);
+        if w <= 0.0 {
+            return;
+        }
+        let h = w / ratio;
+        let left = (f64::from(width) - w) / 2.0;
+        let top = (f64::from(height) - h) / 2.0;
+        let cw = w / size.column as f64;
+        let ch = h / size.row as f64;
+        color(fg, 0.08);
+        cr.rectangle(left, top, w, h);
+        let _ = cr.fill();
+        let cell = selected.get();
+        color(accent, 0.25);
+        cr.rectangle(
+            left + (cell.column - 1) as f64 * cw,
+            top + (cell.row - 1) as f64 * ch,
+            cw,
+            ch,
+        );
+        let _ = cr.fill();
+        color(fg, 0.38);
+        cr.set_line_width(1.0);
+        cr.rectangle(left, top, w, h);
+        for column in 1..size.column {
+            let x = left + column as f64 * cw;
+            cr.move_to(x, top);
+            cr.line_to(x, top + h);
+        }
+        for row in 1..size.row {
+            let y = top + row as f64 * ch;
+            cr.move_to(left, y);
+            cr.line_to(left + w, y);
+        }
+        let _ = cr.stroke();
+        for (x, y) in drawn_contacts.get().into_iter().flatten() {
+            cr.arc(left + x * w, top + y * h, 6.0, 0.0, std::f64::consts::TAU);
+            color(accent, 1.0);
+            let _ = cr.fill_preserve();
+            color(fg, 1.0);
+            cr.set_line_width(1.5);
+            let _ = cr.stroke();
+        }
+    });
+    let chart = area.clone();
+    controller_input::watch_status(
+        &preview,
+        "touch_contacts=",
+        Duration::from_millis(33),
+        move |result| {
+            let (points, message) = match result {
+                Ok(value) => match value.as_deref().and_then(parse_contacts) {
+                    Some(points) => (points, ""),
+                    None => (Contacts::default(), "Waiting for touchpad reports…"),
+                },
+                Err(()) => (Contacts::default(), "Bridge status is unavailable."),
+            };
+            if contacts.replace(points) != points {
+                chart.queue_draw();
+            }
+            status.set_text(message);
+        },
+    );
+    area
 }
 
 fn show_actions(ctx: &Context, cell: Cell, actions: &gtk::Box) {
@@ -497,6 +623,19 @@ mod tests {
     use super::*;
 
     const RIGHT: Cell = Cell { row: 1, column: 2 };
+
+    #[test]
+    fn preview_parses_zero_one_or_two_contacts_in_surface_coordinates() {
+        assert_eq!(parse_contacts(""), Some([None, None]));
+        assert_eq!(parse_contacts("960,540"), Some([Some((0.5, 0.5)), None]));
+        assert_eq!(
+            parse_contacts("0,0;1919,1079"),
+            Some([Some((0.0, 0.0)), Some((1919.0 / 1920.0, 1079.0 / 1080.0))])
+        );
+        for invalid in ["1920,0", "0,1080", "-1,0", "10", "0,0;", "0,0;1,1;2,2"] {
+            assert!(parse_contacts(invalid).is_none(), "{invalid}");
+        }
+    }
 
     #[test]
     fn assigns_separate_touch_and_click_targets_and_removes_empty_regions() {
