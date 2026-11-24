@@ -601,15 +601,23 @@ hold = "BTN_LEFT"
 
 ## Device diagnostics
 
-Run `cargo run --locked -p joyshockrust-linux -- --diagnose` to list wired
-DualSense Edge hidraw nodes and check access to them and `/dev/uinput`.
-Append a hidraw path to check that node directly. The command opens the
+Run the following from your local desktop session to list supported
+DualSense and DualSense Edge hidraw nodes across USB and Bluetooth and
+check access to them and `/dev/uinput`.
+
+```sh
+cargo run --locked -p joyshockrust-linux -- --diagnose --auto-transport --controller-model any
+```
+
+Append a hidraw path to check that node directly. Diagnostics opens the
 devices as the current user and exits without creating virtual outputs.
+If the controller is listed as `readable` and `/dev/uinput` reports
+`read-write open OK`, the current device permissions are sufficient.
 
 Use `--diagnose --profile PATH` to check a specific profile before
 starting or restarting the bridge. It prints the effective controller
 filter and labels supported controllers outside that filter as
-`excluded by profile`. An optional `--bluetooth` or
+`excluded by controller filter`. An optional `--bluetooth` or
 `--auto-transport` overrides the controller settings file's transport for this check.
 Add `--show-controller-id` when you need to see individual HID IDs.
 
@@ -619,6 +627,41 @@ timestamp discontinuity counts after handling the requested count.
 Use `--benchmark-timeout SECONDS` to set the report collection deadline.
 The summary also reports CPU time and the process's peak resident memory.
 [Live benchmark instructions](TESTING_AND_PERFORMANCE.md#live-bridge-benchmark)
+
+### Optional device access rules
+
+Install only the rule for the node that reports `Permission denied`.
+Valve's Steam device rules already cover these HID devices and uinput
+when the corresponding rules are installed. The fallback rules use
+`uaccess` for the active local seat. [Valve hidraw rules](https://github.com/ValveSoftware/steam-devices/blob/22ec85e5ff5ea2e15c56d71a41bcbef46356cd60/60-steam-input.rules#L40-L50) · [Valve uinput rule](https://github.com/ValveSoftware/steam-devices/blob/22ec85e5ff5ea2e15c56d71a41bcbef46356cd60/60-steam-input.rules#L4-L5)
+
+- For `/dev/hidrawN`, install the DualSense and DualSense Edge rule,
+  reload udev rules, then unplug and reconnect USB or disconnect and
+  reconnect Bluetooth.
+
+  ```sh
+  sudo install -Dm644 dist/udev/70-joyshockrust-hidraw.rules /etc/udev/rules.d/70-joyshockrust-hidraw.rules
+  sudo udevadm control --reload-rules
+  ```
+
+- For `/dev/uinput`, install the rule and retrigger the uinput device.
+  If the node is missing, load the kernel module first with
+  `sudo modprobe uinput`. Access to this node allows the local user to
+  create virtual keyboards, mice and gamepads.
+
+  ```sh
+  sudo install -Dm644 dist/udev/70-joyshockrust-uinput.rules /etc/udev/rules.d/70-joyshockrust-uinput.rules
+  sudo udevadm control --reload-rules
+  sudo udevadm trigger --action=add --subsystem-match=misc --sysname-match=uinput
+  sudo udevadm settle
+  ```
+
+Repeat diagnostics as your normal desktop user. A headless or lingering
+service without an active seat needs its own device access policy. For
+duplicate touchpad pointer movement, use the [profile's session-scoped
+touchpad grab](#touchpad-regions). The [optional rumble
+rule](#virtual-gamepad-on-linux) covers the separate physical evdev
+force-feedback node.
 
 ## systemd user service
 
@@ -938,12 +981,18 @@ you used during installation.
      joyshockrust-linux joyshockrust-tray joyshockrust-editor
    ```
 
-4. If you installed the optional rumble rule, remove it, reload udev rules
-   and reconnect the controller. If you added `--launch-sdl` wrappers to
+4. If you installed any optional JoyShockRust udev rules, remove them and
+   reload udev rules. Reconnect the controller to refresh its device
+   permissions. The removal of the uinput rule applies when the device
+   node is recreated, for example after a reboot. If you added
+   `--launch-sdl` wrappers to
    Steam launch options or other launchers, remove those entries as well.
 
    ```sh
-   sudo rm -f -- /etc/udev/rules.d/70-joyshockrust-rumble.rules
+   sudo rm -f -- \
+     /etc/udev/rules.d/70-joyshockrust-hidraw.rules \
+     /etc/udev/rules.d/70-joyshockrust-uinput.rules \
+     /etc/udev/rules.d/70-joyshockrust-rumble.rules
    sudo udevadm control --reload-rules
    ```
 

@@ -41,6 +41,17 @@ Reviewed 2026-11-22. The existing ADRs stand. Source revisions and physical vali
 
 For changes, add a dated ADR with context, alternatives, consequences and validation plan.
 
+## Optional desktop device access
+
+Reviewed 2026-11-24. Ship separate hidraw and uinput fallback rules for
+active-seat installations where diagnostics reports a permission error.
+The hidraw rule matches the HID parent name for the supported Sony
+products on USB or Bluetooth. The kernel uses a bus, vendor and product
+prefix when naming those devices. Both rules rely on the distribution's
+seat-late ACL processing and leave device mode assignment to the
+distribution. Keep the optional runtime touchpad grab as the way to
+avoid duplicate desktop pointer input. [Linux HID naming](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-core.c#L2944-L2948) · [systemd seat-late rule](https://github.com/systemd/systemd/blob/781d9d0789379d1ea1f2ecefb804d41e9c8b6c38/rules.d/73-seat-late.rules.in#L10-L16) · [Device access setup](README.md#optional-device-access-rules)
+
 ## Project license
 
 2026-11-23. JoyShockRust uses MIT for its own source and documentation.
