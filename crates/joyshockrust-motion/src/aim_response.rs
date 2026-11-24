@@ -11,13 +11,23 @@ pub const DEFAULT_FLICK_STEERING_SENSITIVITY: f64 = 0.5;
 pub const MAX_GYRO_RATE_DPS: f64 = 2_000.0;
 pub const MAX_GYRO_ACCEL_MULTIPLIER: f64 = 10.0;
 
-const FLICK_ENGAGE_RADIUS: f32 = 0.90;
-const FLICK_RELEASE_RADIUS: f32 = 0.25;
+pub const DEFAULT_FLICK_ENGAGE_PERCENT: f64 = 90.0;
+pub const MIN_FLICK_ENGAGE_PERCENT: f64 = 30.0;
+pub const DEFAULT_FLICK_DURATION_MS: f64 = 100.0;
+pub const MIN_FLICK_DURATION_MS: f64 = 10.0;
+pub const MAX_FLICK_DURATION_MS: f64 = 500.0;
+pub const FLICK_RELEASE_RADIUS: f32 = 0.25;
 
-#[derive(Default)]
 pub struct FlickDirection {
     armed: bool,
     previous: Option<f64>,
+    engage_radius_squared: f32,
+}
+
+impl Default for FlickDirection {
+    fn default() -> Self {
+        Self::new(DEFAULT_FLICK_ENGAGE_PERCENT)
+    }
 }
 
 pub enum FlickUpdate {
@@ -27,6 +37,20 @@ pub enum FlickUpdate {
 }
 
 impl FlickDirection {
+    pub fn new(engage_percent: f64) -> Self {
+        let radius = (engage_percent / 100.0) as f32;
+        Self {
+            armed: false,
+            previous: None,
+            engage_radius_squared: radius * radius,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.armed = false;
+        self.previous = None;
+    }
+
     pub fn is_released(x: f32, y: f32) -> bool {
         x * x + y * y <= FLICK_RELEASE_RADIUS * FLICK_RELEASE_RADIUS
     }
@@ -37,8 +61,7 @@ impl FlickDirection {
             self.armed = true;
             self.previous = None;
         } else if self.armed
-            && (self.previous.is_some()
-                || x * x + y * y >= FLICK_ENGAGE_RADIUS * FLICK_ENGAGE_RADIUS)
+            && (self.previous.is_some() || x * x + y * y >= self.engage_radius_squared)
         {
             let current = f64::from(x).atan2(-f64::from(y));
             return match self.previous.replace(current) {
@@ -150,16 +173,20 @@ impl GyroResponse {
         if duration.is_zero() {
             return 0.0;
         }
-        let accelerate = self.acceleration_enabled && self.multiplier > 1.0;
-        if self.min_speed == 0.0 && !accelerate {
+        if self.min_speed == 0.0 && !self.acceleration_enabled {
             return 1.0;
         }
         let [yaw, pitch] = aim_delta.map(f64::from);
         let speed = pitch.hypot(yaw) / duration.as_secs_f64();
+        self.gain_at_speed(speed)
+    }
+
+    /// Response gain at the magnitude of a projected aim speed in degrees per second.
+    pub fn gain_at_speed(self, speed: f64) -> f64 {
         if speed < self.min_speed {
             return 0.0;
         }
-        if !accelerate {
+        if !self.acceleration_enabled || self.multiplier == 1.0 {
             return 1.0;
         }
         let amount =

@@ -837,21 +837,67 @@ pub(crate) mod tests {
         let (entry, _) = controls(&reopened, "Vertical");
         entry.set_text("9.5");
         assert_axes(31.25, 9.5);
-        let preview = descendants::<adw::PreferencesGroup>(&reopened)
+        assert_eq!(descendants::<gtk::DrawingArea>(&reopened).len(), 1);
+        let sticks = sensitivity::sticks_page(&ctx);
+        let preview = descendants::<adw::PreferencesGroup>(&sticks)
             .into_iter()
             .find(|group| group.title() == "Flick Stick")
             .unwrap();
         assert_eq!(
             descendants::<gtk::DrawingArea>(preview.upcast_ref()).len(),
-            2
+            4
         );
-        for title in ["Physical input", "Flick Stick response"] {
+        for title in [
+            "Physical input",
+            "Flick Stick response",
+            "Initial turn near a cardinal direction",
+            "Steering while held",
+        ] {
             assert!(
                 descendants::<gtk::Label>(preview.upcast_ref())
                     .iter()
                     .any(|label| label.text() == title)
             );
         }
+        let input = descendants::<adw::ComboRow>(preview.upcast_ref())
+            .into_iter()
+            .find(|row| row.title() == "Flick Stick input")
+            .unwrap();
+        assert_eq!(input.selected(), 0);
+        input.set_selected(1);
+        let settings = descendants::<adw::SpinRow>(preview.upcast_ref());
+        for (title, value) in [
+            ("Axial threshold", 12.0),
+            ("Steering sensitivity", 0.35),
+            ("Engagement (%)", 72.0),
+            ("Flick duration (ms)", 175.0),
+        ] {
+            settings
+                .iter()
+                .find(|row| row.title() == title)
+                .unwrap()
+                .set_value(value);
+        }
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["flick_stick_side"].as_str(),
+            Some("left")
+        );
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["flick_stick"].as_float(),
+            Some(1.0)
+        );
+        input.set_selected(0);
+        assert!(
+            !ctx.document().unwrap()["gyro"]
+                .as_table()
+                .unwrap()
+                .contains_key("flick_stick")
+        );
+        input.set_selected(2);
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["flick_stick_side"].as_str(),
+            Some("right")
+        );
 
         let acceleration = descendants::<adw::SwitchRow>(&reopened)
             .into_iter()
@@ -873,8 +919,6 @@ pub(crate) mod tests {
             ("Acceleration start", 25.0),
             ("Acceleration end", 120.0),
             ("Acceleration multiplier", 2.5),
-            ("Axial threshold", 12.0),
-            ("Steering sensitivity", 0.35),
         ] {
             setting(title).set_value(value);
         }
@@ -897,6 +941,8 @@ pub(crate) mod tests {
             ("accel_multiplier", 2.5),
             ("flick_axial_threshold_deg", 12.0),
             ("flick_steering_sensitivity", 0.35),
+            ("flick_engage_percent", 72.0),
+            ("flick_duration_ms", 175.0),
         ] {
             assert_eq!(doc["gyro"][key].as_float(), Some(value));
         }

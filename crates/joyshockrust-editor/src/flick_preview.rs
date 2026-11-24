@@ -2,14 +2,16 @@ use std::{
     cell::{Cell, RefCell},
     f64::consts::{FRAC_PI_2, TAU},
     fs::File,
-    path::{Path, PathBuf},
+    path::PathBuf,
     rc::Rc,
     time::{Duration, Instant},
 };
 
 use adw::{gio, glib, gtk, prelude::*};
-use joyshockrust_core::Stick;
-use joyshockrust_motion::aim_response::{FlickDirection, FlickUpdate, snap_flick_angle};
+use joyshockrust_core::{Stick, StickSide};
+use joyshockrust_motion::aim_response::{
+    FLICK_RELEASE_RADIUS, FlickDirection, FlickUpdate, snap_flick_angle,
+};
 
 use crate::controller_input;
 
@@ -39,7 +41,9 @@ impl PreviewSample {
     fn adjusted_marker(self, threshold: f64, multiplier: f64) -> (f64, f64) {
         let x = f64::from(self.stick.x);
         let y = f64::from(self.stick.y);
-        let [initial, steered] = self.turn.unwrap_or_else(|| [x.atan2(-y), 0.0]);
+        let Some([initial, steered]) = self.turn else {
+            return (0.0, 0.0);
+        };
         let radius = x.hypot(y);
         let (sin, cos) = (snap_flick_angle(initial, threshold) + steered * multiplier).sin_cos();
         (radius * sin, -radius * cos)
@@ -50,7 +54,9 @@ pub fn add(
     group: &adw::PreferencesGroup,
     adjustment: &gtk::Adjustment,
     steering: &gtk::Adjustment,
-) {
+    engagement: &gtk::Adjustment,
+    side: Rc<Cell<StickSide>>,
+) -> gtk::Box {
     let sample = Rc::new(Cell::new(None::<PreviewSample>));
     let plots = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     plots.set_homogeneous(true);
@@ -73,6 +79,7 @@ pub fn add(
         let adjustment = adjustment.clone();
         let steering = steering.clone();
         let sample = sample.clone();
+        let engagement = engagement.clone();
         chart.set_draw_func(move |area, cr, width, height| {
             let threshold = adjustment.value().to_radians();
             let adjusted = index != 0;
@@ -83,10 +90,18 @@ pub fn add(
                     (f64::from(sample.stick.x), f64::from(sample.stick.y))
                 }
             });
-            draw(area, cr, width, height, threshold, marker, adjusted);
+            draw(
+                area,
+                cr,
+                (width, height),
+                threshold,
+                engagement.value(),
+                marker,
+                adjusted,
+            );
         });
     }
-    for setting in [adjustment, steering] {
+    for setting in [adjustment, steering, engagement] {
         let chart_refs = charts.each_ref().map(|chart| chart.downgrade());
         setting.connect_value_changed(move |_| {
             for chart in chart_refs.iter().filter_map(glib::WeakRef::upgrade) {
@@ -108,11 +123,14 @@ pub fn add(
 
     let polling = Rc::new(RefCell::new(None::<glib::JoinHandle<()>>));
     let on_map = polling.clone();
+    let engagement = engagement.clone();
     preview.connect_map(move |_| {
         let task = glib::MainContext::default().spawn_local(poll_input(
             sample.clone(),
             charts.clone(),
             status.clone(),
+            side.clone(),
+            engagement.clone(),
         ));
         on_map.replace(Some(task));
     });
@@ -121,26 +139,19 @@ pub fn add(
             task.abort();
         }
     });
+    preview
 }
 
 async fn active_node(
     client: &gio::SocketClient,
     address: &gio::UnixSocketAddress,
 ) -> Result<Option<PathBuf>, glib::Error> {
-    let connection = client.connect_future(address).await?;
-    let stream = gio::DataInputStream::new(&connection.input_stream());
-    for _ in 0..64 {
-        let Some(line) = stream
-            .read_line_utf8_future(glib::Priority::DEFAULT)
+    Ok(
+        controller_input::status_value(client, address, "active_hidraw=")
             .await?
-        else {
-            break;
-        };
-        if let Some(node) = line.strip_prefix("active_hidraw=") {
-            return Ok(hidraw_path(node));
-        }
-    }
-    Ok(None)
+            .as_deref()
+            .and_then(hidraw_path),
+    )
 }
 
 fn hidraw_path(value: &str) -> Option<PathBuf> {
@@ -153,6 +164,8 @@ async fn poll_input(
     sample: Rc<Cell<Option<PreviewSample>>>,
     charts: [gtk::DrawingArea; 2],
     status: gtk::Label,
+    side: Rc<Cell<StickSide>>,
+    engagement: gtk::Adjustment,
 ) {
     let update = |latest| {
         if sample.replace(latest) != latest {
@@ -162,27 +175,31 @@ async fn poll_input(
         }
     };
     update(None);
-    let Some(runtime) =
-        std::env::var_os("XDG_RUNTIME_DIR").filter(|path| Path::new(path).is_absolute())
-    else {
+    let Some(address) = controller_input::status_address() else {
         status.set_text("Bridge status is unavailable");
         return;
     };
-    let address =
-        gio::UnixSocketAddress::new(&Path::new(&runtime).join("joyshockrust/status.sock"));
     let client = gio::SocketClient::new();
     client.set_timeout(1);
     let mut next_check = Instant::now();
     let mut input: Option<(PathBuf, File)> = None;
     let mut buffer = [0; 16_384];
-    let mut direction = FlickDirection::default();
+    let mut engage_value = engagement.value();
+    let mut direction = FlickDirection::new(engage_value);
+    let mut current_side = side.get();
     loop {
+        if current_side != side.get() || engage_value != engagement.value() {
+            current_side = side.get();
+            engage_value = engagement.value();
+            direction = FlickDirection::new(engage_value);
+            update(None);
+        }
         if Instant::now() >= next_check {
             match active_node(&client, &address).await {
                 Ok(Some(node)) if input.as_ref().is_some_and(|(path, _)| *path == node) => {}
                 Ok(Some(node)) => {
                     update(None);
-                    direction = FlickDirection::default();
+                    direction.reset();
                     input = match controller_input::open(&node) {
                         Ok(file) => {
                             status.set_text("Waiting for controller input…");
@@ -211,7 +228,10 @@ async fn poll_input(
             let mut latest = sample.get().unwrap_or_default();
             let mut received = false;
             match controller_input::read_reports(file, &mut buffer, 64, |controls| {
-                latest.update(controls.right_stick, &mut direction);
+                latest.update(
+                    current_side.select(controls.left_stick, controls.right_stick),
+                    &mut direction,
+                );
                 received = true;
                 true
             }) {
@@ -242,9 +262,9 @@ async fn poll_input(
 fn draw(
     area: &gtk::DrawingArea,
     cr: &gtk::cairo::Context,
-    width: i32,
-    height: i32,
+    (width, height): (i32, i32),
     threshold: f64,
+    engagement: f64,
     marker: Option<(f64, f64)>,
     adjusted: bool,
 ) {
@@ -282,6 +302,15 @@ fn draw(
     cr.move_to(x, y - radius);
     cr.line_to(x, y + radius);
     let _ = cr.stroke();
+
+    color(fg, 0.35);
+    cr.set_dash(&[3.0, 3.0], 0.0);
+    for ring in [f64::from(FLICK_RELEASE_RADIUS), engagement / 100.0] {
+        cr.new_sub_path();
+        cr.arc(x, y, radius * ring, 0.0, TAU);
+    }
+    let _ = cr.stroke();
+    cr.set_dash(&[], 0.0);
 
     if let Some((dx, dy)) = marker {
         let color_value = if adjusted { accent } else { fg };

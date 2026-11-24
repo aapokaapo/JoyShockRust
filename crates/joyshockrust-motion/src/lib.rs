@@ -144,6 +144,11 @@ impl MotionEngine {
         })
     }
 
+    /// Stationary bias currently applied to the calibrated gyro.
+    pub fn calibration(&self) -> Calibration {
+        self.calibration
+    }
+
     /// Clear time and gravity history while retaining the supplied gyro bias.
     pub fn reset_segment(&mut self) {
         self.previous = None;

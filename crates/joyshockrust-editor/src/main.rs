@@ -14,6 +14,8 @@ mod controller;
 mod controller_input;
 mod flick_preview;
 mod gyro_activation;
+mod imu_monitor;
+mod response_plot;
 mod sensitivity;
 mod stick_keys;
 mod touchpad;

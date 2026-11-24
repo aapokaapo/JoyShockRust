@@ -8,14 +8,15 @@ use evdev::{
     AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode, RelativeAxisCode as Axis,
     uinput::VirtualDevice,
 };
-use joyshockrust_core::Button;
+use joyshockrust_core::{Button, StickSide};
 use joyshockrust_input::{
     FactoryCalibration, InputReport, RawImuSample, Timebase, TimestampUpdate, Transport,
 };
 use joyshockrust_motion::{
     AimMode, Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
     aim_response::{
-        DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse,
+        DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_DURATION_MS, DEFAULT_FLICK_ENGAGE_PERCENT,
+        DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse,
     },
 };
 
@@ -31,7 +32,7 @@ pub struct GyroMouse {
     aim: GyroAim,
     output: VirtualDevice,
     gate: GyroGate,
-    flick: Option<FlickStick>,
+    flick: Option<(FlickStick, StickSide)>,
     hold: Option<HoldDetector>,
     shortcut: Option<ShortcutCalibration>,
     haptics: Option<Haptics>,
@@ -45,6 +46,9 @@ pub struct Options {
     pub calibration_hold: Option<HoldBinding>,
     pub binding: Binding,
     pub flick_stick: Option<f64>,
+    pub flick_stick_side: StickSide,
+    pub flick_engage_percent: Option<f64>,
+    pub flick_duration_ms: Option<f64>,
     pub flick_axial_threshold_deg: Option<f64>,
     pub flick_steering_sensitivity: Option<f64>,
     pub response: GyroResponse,
@@ -140,6 +144,28 @@ impl Options {
         self.flick_stick
             .map(|scale| self.game_calibration.scale(scale))
     }
+
+    fn create_flick(self) -> Option<(FlickStick, StickSide)> {
+        self.flick_scale().map(|scale| {
+            (
+                FlickStick::new(scale)
+                    .with_timing(
+                        self.flick_engage_percent
+                            .unwrap_or(DEFAULT_FLICK_ENGAGE_PERCENT),
+                        self.flick_duration_ms.unwrap_or(DEFAULT_FLICK_DURATION_MS),
+                    )
+                    .with_axial_threshold(self.flick_axial_threshold())
+                    .with_steering_sensitivity(self.flick_steering_sensitivity()),
+                self.flick_stick_side,
+            )
+        })
+    }
+
+    pub fn can_reconfigure(self, next: Self) -> bool {
+        self.calibrate == next.calibrate
+            && self.calibration_hold == next.calibration_hold
+            && self.binding == next.binding
+    }
 }
 
 pub fn validate_flick_scale(scale: f64) -> Result<f64, &'static str> {
@@ -203,11 +229,7 @@ impl GyroMouse {
             haptics: Haptics::open_controller(input, transport),
             bias_writer,
             gate: GyroGate::new(options.binding),
-            flick: options.flick_scale().map(|scale| {
-                FlickStick::new(scale)
-                    .with_axial_threshold(options.flick_axial_threshold())
-                    .with_steering_sensitivity(options.flick_steering_sensitivity())
-            }),
+            flick: options.create_flick(),
         })
     }
 
@@ -220,17 +242,31 @@ impl GyroMouse {
         }
     }
 
-    pub fn set_scaling(&mut self, options: Options) {
+    pub fn reconfigure(&mut self, current: Options, options: Options) {
         self.aim.set_mode(options.aim_mode);
         self.aim.set_sensitivity(options.gyro_scale());
         if self.aim.response != options.response {
             self.aim.set_response(options.response);
         }
-        if let (Some(flick), Some(scale)) = (&mut self.flick, options.flick_scale()) {
+        if current.flick_stick.is_some() != options.flick_stick.is_some()
+            || current.flick_stick_side != options.flick_stick_side
+            || current.flick_engage_percent != options.flick_engage_percent
+            || current.flick_duration_ms != options.flick_duration_ms
+        {
+            self.flick = options.create_flick();
+        } else if let (Some((flick, _)), Some(scale)) = (&mut self.flick, options.flick_scale()) {
             flick.set_counts_per_degree(scale);
             flick.set_axial_threshold(options.flick_axial_threshold());
             flick.set_steering_sensitivity(options.flick_steering_sensitivity());
         }
+    }
+
+    pub fn factory_calibration(&self) -> FactoryCalibration {
+        self.aim.factory
+    }
+
+    pub fn stationary_calibration(&self) -> Calibration {
+        self.aim.motion.calibration()
     }
 
     pub fn publish(&mut self, report: InputReport) -> io::Result<bool> {
@@ -280,9 +316,10 @@ impl GyroMouse {
         let mut movement = self.aim.advance(report.imu, enabled);
         if !was_calibrating
             && !suppress_flick
-            && let Some(flick) = &mut self.flick
+            && let Some((flick, side)) = &mut self.flick
         {
-            movement[0] += flick.advance(report.controls.right_stick, report.imu.device_ticks);
+            let stick = side.select(report.controls.left_stick, report.controls.right_stick);
+            movement[0] += flick.advance(stick, report.imu.device_ticks);
         }
         if let Some(bias) = self.aim.completed_bias.take() {
             if self.shortcut.take().is_some()

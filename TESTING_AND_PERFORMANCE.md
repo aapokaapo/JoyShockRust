@@ -215,13 +215,18 @@ steering at 0, 0.5 and 1 with the same initial flick. Measure RWC with the
 same profile. Verify small corrections near forward still use the full
 measurement sensitivity.
 Set the threshold to 0° and repeat to compare the response. Open
-**Gyro → Flick Stick** with the bridge running. Move the active right
+**Sticks → Flick Stick** with the bridge running. Move the active right
 stick near a sector edge and change the threshold in the editor.
 Check that both previews follow the stick, that the adjusted marker
 snaps on initial flick within a shaded sector, and that both the sector
 and held steering response update before saving.
 Switch controllers or reconnect and check that the preview follows the
-active controller.
+active controller. Set **Flick Stick input** to **Left stick**, lower
+**Engagement** and increase **Flick duration**. Check that the preview
+shows the new ring, the left stick starts a turn earlier and completes
+the turn over the longer interval, and the right virtual stick still
+responds. Compare both solid response curves against their dashed
+linear references as the threshold and steering multiplier change.
 
 The user reported that Flick Stick worked as expected.
 
@@ -916,6 +921,12 @@ aim** using **Save & Apply**. Hold the controller approximately flat and
 rotate about vertical to compare horizontal aim. Move the controller in
 a straight line without rotating it and check the cursor stays still.
 Switch modes again while the controller rests and check for a jump.
+In **Live calibrated IMU**, check that angular velocity approaches zero
+at rest, the acceleration magnitude is about 1 g, and the three axes
+respond to rotation and tilt. Disconnect and confirm the values clear.
+In **Gyro response**, change the minimum speed and acceleration
+multiplier and compare the configured curve with the dashed linear
+reference.
 
 In **Gyro → Gyro activation**, select **Disable while held** and L2,
 apply the profile, then check that holding and releasing L2 stops and

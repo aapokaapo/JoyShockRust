@@ -764,15 +764,28 @@ Turn off **Gyro acceleration** to suspend the boost while retaining its
 settings. **Minimum speed** still applies independently. Its default of
 0.2°/s filters small residual movement after calibration. Set it to 0 to
 use every measured movement.
-Under **Flick Stick**, **Axial threshold** snaps the initial flick to
+The gyro response chart compares projected aim speed with the configured
+threshold and acceleration curve and a linear reference, before axis
+sensitivity and game calibration are applied. **Live calibrated IMU**
+shows angular velocity in °/s and acceleration in g on the active
+controller's X, Y and Z axes. The readings include factory calibration
+and the stationary gyro bias currently applied by the bridge.
+
+Under **Sticks → Flick Stick → Flick Stick input**, choose **Off**,
+**Left stick** or **Right stick**. The selected stick controls horizontal
+mouse turns and its virtual gamepad axes stay centered. **Engagement**
+sets the required stick travel and **Flick duration** controls how fast the
+first turn completes. The defaults are 90% and 100 ms.
+**Axial threshold** snaps the initial flick to
 the nearest cardinal direction inside the chosen angle, with a smooth
 transition outside it. The default is 4°. While the stick is held,
 **Steering sensitivity** scales subsequent turns from their physical
 angle changes. Its default is 0.50, so a 30° movement after the flick
 turns the camera about 15° with a calibrated profile. At 0, only the
 initial flick moves the camera. At 1, held steering uses the full
-sensitivity. The preview compares physical input with the Flick Stick
-response using both draft settings.
+sensitivity. Separate charts compare the initial turn and held steering
+to a linear reference. The live stick preview shows the configured
+engagement ring, physical stick input and adjusted angle.
 
 Open the profile actions menu to **Validate Profile** or **Save** to
 disk. **Save & Apply** writes the profile and loads it into the running
@@ -1121,7 +1134,13 @@ stick motion until the stick returns within 25% of center.
 The virtual gamepad's right-stick axes are centered while this mode is
 enabled. Gyro gating still controls gyro input independently.
 
-For a TOML profile, set `flick_axial_threshold_deg` in `[gyro]` to a
+For a TOML profile, set `flick_stick` in `[gyro]` to enable the mode and
+set its base turn sensitivity. `flick_stick_side` accepts `left` or
+`right` and defaults to `right`. Set `flick_engage_percent` from 30 to
+100 or `flick_duration_ms` from 10 to 500 to override the defaults.
+The RWC workflow continues to measure on the right stick using its
+physical angle and full steering sensitivity.
+Set `flick_axial_threshold_deg` to a
 value from 0 to 30. Use 0 to disable cardinal snapping. Set
 `flick_steering_sensitivity` in the same table to a value from 0 to 1.
 Gyro response

@@ -15,7 +15,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use joyshockrust_input::{BatteryReading, BatteryState, DeviceModel, Transport};
+use joyshockrust_input::{
+    BatteryReading, BatteryState, DeviceModel, FactoryCalibration, RawImuSample, Transport,
+};
+use joyshockrust_motion::Calibration;
 
 use crate::{discovery::ControllerFilter, hidraw::Identity};
 
@@ -37,6 +40,14 @@ pub struct StatusSocket {
     touchpad_grabbed: Cell<bool>,
     touchpad_grab_requested: Cell<bool>,
     outputs_paused: Cell<bool>,
+    imu: Cell<ImuSnapshot>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ImuSnapshot {
+    factory: Option<FactoryCalibration>,
+    sample: Option<RawImuSample>,
+    bias: Calibration,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -115,6 +126,7 @@ impl StatusSocket {
             touchpad_grabbed: Cell::default(),
             touchpad_grab_requested: Cell::default(),
             outputs_paused: Cell::default(),
+            imu: Cell::default(),
         })
     }
 
@@ -194,6 +206,7 @@ impl StatusSocket {
             sessions.started += u64::from(identity.is_some());
             self.sessions.set(sessions);
             snapshot = Snapshot::default();
+            self.imu.set(ImuSnapshot::default());
             self.reports.set(ReportStats::default());
         }
         snapshot.identity = identity;
@@ -210,6 +223,23 @@ impl StatusSocket {
             reports.baseline = Some((Instant::now(), reports.decoded));
         }
         self.reports.set(reports);
+    }
+
+    pub fn set_imu_calibration(&self, factory: Option<FactoryCalibration>, bias: Calibration) {
+        self.imu.set(ImuSnapshot {
+            factory,
+            bias,
+            sample: None,
+        });
+    }
+
+    pub fn observe_imu(&self, sample: RawImuSample, bias: Option<Calibration>) {
+        let mut imu = self.imu.get();
+        imu.sample = Some(sample);
+        if let Some(bias) = bias {
+            imu.bias = bias;
+        }
+        self.imu.set(imu);
     }
 
     pub fn observe_battery(&self, battery: BatteryReading) {
@@ -311,6 +341,18 @@ impl StatusSocket {
             use std::fmt::Write;
             let _ = writeln!(response, "profile_path_hex={path}");
         }
+        let imu = self.imu.get();
+        if let (Some(factory), Some(raw)) = (imu.factory, imu.sample) {
+            use std::fmt::Write;
+            let sample = factory.convert(raw);
+            let [gx, gy, gz] =
+                std::array::from_fn(|i| sample.gyro_dps[i] - imu.bias.gyro_bias_dps[i]);
+            let [ax, ay, az] = sample.accel_g;
+            let _ = writeln!(
+                response,
+                "imu={gx:.4},{gy:.4},{gz:.4},{ax:.4},{ay:.4},{az:.4}"
+            );
+        }
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
             match self.listener.accept() {
@@ -380,6 +422,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn calibrated_imu_snapshot_applies_bias_and_clears_on_disconnect() {
+        let directory = std::env::temp_dir();
+        let path = directory.join(format!("jsr-imu-test-{}.sock", process::id()));
+        let status = StatusSocket::bind(&path).unwrap();
+        let identity = Identity {
+            model: DeviceModel::DualSenseEdge,
+            transport: Transport::Usb,
+        };
+        status.update(Some(identity), true);
+        let mut report = [0; 41];
+        report[0] = 5;
+        for (offset, counts) in [
+            (7, 8000_i16),
+            (9, -8000),
+            (11, 8000),
+            (13, -8000),
+            (15, 8000),
+            (17, -8000),
+            (19, 500),
+            (21, 500),
+            (23, 8192),
+            (25, -8192),
+            (27, 8192),
+            (29, -8192),
+            (31, 8192),
+            (33, -8192),
+        ] {
+            report[offset..offset + 2].copy_from_slice(&counts.to_le_bytes());
+        }
+        status.set_imu_calibration(
+            Some(FactoryCalibration::from_report(&report).unwrap()),
+            Calibration::default(),
+        );
+        status.observe_imu(
+            RawImuSample {
+                gyro_counts: [16, -32, 0],
+                accel_counts: [0, 0, 8192],
+                device_ticks: 1,
+            },
+            Some(Calibration {
+                gyro_bias_dps: [0.5, -0.5, 0.0],
+            }),
+        );
+        let request = || {
+            let mut socket = UnixStream::connect(&path).unwrap();
+            status.respond("not_attempted").unwrap();
+            let mut reply = String::new();
+            socket.read_to_string(&mut reply).unwrap();
+            reply
+        };
+        let active = request();
+        status.update(None, true);
+        let disconnected = request();
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            active.contains("imu=0.5000,-1.5000,0.0000,0.0000,0.0000,1.0000\n"),
+            "{active}"
+        );
+        assert!(!disconnected.contains("\nimu="));
+    }
+
+    #[test]
     fn report_stats_follow_the_active_session() {
         let name = format!("joyshockrust-report-stats-test-{}", process::id());
         let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
@@ -403,6 +507,7 @@ mod tests {
             touchpad_grabbed: Cell::default(),
             touchpad_grab_requested: Cell::default(),
             outputs_paused: Cell::default(),
+            imu: Cell::default(),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
@@ -517,6 +622,7 @@ mod tests {
             touchpad_grabbed: Cell::default(),
             touchpad_grab_requested: Cell::default(),
             outputs_paused: Cell::default(),
+            imu: Cell::default(),
         };
         let identity = Identity {
             model: DeviceModel::DualSenseEdge,
@@ -613,6 +719,7 @@ mod tests {
             touchpad_grabbed: Cell::default(),
             touchpad_grab_requested: Cell::default(),
             outputs_paused: Cell::default(),
+            imu: Cell::default(),
         };
         let (_sender, input) = UnixStream::pair().unwrap();
 

@@ -1,4 +1,7 @@
-use joyshockrust_motion::aim_response::{GyroResponse, validate_flick_axial_threshold};
+use joyshockrust_motion::aim_response::{
+    GyroResponse, MAX_FLICK_DURATION_MS, MIN_FLICK_DURATION_MS, MIN_FLICK_ENGAGE_PERCENT,
+    validate_flick_axial_threshold,
+};
 
 use std::{
     env,
@@ -50,6 +53,9 @@ struct Gyro {
     aim_mode: Option<String>,
     calibration_hold: Option<CalibrationHold>,
     flick_stick: Option<f64>,
+    flick_stick_side: Option<String>,
+    flick_engage_percent: Option<f64>,
+    flick_duration_ms: Option<f64>,
     flick_axial_threshold_deg: Option<f64>,
     flick_steering_sensitivity: Option<f64>,
     threshold_dps: Option<f64>,
@@ -421,6 +427,18 @@ impl Gyro {
             .map(gyro_mouse::validate_flick_scale)
             .transpose()?;
         if self
+            .flick_engage_percent
+            .is_some_and(|value| !(MIN_FLICK_ENGAGE_PERCENT..=100.0).contains(&value))
+        {
+            return Err("Flick Stick engagement must be between 30 and 100 percent".into());
+        }
+        if self
+            .flick_duration_ms
+            .is_some_and(|value| !(MIN_FLICK_DURATION_MS..=MAX_FLICK_DURATION_MS).contains(&value))
+        {
+            return Err("Flick Stick duration must be between 10 and 500 ms".into());
+        }
+        if self
             .flick_steering_sensitivity
             .is_some_and(|value| !(0.0..=1.0).contains(&value))
         {
@@ -473,6 +491,13 @@ impl Gyro {
                 .transpose()?,
             binding,
             flick_stick,
+            flick_engage_percent: self.flick_engage_percent,
+            flick_duration_ms: self.flick_duration_ms,
+            flick_stick_side: match self.flick_stick_side.as_deref() {
+                Some("left") => joyshockrust_core::StickSide::Left,
+                None | Some("right") => joyshockrust_core::StickSide::Right,
+                Some(_) => return Err("gyro.flick_stick_side must be left or right".into()),
+            },
             flick_axial_threshold_deg: self
                 .flick_axial_threshold_deg
                 .map(validate_flick_axial_threshold)

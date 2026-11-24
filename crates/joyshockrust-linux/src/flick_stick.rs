@@ -3,11 +3,9 @@ use std::time::Duration;
 use joyshockrust_core::Stick;
 use joyshockrust_input::{Timebase, TimestampUpdate};
 use joyshockrust_motion::aim_response::{
-    DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, FlickDirection,
-    FlickUpdate, snap_flick_angle,
+    DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_DURATION_MS,
+    DEFAULT_FLICK_STEERING_SENSITIVITY, FlickDirection, FlickUpdate, snap_flick_angle,
 };
-
-const FLICK_DURATION: Duration = Duration::from_millis(100);
 
 pub struct FlickStick {
     counts_per_degree: f64,
@@ -15,6 +13,7 @@ pub struct FlickStick {
     timebase: Timebase,
     direction: FlickDirection,
     steering_sensitivity: f64,
+    flick_duration: Duration,
     remaining_degrees: f64,
     remaining_time: Duration,
     remainder: f64,
@@ -28,10 +27,17 @@ impl FlickStick {
             timebase: Timebase::new(150_000).expect("valid 50 ms sensor gap"),
             direction: FlickDirection::default(),
             steering_sensitivity: DEFAULT_FLICK_STEERING_SENSITIVITY,
+            flick_duration: Duration::from_secs_f64(DEFAULT_FLICK_DURATION_MS / 1000.0),
             remaining_degrees: 0.0,
             remaining_time: Duration::ZERO,
             remainder: 0.0,
         }
+    }
+
+    pub fn with_timing(mut self, engage_percent: f64, duration_ms: f64) -> Self {
+        self.direction = FlickDirection::new(engage_percent);
+        self.flick_duration = Duration::from_secs_f64(duration_ms / 1000.0);
+        self
     }
 
     pub fn with_axial_threshold(mut self, degrees: f64) -> Self {
@@ -81,7 +87,7 @@ impl FlickStick {
             TimestampUpdate::Advanced { delta, .. } => delta,
             TimestampUpdate::Gap { .. } => {
                 rotation(None);
-                self.direction = FlickDirection::default();
+                self.direction.reset();
                 self.remaining_degrees = 0.0;
                 self.remaining_time = Duration::ZERO;
                 self.remainder = 0.0;
@@ -105,7 +111,7 @@ impl FlickStick {
                 rotation(None);
                 self.remaining_degrees +=
                     snap_flick_angle(angle, self.axial_threshold).to_degrees();
-                self.remaining_time = FLICK_DURATION;
+                self.remaining_time = self.flick_duration;
             }
             FlickUpdate::Steered(turn) => {
                 let degrees_rotated = turn.to_degrees();
@@ -124,6 +130,17 @@ impl FlickStick {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engagement_and_duration_control_when_a_flick_starts_and_finishes() {
+        let mut flick = FlickStick::new(2.0).with_timing(70.0, 40.0);
+        flick.advance(Stick::default(), 0);
+        assert_eq!(flick.advance(Stick { x: 0.69, y: 0.0 }, 30_000), 0);
+        assert_eq!(flick.advance(Stick { x: 0.74, y: 0.0 }, 60_000), 0);
+        assert_eq!(flick.advance(Stick::default(), 120_000), 90);
+        assert_eq!(flick.advance(Stick::default(), 180_000), 90);
+        assert_eq!(flick.advance(Stick::default(), 210_000), 0);
+    }
 
     #[test]
     fn right_flick_spreads_a_quarter_turn_and_finishes_after_centering() {

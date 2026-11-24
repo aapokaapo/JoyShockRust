@@ -70,6 +70,22 @@ pub struct Stick {
     pub y: f32,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum StickSide {
+    Left,
+    #[default]
+    Right,
+}
+
+impl StickSide {
+    pub fn select<T>(self, left: T, right: T) -> T {
+        match self {
+            Self::Left => left,
+            Self::Right => right,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Controls {
     pub buttons: Buttons,
