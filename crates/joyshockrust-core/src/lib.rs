@@ -44,6 +44,10 @@ impl Buttons {
         Self(self.0 | other.0)
     }
 
+    pub const fn difference(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
     pub const fn contains(self, button: Button) -> bool {
         self.0 & (1 << button as u32) != 0
     }
@@ -68,6 +72,22 @@ pub enum DPad {
 pub struct Stick {
     pub x: f32,
     pub y: f32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum StickSide {
+    Left,
+    #[default]
+    Right,
+}
+
+impl StickSide {
+    pub fn select<T>(self, left: T, right: T) -> T {
+        match self {
+            Self::Left => left,
+            Self::Right => right,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]

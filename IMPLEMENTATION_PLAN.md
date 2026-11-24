@@ -258,16 +258,22 @@ navigation while focused, including numeric adjustment and profile
 selection and a live result preview in the real-world calibration window.
 Flick Stick can snap to cardinal axes within a configurable angular
 threshold for the initial turn, with independently scaled held steering
-and a live physical and adjusted preview in the editor. RWC measurement
+plus selectable stick, engagement and duration. The Sticks editor previews
+physical and adjusted input and plots both angular responses. RWC measurement
 uses the physical stick angle and full steering sensitivity.
 Gyro aim has a minimum movement speed and optional bounded
 speed-dependent gain that can be toggled per profile. The default minimum
-speed filters small residual bias after calibration.
+speed filters small residual bias after calibration. The Gyro editor shows
+the speed response and calibrated IMU readings from the active controller.
 
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects
-physical controls and shows their keyboard, mouse and base gamepad
-bindings in an inspector. Advanced TOML covers the full profile schema.
+physical controls and selects an exclusive keyboard, mouse or gamepad
+output per physical button in the inspector. Keyboard pickers capture
+one key in the editor window. Esc, a click or a 10-second timeout ends
+the inline prompt. Mouse buttons use dropdowns and **Unbind** clears
+the current action.
+Advanced TOML covers the full profile schema.
 The Sticks and Gyro pages expose stepped sensitivity controls, typed gyro values, radial
 response previews and editable game calibration values. The GTK 4 editor
 uses libadwaita navigation and follows the system appearance. The tray
@@ -278,7 +284,8 @@ that retains both selections. The
 bridge restores the previous active profile on service startup. The
 user units order a simultaneous restart and tie desktop shutdown to
 the graphical session. The Gyro page
-supports gyro activation bindings and separate or linked sensitivity adjustment. The editor has a separate
+supports gyro-only and sensor fusion aim modes, gyro activation bindings
+and separate or linked sensitivity adjustment. The editor has a separate
 picker for opening and creating profile drafts.
 
 The Touchpad page edits grid dimensions and per-cell gamepad, keyboard
@@ -294,7 +301,7 @@ The tray can also guide stationary gyro calibration and retain the
 correction per controller across restarts. Synthetic tests cover saving,
 cancellation and application of the correction.
 
-Profiles can bind the shared five-second stationary calibration to a physical button hold.
+Profiles can bind the shared five-second stationary calibration to a physical button hold. A strong double pulse marks completion. A separate cue announces the virtual gamepad and gyro mouse becoming ready.
 USB actuator feedback marks calibration boundaries and RWC sweep steps.
 A standalone CLI test plays the USB cues and counts detents from a physical
 right-stick sweep through the existing PCM path.

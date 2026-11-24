@@ -281,16 +281,12 @@ pub(super) fn mapping_dialog(
     Ok(dialog)
 }
 
-fn key_picker(title: &str, current: Option<&str>) -> (adw::ComboRow, Rc<RefCell<Option<String>>>) {
+fn key_picker(title: &str, current: Option<&str>) -> (adw::ActionRow, Rc<RefCell<Option<String>>>) {
     let key = Rc::new(RefCell::new(current.map(str::to_owned)));
     let selected = key.clone();
-    let row = controller::dropdown(
-        title,
-        current,
-        "No key",
-        controller::key_choices().filter(|(key, _)| key.starts_with("KEY_")),
-        move |value| *selected.borrow_mut() = value.map(str::to_owned),
-    );
+    let row = crate::key_capture::row(title, current, &[], move |value| {
+        *selected.borrow_mut() = value.map(str::to_owned)
+    });
     (row, key)
 }
 
@@ -383,9 +379,10 @@ fn zone_editor(
     ] {
         widget.set_sensitive(key.borrow().is_some());
         let widget = widget.downgrade();
-        key_row.connect_selected_notify(move |row| {
+        let key = key.clone();
+        key_row.connect_subtitle_notify(move |_| {
             if let Some(widget) = widget.upgrade() {
-                widget.set_sensitive(row.selected() != 0);
+                widget.set_sensitive(key.borrow().is_some());
             }
         });
     }

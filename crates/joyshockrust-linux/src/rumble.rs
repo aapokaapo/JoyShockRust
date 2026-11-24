@@ -4,6 +4,7 @@ use std::{
     fs::{File, OpenOptions},
     io,
     os::unix::fs::OpenOptionsExt,
+    path::PathBuf,
 };
 
 use evdev::{
@@ -23,14 +24,22 @@ pub struct Rumble {
 
 impl Rumble {
     pub fn open(hidraw: &File) -> io::Result<Self> {
+        let (physical, path) = Self::open_physical(hidraw)?;
+        eprintln!("Rumble forwarding ready: {}", path.display());
+        Ok(Self {
+            physical,
+            effects: Default::default(),
+            trace: env::var_os("JOYSHOCKRUST_RUMBLE_TRACE").is_some_and(|value| value == "1"),
+        })
+    }
+
+    pub(crate) fn open_physical(hidraw: &File) -> io::Result<(Device, PathBuf)> {
         let hid = hidraw::hid_parent(hidraw)?;
         // hidraw can be ready before the evdev node and its active-seat ACL.
-        // Resolve that race before creating the virtual device, whose force
-        // feedback capabilities are fixed for the rest of this session.
         hidraw::wait_for_evdev(hidraw, || Self::probe(&hid))
     }
 
-    fn probe(hid: &udev::Device) -> io::Result<Self> {
+    fn probe(hid: &udev::Device) -> io::Result<(Device, PathBuf)> {
         let mut devices = udev::Enumerator::new()?;
         devices.match_parent(hid)?;
         devices.match_subsystem("input")?;
@@ -63,13 +72,7 @@ impl Rumble {
                         .supported_ff()
                         .is_some_and(|effects| effects.contains(FFEffectCode::FF_RUMBLE)) =>
                 {
-                    eprintln!("Rumble forwarding ready: {}", path.display());
-                    return Ok(Self {
-                        physical,
-                        effects: Default::default(),
-                        trace: env::var_os("JOYSHOCKRUST_RUMBLE_TRACE")
-                            .is_some_and(|value| value == "1"),
-                    });
+                    return Ok((physical, path.to_path_buf()));
                 }
                 Ok(_) => {}
                 Err(err) => {

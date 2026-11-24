@@ -74,3 +74,21 @@ The two mapper repositories and pinned JoyShockLibrary publish MIT license notic
 Use one wired DualSense Edge on a Linux host with `hid-playstation` bound. Record distro/kernel, firmware, device profile, bus and VID/PID, USB interface number and HID report descriptor. Record a labelled hidraw trace with monotonic receive times, starting with 30 seconds stationary, then each hat direction, button (including both Fn buttons and paddles), trigger and stick separately, six static orientations, known axis rotations, and disconnect/reconnect. Record the response bytes and length for read-only feature report `0x05`. Keep pairing reports, serials, MAC addresses and unrelated devices out of shared fixtures. Compare decoded values and cadence against the driver's evdev sensor stream, with reasoned tolerances for integer rounding and the different calibration formula. Observe the same action with a simultaneous evdev listener, record what each reader receives, and capture the target user's open results and ACLs.
 
 Use contiguous timestamp and receive-time traces to establish the actual cadence, typical jitter, repeats, observed gaps and reset behavior. Test timestamp wrap synthetically even if the capture does not span it. Measuring angular scale needs a known reference motion. Button and permission results are established only for the observed firmware, profile, kernel and seat. See the [Phase 1 tasks and acceptance tests](../IMPLEMENTATION_PLAN.md#phase-1--minimal-workspace-and-parser).
+
+
+## Flick Stick configuration references (2026-11-24)
+
+Steam Input describes Flick Stick as an initial camera turn toward the
+stick followed by proportional camera movement as the stick rotates. Its
+UI exposes separate sweep sensitivity, activation and full-speed radii,
+snap angle, flick and sweep smoothing, and release dampening. Its
+per-action-set Dots Per 360° is shared with Gyro to Mouse and can be
+checked by binding a 360° camera action. These observations come from
+published client strings. [Mode](https://github.com/SteamDatabase/SteamTracking/blob/0b3e0e134891f9fb327052de96191ba4fb2943d7/ClientExtracted/steamui/localization/steamui_english.json#L4134-L4138) · [Activation](https://github.com/SteamDatabase/SteamTracking/blob/0b3e0e134891f9fb327052de96191ba4fb2943d7/ClientExtracted/steamui/localization/steamui_english.json#L3137-L3140) · [Release dampening](https://github.com/SteamDatabase/SteamTracking/blob/0b3e0e134891f9fb327052de96191ba4fb2943d7/ClientExtracted/steamui/localization/steamui_english.json#L3626-L3627) · [Sweep sensitivity, calibration and snap](https://github.com/SteamDatabase/SteamTracking/blob/0b3e0e134891f9fb327052de96191ba4fb2943d7/ClientExtracted/steamui/localization/steamui_english.json#L3765-L3793)
+
+JSM exposes Flick, Flick Only and Rotate Only modes, snap to two, four or
+eight directions with adjustable strength, a forward angular deadzone,
+a tunable flick duration and smoothing of held rotation. The held path
+wraps angle changes to the shortest rotation and scales mouse output
+with real-world calibration divided by in-game sensitivity.
+[Settings](https://github.com/Electronicks/JoyShockMapper/blob/e148efe0b6ff4ad2ce0fc8c2560fa1028097b1a7/JoyShockMapper/src/main.cpp) · [Flick and steering implementation](https://github.com/Electronicks/JoyShockMapper/blob/e148efe0b6ff4ad2ce0fc8c2560fa1028097b1a7/JoyShockMapper/src/JoyShock.cpp#L1316-L1439)

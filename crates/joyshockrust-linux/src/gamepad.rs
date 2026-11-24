@@ -55,7 +55,17 @@ impl ButtonRemaps {
         }
     }
 
-    pub fn apply(&self, mut controls: Controls, state: &mut RemapState) -> Controls {
+    #[cfg(test)]
+    pub fn apply(&self, controls: Controls, state: &mut RemapState) -> Controls {
+        self.apply_filtered(controls, state, Buttons::default())
+    }
+
+    pub fn apply_filtered(
+        &self,
+        mut controls: Controls,
+        state: &mut RemapState,
+        suppressed: Buttons,
+    ) -> Controls {
         let physical = controls.buttons;
         if state
             .active
@@ -69,7 +79,7 @@ impl ButtonRemaps {
             });
         }
         state.previous = physical;
-        let mut remaining = physical;
+        let mut remaining = physical.difference(suppressed);
         let mut targets = Buttons::default();
         let active_layer = state.active.map(|i| &self.layers[i]);
         for &(source, target) in active_layer

@@ -363,6 +363,59 @@ pub(crate) mod tests {
         matches
     }
 
+    fn key_row(parent: &gtk::Widget, title: &str) -> adw::ActionRow {
+        descendants::<adw::ActionRow>(parent)
+            .into_iter()
+            .find(|row| row.title() == title && capture_button(row).is_some())
+            .unwrap()
+    }
+
+    fn capture_button(row: &adw::ActionRow) -> Option<gtk::Button> {
+        descendants::<gtk::Button>(row.upcast_ref())
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some("Bind key…"))
+    }
+
+    fn unbind_button(widget: &gtk::Widget) -> gtk::Button {
+        descendants::<gtk::Button>(widget)
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some("Unbind"))
+            .unwrap()
+    }
+
+    fn begin_capture(row: &adw::ActionRow) -> gtk::Button {
+        let button = capture_button(row).unwrap();
+        button.emit_clicked();
+        let prompt = button.child().unwrap().downcast::<gtk::Label>().unwrap();
+        assert_eq!(prompt.text(), "Hit ESC or Click anywhere to cancel");
+        button
+    }
+
+    fn capture_controller<T: IsA<gtk::EventController> + IsA<glib::Object>>(
+        button: &gtk::Button,
+        name: &str,
+    ) -> T {
+        let controllers = button.root().unwrap().observe_controllers();
+        (0..controllers.n_items())
+            .filter_map(|index| controllers.item(index)?.downcast::<T>().ok())
+            .find(|controller| controller.name().as_deref() == Some(name))
+            .unwrap()
+    }
+
+    fn press_capture_key(row: &adw::ActionRow, keyval: gtk::gdk::Key, key: evdev::KeyCode) {
+        let button = begin_capture(row);
+        let capture: gtk::EventControllerKey = capture_controller(&button, "binding-key-capture");
+        assert!(capture.emit_by_name::<bool>(
+            "key-pressed",
+            &[
+                &keyval,
+                &(u32::from(key.code()) + 8),
+                &gtk::gdk::ModifierType::empty()
+            ],
+        ));
+        assert_eq!(button.label().as_deref(), Some("Bind key…"));
+    }
+
     #[test]
     #[ignore = "requires a Wayland compositor"]
     fn profile_picker_switches_files_protects_drafts_and_lists_new_profiles() {
@@ -450,6 +503,8 @@ pub(crate) mod tests {
             overlay: glib::WeakRef::new(),
         };
         let page = touchpad::page(&ctx);
+        let window = adw::Window::builder().content(&page).build();
+        window.present();
         let columns = descendants::<adw::SpinRow>(&page)
             .into_iter()
             .find(|row| row.title() == "Columns")
@@ -479,11 +534,22 @@ pub(crate) mod tests {
             .iter()
             .find(|group| group.title() == "Keyboard and mouse · Touch")
             .unwrap();
-        descendants::<adw::ComboRow>(keyboard.upcast_ref())
+        let tap = key_row(keyboard.upcast_ref(), "Tap");
+        press_capture_key(&tap, gtk::gdk::Key::space, evdev::KeyCode::KEY_SPACE);
+        let mouse = descendants::<gtk::DropDown>(tap.upcast_ref())
             .into_iter()
-            .find(|row| row.title() == "Tap")
-            .unwrap()
-            .set_selected(1);
+            .next()
+            .unwrap();
+        mouse.set_selected(2);
+        assert_eq!(
+            crate::bindings::keyboard_binding(&ctx.document().unwrap(), "touch:1:3")
+                .unwrap()
+                .unwrap()["tap"]
+                .as_str(),
+            Some("BTN_RIGHT")
+        );
+        press_capture_key(&tap, gtk::gdk::Key::space, evdev::KeyCode::KEY_SPACE);
+        assert_eq!(mouse.selected(), 0);
         rows.iter()
             .find(|row| row.title() == "Touch activation")
             .unwrap()
@@ -542,10 +608,28 @@ pub(crate) mod tests {
                 .unwrap();
             row.set_selected(index);
         };
-        pick("Directions", "Up", "W");
-        pick("Directions", "Left", "A");
-        pick("Inner zone", "Key", "Left Shift");
-        pick("Outer zone", "Key", "R");
+        for (group_title, title, keyval, code) in [
+            ("Directions", "Up", gtk::gdk::Key::w, evdev::KeyCode::KEY_W),
+            (
+                "Directions",
+                "Left",
+                gtk::gdk::Key::a,
+                evdev::KeyCode::KEY_A,
+            ),
+            (
+                "Inner zone",
+                "Key",
+                gtk::gdk::Key::Shift_L,
+                evdev::KeyCode::KEY_LEFTSHIFT,
+            ),
+            ("Outer zone", "Key", gtk::gdk::Key::r, evdev::KeyCode::KEY_R),
+        ] {
+            let group = descendants::<adw::PreferencesGroup>(&content)
+                .into_iter()
+                .find(|group| group.title() == group_title)
+                .unwrap();
+            press_capture_key(&key_row(group.upcast_ref(), title), keyval, code);
+        }
         pick("Outer zone", "Mode", "Keep sprint");
         let threshold = descendants::<adw::PreferencesGroup>(&content)
             .into_iter()
@@ -651,6 +735,31 @@ pub(crate) mod tests {
             assert_eq!(crate::gyro_activation::binding(&doc).unwrap(), expected);
             assert!(doc.to_string().contains("sensitivity_x = 4.0 # retain"));
         };
+
+        let aim_mode = descendants::<adw::ComboRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Aim mode")
+            .unwrap();
+        assert_eq!(aim_mode.selected(), 0);
+        pick("Aim mode", "Sensor fusion aim");
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["aim_mode"].as_str(),
+            Some("sensor-fusion")
+        );
+        let rebuilt = sensitivity::gyro_page(&ctx);
+        assert_eq!(
+            descendants::<adw::ComboRow>(&rebuilt)
+                .into_iter()
+                .find(|row| row.title() == "Aim mode")
+                .unwrap()
+                .selected(),
+            1,
+        );
+        pick("Aim mode", "Gyro aim");
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["aim_mode"].as_str(),
+            Some("gyro")
+        );
 
         pick("Activation mode", "Disable while held");
         assert_binding(Some(("disable-while-held", "l2")));
@@ -812,21 +921,67 @@ pub(crate) mod tests {
         let (entry, _) = controls(&reopened, "Vertical");
         entry.set_text("9.5");
         assert_axes(31.25, 9.5);
-        let preview = descendants::<adw::PreferencesGroup>(&reopened)
+        assert_eq!(descendants::<gtk::DrawingArea>(&reopened).len(), 1);
+        let sticks = sensitivity::sticks_page(&ctx);
+        let preview = descendants::<adw::PreferencesGroup>(&sticks)
             .into_iter()
             .find(|group| group.title() == "Flick Stick")
             .unwrap();
         assert_eq!(
             descendants::<gtk::DrawingArea>(preview.upcast_ref()).len(),
-            2
+            4
         );
-        for title in ["Physical input", "Flick Stick response"] {
+        for title in [
+            "Physical input",
+            "Flick Stick response",
+            "Initial turn near a cardinal direction",
+            "Steering while held",
+        ] {
             assert!(
                 descendants::<gtk::Label>(preview.upcast_ref())
                     .iter()
                     .any(|label| label.text() == title)
             );
         }
+        let input = descendants::<adw::ComboRow>(preview.upcast_ref())
+            .into_iter()
+            .find(|row| row.title() == "Flick Stick input")
+            .unwrap();
+        assert_eq!(input.selected(), 0);
+        input.set_selected(1);
+        let settings = descendants::<adw::SpinRow>(preview.upcast_ref());
+        for (title, value) in [
+            ("Axial threshold", 12.0),
+            ("Steering sensitivity", 0.35),
+            ("Engagement (%)", 72.0),
+            ("Flick duration (ms)", 175.0),
+        ] {
+            settings
+                .iter()
+                .find(|row| row.title() == title)
+                .unwrap()
+                .set_value(value);
+        }
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["flick_stick_side"].as_str(),
+            Some("left")
+        );
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["flick_stick"].as_float(),
+            Some(1.0)
+        );
+        input.set_selected(0);
+        assert!(
+            !ctx.document().unwrap()["gyro"]
+                .as_table()
+                .unwrap()
+                .contains_key("flick_stick")
+        );
+        input.set_selected(2);
+        assert_eq!(
+            ctx.document().unwrap()["gyro"]["flick_stick_side"].as_str(),
+            Some("right")
+        );
 
         let acceleration = descendants::<adw::SwitchRow>(&reopened)
             .into_iter()
@@ -848,8 +1003,6 @@ pub(crate) mod tests {
             ("Acceleration start", 25.0),
             ("Acceleration end", 120.0),
             ("Acceleration multiplier", 2.5),
-            ("Axial threshold", 12.0),
-            ("Steering sensitivity", 0.35),
         ] {
             setting(title).set_value(value);
         }
@@ -872,6 +1025,8 @@ pub(crate) mod tests {
             ("accel_multiplier", 2.5),
             ("flick_axial_threshold_deg", 12.0),
             ("flick_steering_sensitivity", 0.35),
+            ("flick_engage_percent", 72.0),
+            ("flick_duration_ms", 175.0),
         ] {
             assert_eq!(doc["gyro"][key].as_float(), Some(value));
         }
@@ -892,6 +1047,38 @@ pub(crate) mod tests {
             overlay: glib::WeakRef::new(),
         };
         let page = controller::page(&ctx);
+        let window = adw::Window::builder()
+            .default_width(460)
+            .default_height(620)
+            .content(&page)
+            .build();
+        window.present();
+        let diagram = descendants::<gtk::Fixed>(&page).into_iter().next().unwrap();
+        let context = glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while diagram.width() == 0 && std::time::Instant::now() < deadline {
+            while context.iteration(false) {}
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(diagram.width() > 0);
+        let bounds = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
+            .into_iter()
+            .map(|button| {
+                (
+                    button.label().unwrap(),
+                    button.compute_bounds(&diagram).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bounds.len(), 19);
+        for (index, (label, rect)) in bounds.iter().enumerate() {
+            for (other_label, other_rect) in &bounds[..index] {
+                assert!(
+                    rect.intersection(other_rect).is_none(),
+                    "{label} overlaps {other_label}"
+                );
+            }
+        }
         let select = |row: &adw::ComboRow, label: &str| {
             let model = row.model().unwrap().downcast::<gtk::StringList>().unwrap();
             let index = (0..model.n_items())
@@ -904,15 +1091,53 @@ pub(crate) mod tests {
             .find(|row| row.title() == "Virtual gamepad type")
             .unwrap();
         select(&row, "Xbox Series X|S");
-        let groups = descendants::<adw::PreferencesGroup>(&page);
-        for (stage, key) in [("Partial pull", "Q"), ("Full pull", "E")] {
-            let group = groups.iter().find(|group| group.title() == stage).unwrap();
-            let row = descendants::<adw::ComboRow>(group.upcast_ref())
+        let output_type = |page: &gtk::Widget| {
+            descendants::<adw::ComboRow>(page)
                 .into_iter()
-                .find(|row| row.title() == "Hold")
-                .unwrap();
-            select(&row, key);
+                .find(|row| row.title() == "Output type")
+                .unwrap()
+        };
+        select(&output_type(&page), "Keyboard");
+        let groups = descendants::<adw::PreferencesGroup>(&page);
+        for (stage, keyval, code) in [
+            ("Partial pull", gtk::gdk::Key::q, evdev::KeyCode::KEY_Q),
+            ("Full pull", gtk::gdk::Key::e, evdev::KeyCode::KEY_E),
+        ] {
+            let group = groups.iter().find(|group| group.title() == stage).unwrap();
+            let row = key_row(group.upcast_ref(), "Hold");
+            press_capture_key(&row, keyval, code);
+            let saved = ctx.document().unwrap().to_string();
+            press_capture_key(&row, gtk::gdk::Key::Escape, evdev::KeyCode::KEY_ESC);
+            assert_eq!(ctx.document().unwrap().to_string(), saved);
+            let button = begin_capture(&row);
+            let clicks: gtk::GestureClick = capture_controller(&button, "binding-click-cancel");
+            assert_eq!(clicks.button(), 0);
+            assert_eq!(clicks.propagation_phase(), gtk::PropagationPhase::Capture);
+            clicks.emit_by_name::<()>("pressed", &[&1_i32, &20_f64, &20_f64]);
+            assert_eq!(button.label().as_deref(), Some("Bind key…"));
+            assert_eq!(ctx.document().unwrap().to_string(), saved);
+            while context.iteration(false) {}
         }
+        let partial = groups
+            .iter()
+            .find(|group| group.title() == "Partial pull")
+            .unwrap();
+        let hold = key_row(partial.upcast_ref(), "Hold");
+        let saved = ctx.document().unwrap().to_string();
+        let button = begin_capture(&hold);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        while button.label().as_deref() != Some("Bind key…") && std::time::Instant::now() < deadline
+        {
+            while context.iteration(false) {}
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(button.label().as_deref(), Some("Bind key…"));
+        assert_eq!(ctx.document().unwrap().to_string(), saved);
+        let tap = key_row(partial.upcast_ref(), "Tap");
+        press_capture_key(&tap, gtk::gdk::Key::F20, evdev::KeyCode::KEY_F20);
+        unbind_button(tap.upcast_ref()).emit_clicked();
+        assert_eq!(ctx.document().unwrap().to_string(), saved);
+
         let keep_partial = |page: &gtk::Widget| {
             descendants::<adw::SwitchRow>(page)
                 .into_iter()
@@ -924,6 +1149,7 @@ pub(crate) mod tests {
         l2.set_active(true);
         ctx.editor.borrow_mut().selected = "r2";
         let r2_page = controller::page(&ctx);
+        select(&output_type(&r2_page), "Keyboard");
         let r2 = keep_partial(&r2_page);
         assert!(!r2.is_active());
         r2.set_active(true);
@@ -941,6 +1167,60 @@ pub(crate) mod tests {
         assert_eq!(full["trigger"].as_str(), Some("l2:0.95:0.85"));
         assert_eq!(partial["hold"].as_str(), Some("KEY_Q"));
         assert_eq!(full["hold"].as_str(), Some("KEY_E"));
+
+        select(&output_type(&page), "Mouse");
+        let doc = ctx.document().unwrap();
+        assert_eq!(
+            doc["keyboard"]["button_output"]["l2"].as_str(),
+            Some("mouse")
+        );
+        assert!(
+            crate::bindings::binding(&doc, crate::bindings::BindingInput::Trigger("l2:0.95:0.85"))
+                .unwrap()
+                .is_none()
+        );
+        let tap = descendants::<adw::ComboRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Tap")
+            .unwrap();
+        let model = tap.model().unwrap().downcast::<gtk::StringList>().unwrap();
+        assert_eq!(model.n_items(), 6);
+        select(&tap, "Left mouse");
+        assert_eq!(
+            ctx.document().unwrap()["keyboard"]["bindings"]
+                .as_array_of_tables()
+                .unwrap()
+                .get(0)
+                .unwrap()["tap"]
+                .as_str(),
+            Some("BTN_LEFT")
+        );
+        let unbind = unbind_button(tap.upcast_ref());
+        assert!(unbind.is_sensitive());
+        unbind.emit_clicked();
+        assert!(!unbind.is_sensitive());
+        assert!(
+            crate::bindings::keyboard_binding(&ctx.document().unwrap(), "l2")
+                .unwrap()
+                .is_none()
+        );
+        select(&tap, "Left mouse");
+        select(&output_type(&page), "Virtual gamepad");
+        let target = descendants::<adw::ComboRow>(&page)
+            .into_iter()
+            .find(|row| row.title() == "Output button")
+            .unwrap();
+        select(&target, "South · A / Cross");
+        let doc = ctx.document().unwrap();
+        assert_eq!(
+            crate::bindings::gamepad_target(&doc, "l2").unwrap(),
+            Some("cross")
+        );
+        assert!(
+            crate::bindings::keyboard_binding(&doc, "l2")
+                .unwrap()
+                .is_none()
+        );
 
         select(&row, "Use bridge default");
         let doc = ctx.document().unwrap();

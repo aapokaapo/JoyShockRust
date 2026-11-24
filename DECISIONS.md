@@ -36,6 +36,12 @@ Reviewed 2026-11-22. The existing ADRs stand. Source revisions and physical vali
 
 For changes, add a dated ADR with context, alternatives, consequences and validation plan.
 
+## Project license
+
+2026-11-23. JoyShockRust uses MIT for its own source and documentation.
+Retain upstream notices for any reused material and document its source
+before importing it. [Project license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
 ## Phase 1 implementation notes
 
 Recorded 2026-11-22. The two library crates use `no_std` and forbid unsafe code. The parser accepts recognized Edge USB frames, reports a structured error for reserved D-pad values, and preserves raw IMU counts, device ticks and the counter byte. Button and stick decoding is independent of sensor time classification. The report layout and calibration questions are documented in the [reference analysis](docs/REFERENCE_ANALYSIS.md#dualsense-edge-usb-input).
@@ -78,7 +84,7 @@ Only one remap layer is active at a time. The selected layer remains active unti
 
 The generic uinput gamepad emits Linux `BTN_X` for physical Square and `BTN_Y` for Triangle. Linux aliases those codes to `BTN_NORTH` and `BTN_WEST` respectively. SDL's Linux fallback uses X/Y for generic devices and position names for Sony devices. The USB parser retains the physical face positions. Sources checked 2026-11-22. [Linux event codes](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/include/uapi/linux/input-event-codes.h#L380-L389) · [SDL mapping](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/src/joystick/linux/SDL_sysjoystick.c#L2342-L2374)
 
-Experimental Flick Stick uses physical right-stick direction and device report timing. It starts an initial 100 ms turn at 90% radial travel, follows the shortest angular change while held, and re-arms within 25% radial travel. It clears queued motion on timestamp gaps and keeps the virtual right stick centered. An angular axial threshold snaps directions close to each cardinal axis and blends continuously back to the physical angle. Only the initial flick uses this response. Held steering tracks physical angle changes from the starting position with a separate multiplier. Calibration sweeps use the physical angle and full sensitivity so small corrections remain possible near each axis. The editor shares the runtime angle calculation and reads the active controller directly while the preview page is visible. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
+Flick Stick uses the selected physical stick and device report timing. It defaults to the right stick, a 100 ms initial turn and 90% engagement, follows the shortest angular change while held, and re-arms within 25% radial travel. It clears queued motion on timestamp gaps and keeps the selected virtual stick centered. An angular axial threshold snaps directions close to each cardinal axis and blends continuously back to the physical angle. Only the initial flick uses this response. Held steering tracks physical angle changes from the starting position with a separate multiplier. Calibration sweeps use the physical angle and full sensitivity so small corrections remain possible near each axis. The Sticks editor uses the runtime angle calculation and reads the active controller directly while the preview is visible. The Gyro editor reads the latest IMU snapshot over the existing status socket. The bridge stores the raw sample and active bias during report processing and converts them to physical units when serving that socket. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
 
 ## Phase 5 first increment
 
@@ -543,6 +549,11 @@ PCM and keeps the audible channels silent. Bluetooth actuator streaming
 is pending hardware validation. RWC detents use the angular sweep
 before conversion to mouse counts. The diagnostic command uses the same
 PCM player and angular detector for standalone testing.
+Gyro calibration completion uses a longer, higher-amplitude double pulse.
+A separate ready cue follows activation of both virtual outputs. A worker
+handles these cues using USB PCM or evdev rumble so playback stays outside
+report processing.
+
 [USB audio descriptor](https://github.com/nondebug/dualsense/blob/02338358b6b4be2d64dbf661ae2a47842156cfcf/lsusb-descriptor-info.txt#L143-L156) · [Actuator channel routing](https://github.com/nondebug/dualsense/blob/02338358b6b4be2d64dbf661ae2a47842156cfcf/web-haptics-polyfill/README.md#L19-L24)
 
 The editor is a separate native window. Its controller diagram
@@ -591,6 +602,11 @@ partial tap actions if the same pull reaches the full stage by default.
 The per-trigger `keyboard.keep_partial` setting keeps the lower gate
 active through full travel when enabled.
 
+The Gyro tab sets the aim reference frame per profile. Device-axis
+gyro aim is the default. Fusion uses an estimate of gravity to project
+the bias-corrected gyro rates before pointer scaling. Live changes reset
+the reference frame and timing without reopening the virtual mouse.
+
 The Gyro tab edits the profile’s single activation binding. Its button,
 touch, chord and trigger choices use the bridge’s existing profile schema.
 The touchpad’s cell editor edits the same binding for single touch inputs.
@@ -613,3 +629,18 @@ to preselect a destination even when profiles share a filename. Live
 loads carry path metadata and the TOML bytes. The bridge still accepts
 legacy name-only and name-free loads. Rejections preserve the current
 profile identity, and unloading clears it.
+
+The Buttons editor stores exclusive keyboard or mouse routing in
+`keyboard.button_output`. Older profiles retain their original routing
+until an output type is selected for a physical button. A claimed source
+is filtered before virtual gamepad remapping so another source can still
+send the same virtual target. Trigger claims cover both the digital button
+and the analog axis. D-pad claims preserve any remaining component of a
+diagonal. Chord and layer activation still read physical input.
+
+The editor captures one physical keyboard key in the focused Wayland window.
+The GTK Wayland backend adds 8 to the Linux keycode, so the editor removes
+that offset and serializes the evdev key name already accepted by the bridge.
+Esc, a click in the window or a 10-second timeout dismisses the capture
+without changing the binding. **Unbind** clears it explicitly.
+[GTK 4.18.6 Wayland key delivery, checked 2026-11-24](https://github.com/GNOME/gtk/blob/4.18.6/gdk/wayland/gdkseat-wayland.c#L1423-L1433)

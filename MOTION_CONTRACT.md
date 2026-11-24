@@ -19,11 +19,22 @@ above the configured limit return errors and preserve the previous state.
 The caller ends a segment with `reset_segment`, which preserves the
 supplied bias. [Nominal range source reviewed 2026-11-22](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/drivers/hid/hid-playstation.c#L166-L170)
 
-The engine predicts the gravity direction from gyro rotation and blends
-in accelerometer direction when its magnitude is near 1 g and it agrees
+Gyro aim uses only the calibrated gyro channels. Sensor fusion aim estimates
+gravity by predicting it from gyro rotation and correcting it with
+accelerometer direction when the magnitude is near 1 g and it agrees
 with the predicted hemisphere. The first usable accelerometer sample
-initializes the estimate. The stationary flag uses magnitude and angular
-velocity thresholds. It is informational and leaves aim integration intact.
+initializes the estimate. Before that, fusion aim uses the device axes.
+Fusion projects yaw onto the estimated up axis and pitch onto the
+controller's right axis in the horizontal plane. Accelerometer changes
+alone produce no pointer delta.
+
+The Linux adapter feeds the selected mode's angular deltas through the
+same speed threshold and acceleration curve, evaluated over the same
+device-time interval as the rotation. It then applies per-axis
+sensitivity and the RWC / in-game sensitivity factor. Fractional
+counts carry between accepted samples. Mode changes clear integration
+and fractional state at the report boundary while retaining gyro bias.
+The adapter submits integer relative X/Y events in one uinput batch.
 
 ## Planned extensions
 1. Validate finite values, timestamp ordering and plausible ranges.

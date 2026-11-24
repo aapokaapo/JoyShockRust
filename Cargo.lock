@@ -756,6 +756,7 @@ version = "0.1.0"
 name = "joyshockrust-editor"
 version = "0.1.0"
 dependencies = [
+ "evdev",
  "joyshockrust-core",
  "joyshockrust-input",
  "joyshockrust-motion",

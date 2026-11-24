@@ -215,13 +215,18 @@ steering at 0, 0.5 and 1 with the same initial flick. Measure RWC with the
 same profile. Verify small corrections near forward still use the full
 measurement sensitivity.
 Set the threshold to 0° and repeat to compare the response. Open
-**Gyro → Flick Stick** with the bridge running. Move the active right
+**Sticks → Flick Stick** with the bridge running. Move the active right
 stick near a sector edge and change the threshold in the editor.
 Check that both previews follow the stick, that the adjusted marker
 snaps on initial flick within a shaded sector, and that both the sector
 and held steering response update before saving.
 Switch controllers or reconnect and check that the preview follows the
-active controller.
+active controller. Set **Flick Stick input** to **Left stick**, lower
+**Engagement** and increase **Flick duration**. Check that the preview
+shows the new ring, the left stick starts a turn earlier and completes
+the turn over the longer interval, and the right virtual stick still
+responds. Compare both solid response curves against their dashed
+linear references as the threshold and steering multiplier change.
 
 The user reported that Flick Stick worked as expected.
 
@@ -893,23 +898,45 @@ desktop between light and dark appearance and resize the editor to verify
 the page switcher moves between the header and bottom bar. Use Tab and
 the keyboard to select controls and change bindings. Edit a setting and
 close the window to check the discard confirmation. Select Cross
-on the controller diagram, choose **Space** for tap, then choose **Left
-Shift** for hold. Select another control and return to Cross to verify
-both choices remain visible. Choose a virtual gamepad target, then use
-**Save & Apply**. Reopen the profile and check those settings. Select
-**No action** for a gesture and confirm the other action remains. In
+on the controller diagram and choose **Keyboard**. Click **Bind key…**
+on Tap and press Space, then bind Left Shift on Hold. Open Tap again
+and look for **Hit ESC or Click anywhere to cancel** in place of the
+bind button. Click elsewhere in the editor and check that Space is
+still assigned. Repeat and cancel with Esc. Start again and wait 10
+seconds. The original binding should still be assigned when the prompt
+disappears. Select another control and return to Cross
+to verify both choices remain visible. Use **Unbind** to clear
+Hold and confirm Tap still sends Space. Save and confirm Cross no longer
+registers on the virtual gamepad. Change Cross to **Mouse** and bind
+**Left mouse** to tap. Check that only a click occurs. Switch to
+**Virtual gamepad**, choose a target, save and verify that only the
+configured virtual button registers. Reopen the profile to verify
+the choice. Resize the window and check every diagram button has its
+own clickable area. In
 the **Advanced** page, enter invalid TOML syntax and check that validation or
 saving displays an error while the saved profile remains usable.
 
 Choose **Xbox Series X|S** under **Virtual gamepad type**, save and apply,
 then check `virtual_gamepad_kind=xbox-series` and the replacement device
-in Steam. In the L2 inspector set **Partial pull → Hold** to Q and
+in Steam. In the L2 inspector choose **Keyboard**, set **Partial pull → Hold** to Q and
 **Full pull → Hold** to E. Check that Q is held partway and E takes over
 at full travel. With partial **Tap** configured, check that a full pull
 and release does not emit that partial tap. Enable **Keep partial action
 at full pull** for L2 and save. Verify Q stays held when E engages, then
 ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
+
+In **Gyro → Aim input**, switch between **Gyro aim** and **Sensor fusion
+aim** using **Save & Apply**. Hold the controller approximately flat and
+rotate about vertical to compare horizontal aim. Move the controller in
+a straight line without rotating it and check the cursor stays still.
+Switch modes again while the controller rests and check for a jump.
+In **Live calibrated IMU**, check that angular velocity approaches zero
+at rest, the acceleration magnitude is about 1 g, and the three axes
+respond to rotation and tilt. Disconnect and confirm the values clear.
+In **Gyro response**, change the minimum speed and acceleration
+multiplier and compare the configured curve with the dashed linear
+reference.
 
 In **Gyro → Gyro activation**, select **Disable while held** and L2,
 apply the profile, then check that holding and releasing L2 stops and
@@ -1001,8 +1028,11 @@ then turn it slowly to confirm that deliberate aim still moves it.
 
 Bind **Gyro → Controller gyro calibration → Hold button** to PS. Verify
 a tap leaves calibration idle. Hold PS for 1.5 seconds, then release it
-and set the controller down. On USB with `aplay`, verify the single
-start and double completion pulses. Repeat while moving for 15 seconds
+and set the controller down. Verify the single start pulse and the
+stronger, longer double completion pulse on USB and Bluetooth. Toggle
+one output off and back on and verify that the single ready pulse occurs
+when both outputs are available. Repeat over USB with the controller’s
+audio device occupied to check the evdev fallback. Repeat while moving for 15 seconds
 and verify the previous correction remains active. Run RWC over USB and
 rotate slowly around the right stick edge. Check that tactile steps
 follow rotation in either direction and cease when the stick centers.

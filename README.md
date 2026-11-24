@@ -2,6 +2,12 @@
 
 JoyShockRust is a **new Linux-first Rust controller mapper**, inspired by the behavior of [JoyShockMapper-systemd](https://github.com/aapokaapo/JoyShockMapper-systemd) and [upstream JoyShockMapper](https://github.com/Electronicks/JoyShockMapper). The initial workspace provides a pure DualSense Edge USB report parser and device timebase.
 
+## License
+
+JoyShockRust’s original source and documentation are available under the
+[MIT License](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
+for JoyShockMapper attribution and dependency licensing.
+
 ## Mission
 Correct controller behavior first; then low input-to-output latency, low jitter, low CPU/memory overhead, maintainability, and feature parity. Prefer a small working vertical slice to a broad unfinished rewrite.
 
@@ -95,7 +101,8 @@ cargo run --locked -p joyshockrust-linux -- --profile profiles/dualsense-edge.ex
 ```
 
 Profiles require `version = 1`. The optional `[gyro]` table enables the gyro
-mouse. The optional `[gyro.binding]` table takes `mode` and `input`. Modes are
+mouse. Use `aim_mode = "gyro"` or `aim_mode = "sensor-fusion"` in that
+table. The optional `[gyro.binding]` table takes `mode` and `input`. Modes are
 `hold`, `disable-while-held`, `toggle`, `tap-hold`, `double-tap`, `chord`
 and `trigger`. Input names a digital button, a touch region, a chord, or an
 analog trigger, depending on the mode. The [gyro-except-L2 profile](profiles/gyro-except-l2.toml)
@@ -685,15 +692,24 @@ choose **New profile**. Use **Save & Apply** to make a profile active.
 The editor follows the system’s light or dark appearance. The page
 switcher moves to the bottom when the window is narrow.
 Select a physical control on the DualSense diagram or choose a DualSense
-Edge control below it. The inspector shows the selected control's tap,
-hold and double-tap keyboard or mouse actions, along with its base virtual
-gamepad remap when available. Choose **No action** to clear a gesture or
-**Same as controller** to remove the base remap. Use the **Advanced**
-page for TOML settings such as chords and layers.
+Edge control below it. Choose one **Output type** per physical button.
+**Keyboard** and **Mouse** each support separate tap, hold and double-tap
+actions and suppress that physical button on the virtual gamepad.
+For a keyboard action, choose **Bind key…** and press the desired key.
+While the editor waits, press **Esc** or click anywhere in its window to
+cancel. Listening also ends automatically after 10 seconds. Use
+**Unbind** to remove a key or mouse button. Mouse buttons are selected
+from the dropdown. The same key listener is available for stick directions,
+stick zones and touchpad gestures.
+**Virtual gamepad** shows the base remap where available. Changing type
+removes actions from the previous type. Choose **No action** to clear a
+gesture or **Same as controller** to remove the base remap. Existing
+TOML profiles retain their original routing until you choose an output
+type for the button. Use **Advanced** for chords and layers.
 
 At the top of **Buttons**, choose the **Virtual gamepad type**. Selecting
-L2 or R2 shows **Partial pull** and **Full pull** keyboard and mouse
-actions in addition to the digital button. A partial pull engages at
+L2 or R2 with **Keyboard** or **Mouse** selected shows **Partial pull**
+and **Full pull** actions of that type in addition to the digital button. A partial pull engages at
 45%, and a full pull at 95%. The release thresholds are 35% and 85%.
 Turn on **Keep partial action at full pull** to hold both assigned keys
 at full travel. The switch is off by default, so the full action takes
@@ -725,6 +741,12 @@ leave the release radius empty to use the bridge default. Select
 **Update Mapping** to validate the settings and return to the profile,
 then **Save & Apply** to load them into the running bridge.
 
+Under **Gyro → Aim input → Aim mode**, choose **Gyro aim** for
+controller-axis aiming or **Sensor fusion aim** for gravity-referenced
+aiming. Gyro aim is the default. Fusion estimates up from gyro and
+accelerometer readings while aim movement comes from gyro rotation.
+Use **Save & Apply** to switch modes in the running bridge.
+
 In **Gyro → Gyro activation**, choose **Always active** or select a
 physical button, touch region, two-input chord, or analog trigger. The
 available modes include enabling or disabling while held and toggling
@@ -751,15 +773,28 @@ Turn off **Gyro acceleration** to suspend the boost while retaining its
 settings. **Minimum speed** still applies independently. Its default of
 0.2°/s filters small residual movement after calibration. Set it to 0 to
 use every measured movement.
-Under **Flick Stick**, **Axial threshold** snaps the initial flick to
+The gyro response chart compares projected aim speed with the configured
+threshold and acceleration curve and a linear reference, before axis
+sensitivity and game calibration are applied. **Live calibrated IMU**
+shows angular velocity in °/s and acceleration in g on the active
+controller's X, Y and Z axes. The readings include factory calibration
+and the stationary gyro bias currently applied by the bridge.
+
+Under **Sticks → Flick Stick → Flick Stick input**, choose **Off**,
+**Left stick** or **Right stick**. The selected stick controls horizontal
+mouse turns and its virtual gamepad axes stay centered. **Engagement**
+sets the required stick travel and **Flick duration** controls how fast the
+first turn completes. The defaults are 90% and 100 ms.
+**Axial threshold** snaps the initial flick to
 the nearest cardinal direction inside the chosen angle, with a smooth
 transition outside it. The default is 4°. While the stick is held,
 **Steering sensitivity** scales subsequent turns from their physical
 angle changes. Its default is 0.50, so a 30° movement after the flick
 turns the camera about 15° with a calibrated profile. At 0, only the
 initial flick moves the camera. At 1, held steering uses the full
-sensitivity. The preview compares physical input with the Flick Stick
-response using both draft settings.
+sensitivity. Separate charts compare the initial turn and held steering
+to a linear reference. The live stick preview shows the configured
+engagement ring, physical stick input and adjusted angle.
 
 Open the profile actions menu to **Validate Profile** or **Save** to
 disk. **Save & Apply** writes the profile and loads it into the running
@@ -1020,12 +1055,15 @@ hold_ms = 1500
 ```
 
 For advanced haptics, connect the controller by USB and install
-`alsa-utils` for `aplay`. The controller's four-channel ALSA playback
-device must be available. A single pulse marks the start and a double
-pulse marks completion. During RWC measurement, sweeping the stick
-produces short tactile detents every 15 degrees of relative stick
-rotation. Camera movement remains continuous. Bluetooth calibration
-is available with visual status or bridge logs.
+`alsa-utils` for `aplay`. A single pulse marks the start of gyro
+calibration and a stronger, longer double pulse marks completion.
+A separate single pulse marks when the virtual gamepad and gyro mouse
+are both ready, including after reconnecting or enabling the second
+output. If startup requires gyro calibration, the completion pulse
+marks readiness. On Bluetooth or when USB PCM playback is unavailable,
+these cues use the controller’s evdev rumble if accessible. During USB
+RWC measurement, sweeping the stick produces short tactile detents every
+15 degrees of relative stick rotation.
 
 ### Test USB actuator haptics from the command line
 
@@ -1036,9 +1074,9 @@ joyshockrust-linux --test-haptics
 joyshockrust-linux --test-haptics --pattern sweep
 ```
 
-The first command plays the start pulse, completion double pulse and a
-series of detents. Use `--pattern start`, `done` or `detent` to isolate an
-effect. The sweep command runs for 12 seconds and counts detents as you
+The first command plays the calibration start and completion cues, the
+outputs-ready pulse and a series of detents. Use `--pattern start`,
+`done`, `ready` or `detent` to isolate an effect. The sweep command runs for 12 seconds and counts detents as you
 rotate the right stick. Add the controller's `/dev/hidrawN` path to select
 it explicitly. The commands report the ALSA device and playback errors.
 Playback success reports what ALSA accepted. Check the tactile feedback
@@ -1105,7 +1143,13 @@ stick motion until the stick returns within 25% of center.
 The virtual gamepad's right-stick axes are centered while this mode is
 enabled. Gyro gating still controls gyro input independently.
 
-For a TOML profile, set `flick_axial_threshold_deg` in `[gyro]` to a
+For a TOML profile, set `flick_stick` in `[gyro]` to enable the mode and
+set its base turn sensitivity. `flick_stick_side` accepts `left` or
+`right` and defaults to `right`. Set `flick_engage_percent` from 30 to
+100 or `flick_duration_ms` from 10 to 500 to override the defaults.
+The RWC workflow continues to measure on the right stick using its
+physical angle and full steering sensitivity.
+Set `flick_axial_threshold_deg` to a
 value from 0 to 30. Use 0 to disable cardinal snapping. Set
 `flick_steering_sensitivity` in the same table to a value from 0 to 1.
 Gyro response

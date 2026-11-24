@@ -4,14 +4,19 @@ use std::{
 };
 
 use adw::{gtk, prelude::*};
+use joyshockrust_core::StickSide;
+use joyshockrust_motion::AimMode;
 use joyshockrust_motion::aim_response::{
-    DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse,
-    MAX_FLICK_AXIAL_THRESHOLD_DEG, MAX_GYRO_ACCEL_MULTIPLIER, MAX_GYRO_RATE_DPS,
+    DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_DURATION_MS, DEFAULT_FLICK_ENGAGE_PERCENT,
+    DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse, MAX_FLICK_AXIAL_THRESHOLD_DEG,
+    MAX_FLICK_DURATION_MS, MAX_GYRO_ACCEL_MULTIPLIER, MAX_GYRO_RATE_DPS, MIN_FLICK_DURATION_MS,
+    MIN_FLICK_ENGAGE_PERCENT, snap_flick_angle,
 };
 
 use crate::{
     bindings::replace_value,
     controller,
+    response_plot::{self, Curve},
     ui::{self, Context},
 };
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
@@ -93,10 +98,11 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
         return ui::advanced_required("Edit this gyro configuration in Advanced TOML.");
     };
     let page = adw::PreferencesPage::new();
+    page.add(&aim_mode_group(ctx, gyro));
+    page.add(&crate::imu_monitor::group());
     page.add(&crate::gyro_activation::group(ctx, &doc));
     page.add(&gyro_sensitivity_group(ctx, gyro));
     page.add(&gyro_response_group(ctx, gyro));
-    page.add(&flick_threshold_group(ctx, gyro));
     page.add(&calibration_shortcut(ctx, gyro));
 
     let calibration = adw::PreferencesGroup::builder()
@@ -191,6 +197,44 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     page.upcast()
 }
 
+fn aim_mode_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("Aim input")
+        .description(
+            "Gyro aim uses the controller axes. Sensor fusion aim uses gravity as its reference.",
+        )
+        .build();
+    let current = gyro
+        .and_then(|table| table.get("aim_mode"))
+        .and_then(Item::as_str)
+        .unwrap_or(AimMode::default().as_str());
+    let ctx = ctx.clone();
+    let row = controller::required_dropdown(
+        "Aim mode",
+        current,
+        [
+            (AimMode::Gyro, "Gyro aim"),
+            (AimMode::SensorFusion, "Sensor fusion aim"),
+        ]
+        .into_iter()
+        .map(|(mode, name)| (mode.as_str().into(), name.into())),
+        move |mode| {
+            ctx.edit(|doc| {
+                let gyro = gyro_table_mut(doc)?;
+                let value = Value::from(mode);
+                if let Some(previous) = gyro.get_mut("aim_mode").and_then(Item::as_value_mut) {
+                    replace_value(previous, value);
+                } else {
+                    gyro.insert("aim_mode", Item::Value(value));
+                }
+                Ok(())
+            });
+        },
+    );
+    group.add(&row);
+    group
+}
+
 fn gyro_response_values(gyro: Option<&dyn TableLike>) -> [f64; 4] {
     let defaults = GyroResponse::default().values();
     std::array::from_fn(|i| {
@@ -235,6 +279,7 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
             Ok(())
         });
     });
+    let mut adjustments = Vec::new();
     for (axis, (title, subtitle, lower, upper)) in [
         (
             "Minimum speed",
@@ -275,6 +320,7 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
                 .build();
         }
         group.add(&row);
+        adjustments.push(row.adjustment());
         let ctx = ctx.clone();
         let reverting = Cell::new(false);
         row.connect_value_notify(move |row| {
@@ -296,43 +342,268 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
             ctx.edit(|doc| set_gyro_numbers(doc, [(RESPONSE_FIELDS[axis], values[axis])]));
         });
     }
+    let plot = response_plot::add(
+        &group,
+        "Gyro speed response",
+        "Equivalent output speed (°/s)",
+        "Projected aim speed (°/s)",
+        {
+            let [minimum, start, end, multiplier]: [gtk::Adjustment; 4] = adjustments
+                .clone()
+                .try_into()
+                .expect("four response controls");
+            let acceleration = acceleration.downgrade();
+            move || {
+                let response = GyroResponse::new(
+                    minimum.value(),
+                    start.value(),
+                    end.value(),
+                    multiplier.value(),
+                )
+                .unwrap_or_default()
+                .with_acceleration_enabled(
+                    acceleration.upgrade().is_some_and(|row| row.is_active()),
+                );
+                gyro_curve(response)
+            }
+        },
+    );
+    watch_plot(&plot, &adjustments);
+    let plot = plot.downgrade();
+    acceleration.connect_active_notify(move |_| {
+        if let Some(plot) = plot.upgrade() {
+            plot.queue_draw();
+        }
+    });
     group
 }
 
-fn flick_threshold_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
+fn watch_plot(plot: &gtk::DrawingArea, settings: &[gtk::Adjustment]) {
+    for setting in settings {
+        let plot = plot.downgrade();
+        setting.connect_value_changed(move |_| {
+            if let Some(plot) = plot.upgrade() {
+                plot.queue_draw();
+            }
+        });
+    }
+}
+
+fn gyro_curve(response: GyroResponse) -> Curve {
+    let [minimum, start, end, _] = response.values();
+    let input_max = (((minimum.max(end) * 1.2).max(40.0) / 40.0).ceil()) * 40.0;
+    let mut speeds: Vec<_> = (0..=100)
+        .map(|i| f64::from(i) / 100.0 * input_max)
+        .collect();
+    speeds.extend([minimum.next_down().max(0.0), minimum, start, end]);
+    speeds.sort_unstable_by(f64::total_cmp);
+    let output_max = ((input_max * response.gain_at_speed(input_max) / 40.0).ceil()) * 40.0;
+    Curve {
+        input_max,
+        output_max,
+        points: speeds
+            .into_iter()
+            .map(|speed| (speed, speed * response.gain_at_speed(speed)))
+            .collect(),
+    }
+}
+
+fn flick_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
         .title("Flick Stick")
-        .description("Shaded sectors show where the initial flick snaps to a cardinal direction.")
         .build();
-    let value = gyro.map_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, |table| {
-        number(table, FLICK_THRESHOLD, DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
-    });
-    let row = setting_row(
+    let side = gyro
+        .and_then(|table| table.get("flick_stick_side"))
+        .and_then(Item::as_str);
+    let enabled = gyro.is_some_and(|table| table.contains_key("flick_stick"));
+    let selection = if enabled {
+        side.unwrap_or("right")
+    } else {
+        "off"
+    };
+    let side = Rc::new(Cell::new(if selection == "left" {
+        StickSide::Left
+    } else {
+        StickSide::Right
+    }));
+    let scale = setting_row(
+        "Turn sensitivity",
+        "Base multiplier before game calibration. 1 gives the calibrated turn.",
+        gyro.map_or(1.0, |table| number(table, "flick_stick", 1.0)),
+        0.01,
+        100.0,
+    );
+    scale.adjustment().set_step_increment(0.05);
+    let threshold = setting_row(
         "Axial threshold",
-        "Snap the initial flick toward a cardinal direction. 0 disables snapping.",
-        value,
+        "Snap the initial turn toward a cardinal direction. 0 disables snapping.",
+        gyro.map_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, |table| {
+            number(table, FLICK_THRESHOLD, DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
+        }),
         0.0,
         MAX_FLICK_AXIAL_THRESHOLD_DEG,
     );
-    let steering_value = gyro.map_or(DEFAULT_FLICK_STEERING_SENSITIVITY, |table| {
-        number(table, FLICK_STEERING, DEFAULT_FLICK_STEERING_SENSITIVITY)
-    });
     let steering = setting_row(
         "Steering sensitivity",
-        "Multiplier for turns while the stick is held. 0 disables steering. 1 uses full sensitivity.",
-        steering_value,
+        "Multiplier for turns while the stick is held. 0 disables steering.",
+        gyro.map_or(DEFAULT_FLICK_STEERING_SENSITIVITY, |table| {
+            number(table, FLICK_STEERING, DEFAULT_FLICK_STEERING_SENSITIVITY)
+        }),
         0.0,
         1.0,
     );
     steering.adjustment().set_step_increment(0.05);
-    for (key, control) in [(FLICK_THRESHOLD, &row), (FLICK_STEERING, &steering)] {
+    let engagement = setting_row(
+        "Engagement (%)",
+        "Stick travel needed to start a turn. Return near the center to start another.",
+        gyro.map_or(DEFAULT_FLICK_ENGAGE_PERCENT, |table| {
+            number(table, "flick_engage_percent", DEFAULT_FLICK_ENGAGE_PERCENT)
+        }),
+        MIN_FLICK_ENGAGE_PERCENT,
+        100.0,
+    );
+    engagement.adjustment().set_step_increment(1.0);
+    let duration = setting_row(
+        "Flick duration (ms)",
+        "Time it takes to complete the first turn.",
+        gyro.map_or(DEFAULT_FLICK_DURATION_MS, |table| {
+            number(table, "flick_duration_ms", DEFAULT_FLICK_DURATION_MS)
+        }),
+        MIN_FLICK_DURATION_MS,
+        MAX_FLICK_DURATION_MS,
+    );
+    duration.adjustment().set_step_increment(5.0);
+    let rows = [
+        ("flick_stick", &scale),
+        ("flick_engage_percent", &engagement),
+        ("flick_duration_ms", &duration),
+        (FLICK_THRESHOLD, &threshold),
+        (FLICK_STEERING, &steering),
+    ];
+    let row = controller::required_dropdown(
+        "Flick Stick input",
+        selection,
+        [
+            ("off", "Off"),
+            ("left", "Left stick"),
+            ("right", "Right stick"),
+        ]
+        .into_iter()
+        .map(|(key, label)| (key.into(), label.into())),
+        {
+            let ctx = ctx.clone();
+            let side = side.clone();
+            let scale = scale.adjustment();
+            let controls = rows.map(|(_, row)| row.downgrade());
+            move |selection| {
+                let enabled = selection != "off";
+                if ctx.edit(|doc| {
+                    let gyro = gyro_table_mut(doc)?;
+                    if enabled {
+                        set_number(gyro, "flick_stick", scale.value());
+                        let value = Value::from(selection);
+                        if let Some(previous) = gyro
+                            .get_mut("flick_stick_side")
+                            .and_then(Item::as_value_mut)
+                        {
+                            replace_value(previous, value);
+                        } else {
+                            gyro.insert("flick_stick_side", Item::Value(value));
+                        }
+                    } else {
+                        gyro.remove("flick_stick");
+                    }
+                    Ok(())
+                }) {
+                    if enabled {
+                        side.set(if selection == "left" {
+                            StickSide::Left
+                        } else {
+                            StickSide::Right
+                        });
+                    }
+                    for row in controls.iter().filter_map(adw::glib::WeakRef::upgrade) {
+                        row.set_sensitive(enabled);
+                        row.set_visible(enabled);
+                    }
+                }
+            }
+        },
+    );
+    row.set_subtitle("The selected stick turns the camera and its virtual stick stays centered.");
+    group.add(&row);
+    for (key, row) in rows {
+        row.set_sensitive(enabled);
+        row.set_visible(enabled);
         let ctx = ctx.clone();
-        control.connect_value_notify(move |row| {
-            ctx.edit(|doc| set_gyro_numbers(doc, [(key, row.value())]));
+        row.connect_value_notify(move |row| {
+            if row.is_sensitive() {
+                ctx.edit(|doc| set_gyro_numbers(doc, [(key, row.value())]));
+            }
         });
-        group.add(control);
+        group.add(row);
     }
-    crate::flick_preview::add(&group, &row.adjustment(), &steering.adjustment());
+    let preview = crate::flick_preview::add(
+        &group,
+        &threshold.adjustment(),
+        &steering.adjustment(),
+        &engagement.adjustment(),
+        side,
+    );
+    row.bind_property("selected", &preview, "visible")
+        .transform_to(|_, selected: u32| Some(matches!(selected, 1 | 2)))
+        .sync_create()
+        .build();
+    for (title, setting, is_initial) in [
+        (
+            "Initial turn near a cardinal direction",
+            threshold.adjustment(),
+            true,
+        ),
+        ("Steering while held", steering.adjustment(), false),
+    ] {
+        let base = scale.adjustment();
+        let plot = response_plot::add(
+            &group,
+            title,
+            "Turn before game calibration (°)",
+            "Stick angle change (°)",
+            {
+                let setting = setting.clone();
+                let base = base.clone();
+                move || {
+                    let input_max = if is_initial { 45.0 } else { 90.0 };
+                    let output_max = input_max * base.value().max(1.0);
+                    Curve {
+                        input_max,
+                        output_max,
+                        points: (0..=90)
+                            .map(|i| {
+                                let angle = f64::from(i) / 90.0 * input_max;
+                                let turn = if is_initial {
+                                    snap_flick_angle(
+                                        angle.to_radians(),
+                                        setting.value().to_radians(),
+                                    )
+                                    .to_degrees()
+                                } else {
+                                    angle * setting.value()
+                                };
+                                (angle, turn * base.value())
+                            })
+                            .collect(),
+                    }
+                }
+            },
+        );
+        watch_plot(&plot, &[setting, base]);
+        if let Some(panel) = plot.parent() {
+            row.bind_property("selected", &panel, "visible")
+                .transform_to(|_, selected: u32| Some(matches!(selected, 1 | 2)))
+                .sync_create()
+                .build();
+        }
+    }
     group
 }
 
@@ -618,6 +889,12 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
         );
     };
     let page = adw::PreferencesPage::new();
+    if let Some(gyro) = doc
+        .get("gyro")
+        .map_or(Some(None), |item| item.as_table_like().map(Some))
+    {
+        page.add(&flick_group(ctx, gyro));
+    }
     let fallback = number(doc.as_table(), "stick_curve", 1.0);
     for ((key, title), side) in STICK_FIELDS
         .into_iter()

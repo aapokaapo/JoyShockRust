@@ -152,7 +152,7 @@ fn measure(node: &Path) -> Result<(), Box<dyn Error>> {
     let factory = hidraw::read_factory_calibration(&device, identity.transport)?;
     let mut sampler = Sampler::new(factory);
     let mut measured = None;
-    let haptics = Haptics::open(&device, identity.transport);
+    let haptics = Haptics::open_controller(&device, identity.transport);
     println!("ready");
     io::stdout().flush()?;
     if let Some(haptics) = &haptics {
@@ -189,7 +189,7 @@ fn measure(node: &Path) -> Result<(), Box<dyn Error>> {
         .ok_or("Controller disconnected before gyro calibration finished.")?
         .gyro_bias_dps;
     if let Some(haptics) = haptics {
-        haptics.finish(Cue::CalibrationDone);
+        haptics.finish(Cue::GyroCalibrationDone);
     }
     println!("bias {id} {x} {y} {z}");
     Ok(())

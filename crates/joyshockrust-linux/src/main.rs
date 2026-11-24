@@ -59,7 +59,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     const USAGE: &str = concat!(
         "usage: joyshockrust-linux [--profile PATH|--profile-if-present PATH] [/dev/hidrawN]\n",
         "       joyshockrust-linux --check-profile PATH\n",
-        "       joyshockrust-linux --test-haptics [--pattern all|start|done|detent|sweep] [--pcm ALSA_DEVICE] [/dev/hidrawN]\n",
+        "       joyshockrust-linux --test-haptics [--pattern all|start|done|ready|detent|sweep] [--pcm ALSA_DEVICE] [/dev/hidrawN]\n",
         "       joyshockrust-linux --install-profile SOURCE [DESTINATION]\n",
         "       joyshockrust-linux --diagnose [--profile PATH] [--show-controller-id] [CONTROLLER_OPTIONS] [/dev/hidrawN]\n",
         "       joyshockrust-linux --list-controllers [--show-controller-id] [CONTROLLER_OPTIONS]\n",
@@ -956,9 +956,30 @@ fn serve_session(
         .flatten();
     if let Some(status) = status {
         status.update(Some(identity), runtime.gyro.is_some());
+        let (factory, bias) = mouse.as_ref().map_or_else(
+            || {
+                let factory = hidraw::read_factory_calibration(input, identity.transport).ok();
+                let bias = factory
+                    .and_then(|_| gyro_calibration::load(input))
+                    .unwrap_or_default();
+                (factory, bias)
+            },
+            |mouse| {
+                (
+                    Some(mouse.factory_calibration()),
+                    mouse.stationary_calibration(),
+                )
+            },
+        );
+        status.set_imu_calibration(factory, bias);
         status.set_active_hidraw(path);
         status.set_gamepad_device(output.as_mut());
         status.set_touchpad_policy(touchpad_requested, native_touchpad.is_some());
+    }
+    if output.is_some()
+        && let Some(mouse) = &mouse
+    {
+        mouse.signal_outputs_ready();
     }
     let resource_start = measurement
         .as_ref()
@@ -992,6 +1013,7 @@ fn serve_session(
                     return Ok(ControlFlow::Continue(()));
                 }
                 SessionEvent::Reload(reload) => {
+                    let both_ready = output.is_some() && mouse.is_some();
                     let current_filter = filter;
                     let next = match reload.resolve(current_filter) {
                         Some(reload::Update::Profile(next)) => next,
@@ -1075,6 +1097,12 @@ fn serve_session(
                             if let Some(status) = status {
                                 status.set_gamepad_device(output.as_mut());
                             }
+                            if !both_ready
+                                && output.is_some()
+                                && let Some(mouse) = &mouse
+                            {
+                                mouse.signal_outputs_ready();
+                            }
                             reload.applied(status);
                             return Ok(ControlFlow::Continue(()));
                         }
@@ -1113,16 +1141,9 @@ fn serve_session(
                     let next_gyro = emulation.gyro(next.gyro);
                     if let (Some(mouse), Some(current), Some(next)) =
                         (&mut mouse, active_gyro, next_gyro)
-                        && (gyro_mouse::Options {
-                            sensitivity: next.sensitivity,
-                            response: next.response,
-                            flick_axial_threshold_deg: next.flick_axial_threshold_deg,
-                            flick_steering_sensitivity: next.flick_steering_sensitivity,
-                            game_calibration: next.game_calibration,
-                            ..current
-                        }) == next
+                        && current.can_reconfigure(next)
                     {
-                        mouse.set_scaling(next);
+                        mouse.reconfigure(current, next);
                     } else if active_gyro != next_gyro {
                         let input = reload_input.as_ref().expect("reload descriptor");
                         match open_mouse(input, identity.transport, next_gyro) {
@@ -1186,6 +1207,12 @@ fn serve_session(
                         status.update(Some(identity), runtime.gyro.is_some());
                         status.set_touchpad_policy(touchpad_requested, native_touchpad.is_some());
                     }
+                    if !both_ready
+                        && output.is_some()
+                        && let Some(mouse) = &mouse
+                    {
+                        mouse.signal_outputs_ready();
+                    }
                     reload.applied(status);
                     return Ok(ControlFlow::Continue(()));
                 }
@@ -1221,10 +1248,16 @@ fn serve_session(
             } else {
                 false
             };
-            if let Some(status) = status
-                && (gamepad_batch || mouse_batch)
-            {
-                status.observe_outputs(gamepad_batch, mouse_batch);
+            if let Some(status) = status {
+                status.observe_imu(
+                    report.imu,
+                    mouse
+                        .as_ref()
+                        .map(gyro_mouse::GyroMouse::stationary_calibration),
+                );
+                if gamepad_batch || mouse_batch {
+                    status.observe_outputs(gamepad_batch, mouse_batch);
+                }
             }
             Ok(ControlFlow::Continue(()))
         },
@@ -1290,16 +1323,35 @@ fn map_gamepad_controls(
     let mut controls = runtime
         .stick_curve
         .map_or(report.controls, |curve| curve.apply(report.controls));
-    if active_gyro.is_some_and(|options| options.flick_stick.is_some()) {
-        controls.right_stick = Default::default();
+    if let Some(options) = active_gyro.filter(|options| options.flick_stick.is_some()) {
+        *options
+            .flick_stick_side
+            .select(&mut controls.left_stick, &mut controls.right_stick) = Default::default();
+    }
+    let mut suppressed = joyshockrust_core::Buttons::default();
+    if let Some(keyboard) = &runtime.keyboard {
+        keyboard.gamepad_mask.filter_axes(&mut controls);
+        suppressed = keyboard.gamepad_mask.buttons;
     }
     let touch_buttons = runtime
         .touchpad
         .as_ref()
         .map_or_else(Default::default, |grid| {
-            grid.map(&mut controls.buttons, report.touch_contacts, touch_click)
+            use joyshockrust_core::Button::TouchpadClick;
+            let suppress_click =
+                suppressed.contains(TouchpadClick) && controls.buttons.contains(TouchpadClick);
+            if suppress_click {
+                controls.buttons.remove(TouchpadClick);
+            }
+            let buttons = grid.map(&mut controls.buttons, report.touch_contacts, touch_click);
+            if suppress_click {
+                controls.buttons.insert(TouchpadClick);
+            }
+            buttons
         });
-    let mut controls = runtime.remaps.apply(controls, layer_state);
+    let mut controls = runtime
+        .remaps
+        .apply_filtered(controls, layer_state, suppressed);
     controls.buttons = controls.buttons.union(touch_buttons);
     controls
 }
@@ -1603,6 +1655,79 @@ mod tests {
         assert_eq!(reports, FRAMES);
         assert_eq!(batches, FRAMES);
         assert_eq!(allocations.count_total, 0, "{allocations:?}");
+    }
+
+    #[test]
+    fn exclusive_button_outputs_consume_only_their_physical_sources() {
+        use joyshockrust_core::{Button, DPad};
+        let source = r#"
+version = 1
+remap_buttons = ["cross=triangle", "circle=cross"]
+[keyboard.button_output]
+cross = "keyboard"
+l2 = "mouse"
+dpad-up = "keyboard"
+[[keyboard.bindings]]
+button = "cross"
+tap = "KEY_SPACE"
+[[keyboard.bindings]]
+trigger = "l2:0.95:0.85"
+hold = "BTN_LEFT"
+"#;
+        let runtime = super::profile::parse(source).unwrap();
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[5] = 255;
+        frame[8] = 0x61;
+        frame[9] = 0x04;
+        let report =
+            joyshockrust_input::parse_report(USB_EDGE.model, USB_EDGE.transport, &frame, None)
+                .unwrap();
+        let controls = super::map_gamepad_controls(
+            &runtime,
+            runtime.gyro,
+            &report,
+            &mut super::gamepad::RemapState::default(),
+            &mut super::touchpad::ClickState::default(),
+        );
+        assert!(!controls.buttons.contains(Button::North));
+        assert!(controls.buttons.contains(Button::South));
+        assert!(!controls.buttons.contains(Button::LeftTrigger));
+        assert_eq!(controls.left_trigger, 0.0);
+        assert_eq!(controls.dpad, DPad::Right);
+        assert!(super::profile::parse(&source.replace("BTN_LEFT", "KEY_A")).is_err());
+    }
+
+    #[test]
+    fn flick_stick_centers_only_the_selected_virtual_stick() {
+        use joyshockrust_core::Stick;
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[1..=4].copy_from_slice(&[255, 128, 0, 128]);
+        let report =
+            joyshockrust_input::parse_report(USB_EDGE.model, USB_EDGE.transport, &frame, None)
+                .unwrap();
+        for (side, expected_left, expected_right) in [
+            ("", report.controls.left_stick, Stick::default()),
+            (
+                "flick_stick_side = 'left'",
+                Stick::default(),
+                report.controls.right_stick,
+            ),
+        ] {
+            let runtime =
+                super::profile::parse(&format!("version = 1\n[gyro]\nflick_stick = 1.0\n{side}"))
+                    .unwrap();
+            let controls = super::map_gamepad_controls(
+                &runtime,
+                runtime.gyro,
+                &report,
+                &mut super::gamepad::RemapState::default(),
+                &mut super::touchpad::ClickState::default(),
+            );
+            assert_eq!(controls.left_stick, expected_left);
+            assert_eq!(controls.right_stick, expected_right);
+        }
     }
 
     #[test]

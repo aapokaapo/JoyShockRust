@@ -2,10 +2,12 @@
 name = "joyshockrust-editor"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
 adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
+evdev = "0.13.2"
 joyshockrust-core = { path = "../joyshockrust-core" }
 joyshockrust-input = { path = "../joyshockrust-input" }
 joyshockrust-motion = { path = "../joyshockrust-motion" }

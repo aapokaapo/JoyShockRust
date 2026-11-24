@@ -139,6 +139,141 @@ pub fn gesture_output(binding: &Table, gesture: Gesture) -> Option<&Item> {
     binding.get(gesture.field())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+    Gamepad,
+    Keyboard,
+    Mouse,
+    Legacy,
+}
+
+impl OutputMode {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Gamepad => "gamepad",
+            Self::Keyboard => "keyboard",
+            Self::Mouse => "mouse",
+            Self::Legacy => "legacy",
+        }
+    }
+
+    pub fn matches_key(self, key: &str) -> bool {
+        match self {
+            Self::Keyboard => key.starts_with("KEY_"),
+            Self::Mouse => key.starts_with("BTN_"),
+            _ => true,
+        }
+    }
+
+    fn matches_action(self, action: &Item) -> bool {
+        self != Self::Gamepad
+            && (action.as_str().is_some_and(|key| self.matches_key(key))
+                || action.as_array().is_some_and(|keys| {
+                    keys.iter()
+                        .all(|key| key.as_str().is_some_and(|key| self.matches_key(key)))
+                })
+                || (self == Self::Mouse && action.get("scroll").is_some()))
+    }
+}
+
+fn belongs_to_button(table: &Table, id: &str) -> bool {
+    table.get("button").and_then(Item::as_str) == Some(id)
+        || (matches!(id, "l2" | "r2")
+            && table
+                .get("trigger")
+                .and_then(Item::as_str)
+                .is_some_and(|trigger| trigger.split(':').next() == Some(id)))
+}
+
+pub fn output_mode(doc: &DocumentMut, id: &str) -> Result<OutputMode, &'static str> {
+    let explicit = doc
+        .get("keyboard")
+        .and_then(|keyboard| keyboard.get("button_output"))
+        .map(|item| {
+            item.as_table_like()
+                .ok_or("Edit button_output in Advanced TOML.")
+        })
+        .transpose()?
+        .and_then(|table| table.get(id));
+    match explicit {
+        Some(item) => match item.as_str() {
+            Some("keyboard") => Ok(OutputMode::Keyboard),
+            Some("mouse") => Ok(OutputMode::Mouse),
+            _ => Err("Edit this button output in Advanced TOML."),
+        },
+        None if keyboard_bindings(doc)?.is_some_and(|bindings| {
+            bindings
+                .iter()
+                .any(|binding| belongs_to_button(binding, id))
+        }) =>
+        {
+            Ok(OutputMode::Legacy)
+        }
+        None => Ok(OutputMode::Gamepad),
+    }
+}
+
+pub fn set_output_mode(
+    doc: &mut DocumentMut,
+    id: &str,
+    mode: OutputMode,
+) -> Result<(), &'static str> {
+    output_mode(doc, id)?;
+    if mode == OutputMode::Legacy {
+        return Ok(());
+    }
+    if mode != OutputMode::Gamepad {
+        set_gamepad(doc, id, None)?;
+    }
+    let keyboard = doc
+        .entry("keyboard")
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_mut()
+        .ok_or("Edit this keyboard table in Advanced TOML.")?;
+    let outputs = keyboard
+        .entry("button_output")
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_like_mut()
+        .ok_or("Edit button_output in Advanced TOML.")?;
+    if mode == OutputMode::Gamepad {
+        outputs.remove(id);
+    } else {
+        outputs.insert(id, value(mode.key()));
+    }
+    if outputs.is_empty() {
+        keyboard.remove("button_output");
+    }
+    if let Some(bindings) = keyboard
+        .get_mut("bindings")
+        .and_then(Item::as_array_of_tables_mut)
+    {
+        for index in (0..bindings.len()).rev() {
+            let binding = bindings.get_mut(index).unwrap();
+            if !belongs_to_button(binding, id) {
+                continue;
+            }
+            for gesture in Gesture::ALL {
+                if binding
+                    .get(gesture.field())
+                    .is_some_and(|action| !mode.matches_action(action))
+                {
+                    binding.remove(gesture.field());
+                    if matches!(gesture, Gesture::Hold) {
+                        binding.remove("scroll_repeat_ms");
+                    }
+                }
+            }
+            if !Gesture::ALL
+                .iter()
+                .any(|gesture| binding.contains_key(gesture.field()))
+            {
+                bindings.remove(index);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn set_key(
     doc: &mut DocumentMut,
     button: &str,
