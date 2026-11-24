@@ -4,9 +4,10 @@ use evdev::{
     AbsInfo, AbsoluteAxisCode as Axis, AttributeSet, BusType, EventType, InputEvent, InputId,
     KeyCode as Key, UinputAbsSetup, uinput::VirtualDevice,
 };
-use joyshockrust_core::{Button, Buttons, Controls, DPad, Stick};
+use joyshockrust_core::{Button, Buttons, Controls, DPad};
 
 use crate::gyro_gate::TriggerGate;
+pub use joyshockrust_motion::stick_response::StickCurve;
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct TriggerStages {
@@ -219,60 +220,6 @@ fn add_rule(rules: &mut Vec<(Button, Button)>, rule: (Button, Button)) -> Result
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-pub struct StickCurve([f32; 2]);
-
-impl StickCurve {
-    pub fn parse(value: &str) -> Result<Self, &'static str> {
-        Self::new(value.parse().map_err(|_| "invalid stick curve exponent")?)
-    }
-
-    pub fn new(exponent: f32) -> Result<Self, &'static str> {
-        Self::validate(exponent)?;
-        Ok(Self([exponent; 2]))
-    }
-
-    fn validate(exponent: f32) -> Result<(), &'static str> {
-        if !(0.25..=4.0).contains(&exponent) {
-            return Err("stick curve exponent must be between 0.25 and 4");
-        }
-        Ok(())
-    }
-
-    pub fn from_profile(
-        shared: Option<f32>,
-        left: Option<f32>,
-        right: Option<f32>,
-    ) -> Result<Option<Self>, &'static str> {
-        [shared, left, right]
-            .into_iter()
-            .flatten()
-            .try_for_each(Self::validate)?;
-        let fallback = shared.unwrap_or(1.0);
-        Ok((shared.is_some() || left.is_some() || right.is_some())
-            .then_some(Self([left.unwrap_or(fallback), right.unwrap_or(fallback)])))
-    }
-
-    pub fn apply(self, mut controls: Controls) -> Controls {
-        controls.left_stick = Self::shape(controls.left_stick, self.0[0]);
-        controls.right_stick = Self::shape(controls.right_stick, self.0[1]);
-        controls
-    }
-
-    fn shape(stick: Stick, exponent: f32) -> Stick {
-        let radius_squared = stick.x * stick.x + stick.y * stick.y;
-        // Keep center and full travel unchanged, including square corners.
-        if exponent == 1.0 || radius_squared == 0.0 || radius_squared >= 1.0 {
-            return stick;
-        }
-        let scale = radius_squared.powf((exponent - 1.0) * 0.5);
-        Stick {
-            x: stick.x * scale,
-            y: stick.y * scale,
-        }
-    }
-}
-
 const BUTTONS: [(Button, Key); 11] = [
     (Button::South, Key::BTN_SOUTH),
     (Button::East, Key::BTN_EAST),
@@ -465,6 +412,7 @@ fn axes(controls: Controls, trigger_scale: i32) -> [i32; AXES.len()] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use joyshockrust_core::Stick;
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
 
     #[test]

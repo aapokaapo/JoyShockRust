@@ -1,3 +1,9 @@
+use joyshockrust_motion::{
+    game_calibration::GameCalibration,
+    sensitivity::{DEFAULT_GYRO_SENSITIVITY, MAX_GYRO_SENSITIVITY},
+    stick_response::{DEFAULT_STICK_EXPONENT, STICK_EXPONENT_RANGE, plot_travel},
+};
+
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -24,7 +30,7 @@ use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
 const GYRO_FIELDS: [&str; 2] = ["sensitivity_x", "sensitivity_y"];
 const GYRO_SLIDER_MAX: f64 = 20.0;
-const GYRO_TEXT_MAX: f64 = 100.0;
+const GYRO_TEXT_MAX: f64 = MAX_GYRO_SENSITIVITY as f64;
 pub const GYRO_SENSITIVITY_ERROR: &str = "Enter a gyro sensitivity between 0 and 100.";
 const ACCEL_ENABLED: &str = "accel_enabled";
 const RESPONSE_FIELDS: [&str; 4] = [
@@ -79,12 +85,9 @@ fn calibration_values(drafts: &[String; 2]) -> Result<[f64; 2], &'static str> {
     });
     let rwc = rwc.ok_or("Real-world calibration must be a positive number.")?;
     let sensitivity = sensitivity.ok_or("In-game sensitivity must be a positive number.")?;
-    let ratio = rwc / sensitivity;
-    if !(ratio > 0.0 && ratio <= 10_000.0) {
-        return Err(
-            "RWC divided by in-game sensitivity must be greater than 0 and at most 10,000.",
-        );
-    }
+    GameCalibration::new(rwc, sensitivity).map_err(
+        |_| "RWC divided by in-game sensitivity must be greater than 0 and at most 10,000.",
+    )?;
     Ok([rwc, sensitivity])
 }
 
@@ -641,7 +644,8 @@ fn flick_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesG
 }
 
 fn gyro_values(gyro: Option<&dyn TableLike>) -> [f64; 2] {
-    GYRO_FIELDS.map(|key| gyro.map_or(4.0, |table| number(table, key, 4.0)))
+    let fallback = f64::from(DEFAULT_GYRO_SENSITIVITY);
+    GYRO_FIELDS.map(|key| gyro.map_or(fallback, |table| number(table, key, fallback)))
 }
 
 fn gyro_sensitivity_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
@@ -928,7 +932,7 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
     {
         page.add(&flick_group(ctx, gyro));
     }
-    let fallback = number(doc.as_table(), "stick_curve", 1.0);
+    let fallback = number(doc.as_table(), "stick_curve", DEFAULT_STICK_EXPONENT.into());
     let live_travel = Rc::new(Cell::new(None::<[f64; 2]>));
     let mut plots = Vec::new();
     for (index, ((key, title), side)) in STICK_FIELDS
@@ -963,16 +967,23 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
         let plot_ref = plot.downgrade();
         plots.push(plot_ref.clone());
         let curve_ctx = ctx.clone();
-        let row = scale_row("Response exponent", initial, 0.25, 4.0, 20, move |value| {
-            exponent.set(value);
-            if let Some(plot) = plot_ref.upgrade() {
-                plot.queue_draw();
-            }
-            curve_ctx.edit(|doc| {
-                set_number(doc.as_table_mut(), key, value);
-                Ok(())
-            });
-        });
+        let row = scale_row(
+            "Response exponent",
+            initial,
+            (*STICK_EXPONENT_RANGE.start()).into(),
+            (*STICK_EXPONENT_RANGE.end()).into(),
+            20,
+            move |value| {
+                exponent.set(value);
+                if let Some(plot) = plot_ref.upgrade() {
+                    plot.queue_draw();
+                }
+                curve_ctx.edit(|doc| {
+                    set_number(doc.as_table_mut(), key, value);
+                    Ok(())
+                });
+            },
+        );
         group.add(&row);
         group.add(&crate::stick_keys::editor_row(ctx, side, title));
         page.add(&group);
@@ -1035,8 +1046,7 @@ fn stick_travel(value: &str) -> Option<[f64; 2]> {
 }
 
 fn stick_curve(exponent: f64, travel: Option<f64>) -> Curve {
-    let exponent = exponent.clamp(0.25, 4.0);
-    let output = |input: f64| 100.0 * (input / 100.0).powf(exponent);
+    let output = |input| plot_travel(exponent, input);
     Curve {
         input_max: 100.0,
         output_max: 100.0,
@@ -1089,7 +1099,10 @@ mod tests {
             .unwrap();
         set_number(doc.as_table_mut(), "stick_curve_left", 0.8);
         set_number(doc["gyro"].as_table_mut().unwrap(), "sensitivity_x", 4.5);
-        assert_eq!(number(doc.as_table(), "stick_curve", 1.0), 1.5);
+        assert_eq!(
+            number(doc.as_table(), "stick_curve", DEFAULT_STICK_EXPONENT.into()),
+            1.5
+        );
         assert!(doc.to_string().contains("sensitivity_x = 4.5 # horizontal"));
         assert!(!doc.to_string().contains("stick_curve_right"));
     }

@@ -22,7 +22,9 @@ const GRAVITY_CORRECTION_SECONDS: f64 = 0.5;
 
 pub mod aim_response;
 pub mod game_calibration;
+pub mod sensitivity;
 mod stationary_calibration;
+pub mod stick_response;
 pub use stationary_calibration::StationaryCalibration;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

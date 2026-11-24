@@ -100,33 +100,12 @@ struct ShortcutCalibration {
     measuring: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Sensitivity([f32; 2]);
-
-impl Default for Sensitivity {
-    fn default() -> Self {
-        Self([4.0; 2])
-    }
-}
-
-impl Sensitivity {
-    pub fn from_profile(x: Option<f32>, y: Option<f32>) -> Result<Self, &'static str> {
-        let [default_x, default_y] = Self::default().0;
-        let scales = [x.unwrap_or(default_x), y.unwrap_or(default_y)];
-        if !(0.0..=100.0).contains(&scales[0]) {
-            return Err("gyro.sensitivity_x must be between 0 and 100 counts per degree");
-        }
-        if !(0.0..=100.0).contains(&scales[1]) {
-            return Err("gyro.sensitivity_y must be between 0 and 100 counts per degree");
-        }
-        Ok(Self(scales))
-    }
-}
+pub use joyshockrust_motion::sensitivity::GyroSensitivity as Sensitivity;
 
 impl Options {
     fn gyro_scale(self) -> [f64; 2] {
         self.sensitivity
-            .0
+            .axes()
             .map(|scale| self.game_calibration.scale(f64::from(scale)))
     }
 

@@ -792,6 +792,9 @@ dependencies = [
 [[package]]
 name = "joyshockrust-motion"
 version = "0.1.0"
+dependencies = [
+ "joyshockrust-core",
+]
 
 [[package]]
 name = "joyshockrust-tray"
