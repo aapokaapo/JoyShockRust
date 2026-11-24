@@ -1109,7 +1109,12 @@ pub(crate) mod tests {
                 .into_iter()
                 .find(|area| area.widget_name() == "trigger-travel-chart")
                 .unwrap();
-            assert!(!chart.is_mapped(), "{side} has no bound stages");
+            assert!(chart.is_mapped(), "{side} shows analog travel");
+            assert!(
+                descendants::<adw::PreferencesGroup>(&page)
+                    .into_iter()
+                    .any(|group| group.title() == "Partial pull" && !group.is_visible())
+            );
         }
         let bounds = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
             .into_iter()
@@ -1169,14 +1174,16 @@ pub(crate) mod tests {
                 .find(|row| row.title() == title)
                 .unwrap()
         };
-        let analog = spin("Travel for full analog output (%)");
+        let analog = spin("Trigger travel limit (%)");
         assert_eq!(analog.value(), 100.0);
         analog.set_value(70.0);
         assert_eq!(
-            ctx.document().unwrap()["triggers"]["l2"]["full_travel_percent"].as_integer(),
+            ctx.document().unwrap()["triggers"]["l2"]["travel_limit_percent"].as_integer(),
             Some(70)
         );
         select(&output_type(&page), "Keyboard");
+        assert_eq!(spin("Trigger travel limit (%)").value(), 70.0);
+        spin("Trigger travel limit (%)").set_value(60.0);
         assert!(!spin("Partial pull (%)").is_visible());
         assert!(!spin("Full pull (%)").is_visible());
         assert!(
@@ -1186,15 +1193,15 @@ pub(crate) mod tests {
         );
         let groups = descendants::<adw::PreferencesGroup>(&page);
         for (stage, keyval, code) in [
-            ("Partial pull", gtk::gdk::Key::q, evdev::KeyCode::KEY_Q),
             ("Full pull", gtk::gdk::Key::e, evdev::KeyCode::KEY_E),
+            ("Partial pull", gtk::gdk::Key::q, evdev::KeyCode::KEY_Q),
         ] {
             let group = groups.iter().find(|group| group.title() == stage).unwrap();
             let row = key_row(group.upcast_ref(), "Action");
             press_capture_key(&row, keyval, code);
             assert!(spin(&format!("{stage} (%)")).is_visible());
-            if stage == "Partial pull" {
-                assert!(!spin("Full pull (%)").is_visible());
+            if stage == "Full pull" {
+                assert!(!spin("Partial pull (%)").is_visible());
             }
             let chart = descendants::<gtk::DrawingArea>(&page)
                 .into_iter()
@@ -1280,8 +1287,8 @@ pub(crate) mod tests {
             Some(40)
         );
         let bindings = doc["keyboard"]["bindings"].as_array_of_tables().unwrap();
-        let partial = bindings.get(0).unwrap();
-        let full = bindings.get(1).unwrap();
+        let full = bindings.get(0).unwrap();
+        let partial = bindings.get(1).unwrap();
         assert_eq!(partial["trigger"].as_str(), Some("l2:partial"));
         assert_eq!(full["trigger"].as_str(), Some("l2:full"));
         assert_eq!(partial["hold"].as_str(), Some("KEY_Q"));
@@ -1329,11 +1336,18 @@ pub(crate) mod tests {
         );
         select(&tap, "Left mouse");
         select(&output_type(&page), "Virtual gamepad");
-        let target = descendants::<adw::ComboRow>(&page)
-            .into_iter()
-            .find(|row| row.title() == "Output button")
-            .unwrap();
-        select(&target, "South · A / Cross");
+        let stage_target = |stage: &str| {
+            let group = descendants::<adw::PreferencesGroup>(&page)
+                .into_iter()
+                .find(|group| group.title() == stage)
+                .unwrap();
+            descendants::<adw::ComboRow>(group.upcast_ref())
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+        select(&stage_target("Full pull"), "East · B / Circle");
+        select(&stage_target("Partial pull"), "South · A / Cross");
         let doc = ctx.document().unwrap();
         assert_eq!(
             doc["triggers"]["l2"]["partial_button"].as_str(),
@@ -1342,6 +1356,15 @@ pub(crate) mod tests {
         assert!(
             crate::bindings::keyboard_binding(&doc, "l2")
                 .unwrap()
+                .is_none()
+        );
+        select(&stage_target("Full pull"), "Right trigger");
+        assert!(!spin("Full pull (%)").is_visible());
+        assert!(!spin("Full release (%)").is_visible());
+        assert!(!spin("Partial pull (%)").is_visible());
+        assert!(
+            ctx.document().unwrap()["triggers"]["l2"]
+                .get("partial_button")
                 .is_none()
         );
 

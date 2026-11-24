@@ -14,6 +14,42 @@ pub struct TriggerStages {
     pub upper: TriggerGate,
     pub targets: [Option<Button>; 2],
     pub keep_partial: bool,
+    pub travel_percent: u8,
+}
+
+#[derive(Clone, Copy, Default)]
+pub enum AnalogTriggerRoute {
+    #[default]
+    Same,
+    Other,
+    Off,
+}
+
+pub fn route_trigger_axes(
+    controls: &mut Controls,
+    travel: [Option<u8>; 2],
+    routes: [AnalogTriggerRoute; 2],
+    suppressed: &mut Buttons,
+) {
+    let mut output = [0.0_f32; 2];
+    for (index, ((axis, full), route)) in [controls.left_trigger, controls.right_trigger]
+        .into_iter()
+        .zip(travel)
+        .zip(routes)
+        .enumerate()
+    {
+        let destination = match route {
+            AnalogTriggerRoute::Same => index,
+            AnalogTriggerRoute::Other => 1 - index,
+            AnalogTriggerRoute::Off => continue,
+        };
+        if destination != index {
+            suppressed.insert([Button::LeftTrigger, Button::RightTrigger][index]);
+        }
+        let scaled = full.map_or(axis, |full| (axis / (f32::from(full) / 100.0)).min(1.0));
+        output[destination] = output[destination].max(scaled);
+    }
+    [controls.left_trigger, controls.right_trigger] = output;
 }
 
 #[derive(Default, PartialEq)]

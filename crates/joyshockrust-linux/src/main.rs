@@ -1408,14 +1408,12 @@ fn map_gamepad_controls(
         });
     let trigger_buttons =
         layer_state.trigger_outputs(&controls, runtime.trigger_stages, &mut suppressed);
-    for (axis, full) in [&mut controls.left_trigger, &mut controls.right_trigger]
-        .into_iter()
-        .zip(runtime.trigger_full_travel)
-    {
-        if let Some(full) = full {
-            *axis = (*axis / (f32::from(full) / 100.0)).min(1.0);
-        }
-    }
+    gamepad::route_trigger_axes(
+        &mut controls,
+        runtime.trigger_full_travel,
+        runtime.trigger_analog_routes,
+        &mut suppressed,
+    );
     runtime.remaps.apply_filtered(
         controls,
         layer_state,
@@ -1922,6 +1920,57 @@ keep_partial = true
             assert_eq!(
                 mapped.buttons.contains(joyshockrust_core::Button::South),
                 action
+            );
+        }
+    }
+
+    #[test]
+    fn exclusive_full_pull_routes_either_digital_stages_or_an_analog_axis() {
+        let profile = |target: &str, partial: &str| {
+            super::profile::parse(&format!(
+                "version = 1\n[triggers.l2]\nfull_pull_exclusive = true\ntravel_limit_percent = 60\nthresholds = [30, 20, 80, 70]\nfull_button = '{target}'\n{partial}"
+            ))
+        };
+        assert!(profile("r2", "partial_button = 'cross'").is_err());
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[8] = 8;
+        frame[9] = 4;
+        let mut layers = super::gamepad::RemapState::default();
+        let mut click = super::touchpad::ClickState::default();
+        let mut map = |runtime: &super::profile::RuntimeOptions, left: u8| {
+            frame[5] = left;
+            let report =
+                joyshockrust_input::parse_report(USB_EDGE.model, USB_EDGE.transport, &frame, None)
+                    .unwrap();
+            super::map_gamepad_controls(runtime, None, &report, &mut layers, &mut click)
+        };
+
+        let analog = profile("r2", "").unwrap();
+        let mapped = map(&analog, 153);
+        assert_eq!([mapped.left_trigger, mapped.right_trigger], [0.0, 1.0]);
+        assert!(
+            !mapped
+                .buttons
+                .contains(joyshockrust_core::Button::LeftTrigger)
+        );
+
+        let digital = profile("cross", "partial_button = 'square'").unwrap();
+        for (physical, partial, full) in [
+            (120, true, false),
+            (123, false, true),
+            (110, false, true),
+            (107, true, false),
+        ] {
+            let mapped = map(&digital, physical);
+            assert_eq!(mapped.left_trigger, 0.0);
+            assert_eq!(
+                mapped.buttons.contains(joyshockrust_core::Button::West),
+                partial
+            );
+            assert_eq!(
+                mapped.buttons.contains(joyshockrust_core::Button::South),
+                full
             );
         }
     }

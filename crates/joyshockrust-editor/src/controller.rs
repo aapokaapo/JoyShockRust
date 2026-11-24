@@ -349,7 +349,13 @@ fn show_bindings(
     mode_row.set_subtitle("Changing the type removes actions assigned to other output types.");
     group.add(&mode_row);
     if matches!(selected, "l2" | "r2") {
-        crate::triggers::append(inspector, ctx, &doc, selected, mode);
+        let host = inspector.downgrade();
+        let editor = ctx.clone();
+        crate::triggers::append(inspector, ctx, &doc, selected, mode, move || {
+            if let (Some(host), Some(button)) = (host.upgrade(), weak_button.upgrade()) {
+                show_bindings(&host, &editor, selected, &button);
+            }
+        });
         return;
     }
     if mode == OutputMode::Legacy {

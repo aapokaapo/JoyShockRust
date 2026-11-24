@@ -60,18 +60,33 @@ struct TriggerProfiles {
 struct TriggerProfile {
     thresholds: Option<[u8; 4]>,
     full_travel_percent: Option<u8>,
+    travel_limit_percent: Option<u8>,
     partial_button: Option<String>,
     full_button: Option<String>,
+    full_pull_exclusive: bool,
     keep_partial: bool,
     adaptive: Effect,
 }
 
 impl TriggerProfile {
+    fn analog_route(&self, side: gyro_gate::TriggerSide) -> crate::gamepad::AnalogTriggerRoute {
+        use crate::gamepad::AnalogTriggerRoute::{Off, Other, Same};
+        use gyro_gate::TriggerSide::{Left, Right};
+        if !self.full_pull_exclusive {
+            return Same;
+        }
+        match (side, self.full_button.as_deref()) {
+            (_, None) | (Left, Some("l2")) | (Right, Some("r2")) => Same,
+            (_, Some("l2" | "r2")) => Other,
+            _ => Off,
+        }
+    }
+
     fn full_travel(&self) -> Result<Option<u8>, &'static str> {
-        match self.full_travel_percent {
+        match self.travel_limit_percent.or(self.full_travel_percent) {
             None | Some(100) => Ok(None),
             Some(value @ 1..=99) => Ok(Some(value)),
-            _ => Err("full_travel_percent must be between 1 and 100"),
+            _ => Err("trigger travel limit must be between 1 and 100"),
         }
     }
 
@@ -84,20 +99,38 @@ impl TriggerProfile {
             .unwrap_or(joyshockrust_core::DEFAULT_TRIGGER_THRESHOLDS);
         joyshockrust_core::validate_trigger_thresholds(thresholds)?;
         let [partial, partial_release, full, full_release] = thresholds;
+        let analog_full = self.full_pull_exclusive
+            && !matches!(
+                self.analog_route(side),
+                crate::gamepad::AnalogTriggerRoute::Off
+            );
+        if analog_full && self.partial_button.is_some() {
+            return Err("a partial pull button requires a non-trigger full pull target");
+        }
+        let travel = if self.full_pull_exclusive || self.travel_limit_percent.is_some() {
+            self.full_travel()?.unwrap_or(100)
+        } else {
+            100
+        };
         Ok(crate::gamepad::TriggerStages {
-            lower: TriggerGate::from_percent(side, partial, partial_release),
-            upper: TriggerGate::from_percent(side, full, full_release),
-            targets: [
-                self.partial_button
-                    .as_deref()
-                    .map(crate::gamepad::parse_target)
-                    .transpose()?,
-                self.full_button
-                    .as_deref()
-                    .map(crate::gamepad::parse_target)
-                    .transpose()?,
-            ],
+            lower: TriggerGate::from_percent(side, partial, partial_release).within_travel(travel),
+            upper: TriggerGate::from_percent(side, full, full_release).within_travel(travel),
+            targets: if analog_full {
+                [None; 2]
+            } else {
+                [
+                    self.partial_button
+                        .as_deref()
+                        .map(crate::gamepad::parse_target)
+                        .transpose()?,
+                    self.full_button
+                        .as_deref()
+                        .map(crate::gamepad::parse_target)
+                        .transpose()?,
+                ]
+            },
             keep_partial: self.keep_partial,
+            travel_percent: travel,
         })
     }
 }
@@ -239,6 +272,7 @@ pub struct RuntimeOptions {
     pub grab_touchpad: bool,
     pub trigger_stages: Option<[crate::gamepad::TriggerStages; 2]>,
     pub trigger_full_travel: [Option<u8>; 2],
+    pub trigger_analog_routes: [crate::gamepad::AnalogTriggerRoute; 2],
     pub adaptive_triggers: [Effect; 2],
 }
 
@@ -489,6 +523,16 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
         trigger_full_travel: [
             profile.triggers.l2.full_travel()?,
             profile.triggers.r2.full_travel()?,
+        ],
+        trigger_analog_routes: [
+            profile
+                .triggers
+                .l2
+                .analog_route(gyro_gate::TriggerSide::Left),
+            profile
+                .triggers
+                .r2
+                .analog_route(gyro_gate::TriggerSide::Right),
         ],
         adaptive_triggers,
     })

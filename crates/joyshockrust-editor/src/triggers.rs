@@ -126,6 +126,7 @@ pub fn append(
     doc: &DocumentMut,
     side: &'static str,
     mode: OutputMode,
+    refresh: impl Fn() + Clone + 'static,
 ) {
     let values = settings(doc, side);
     let group = adw::PreferencesGroup::builder()
@@ -139,16 +140,18 @@ pub fn append(
             return;
         }
     };
-    if mode == OutputMode::Gamepad {
-        add_analog(&group, ctx, side, values);
-    }
+    let exclusive = values
+        .and_then(|table| table.get("full_pull_exclusive"))
+        .and_then(Item::as_bool)
+        .unwrap_or(false);
     let overlap = values
         .and_then(|table| table.get("keep_partial"))
         .and_then(Item::as_bool)
         .unwrap_or_else(|| legacy_overlap(doc, side));
-    let travel = trigger_travel::add(&group, side, initial, overlap);
+    let range = travel_range(values);
+    let travel = trigger_travel::add(&group, side, initial, overlap, range);
+    add_travel_limit(&group, ctx, side, mode, range.0, travel.clone());
     let stages = Rc::new(Cell::new([false; 2]));
-    group.set_visible(mode == OutputMode::Gamepad);
 
     let rows = [
         "Partial pull (%)",
@@ -213,6 +216,8 @@ pub fn append(
         }
     });
     group.add(&keep);
+    let assigned_stages = stages.clone();
+    let stage_chart = travel.clone();
     let update_stage = move |index: usize, assigned: bool| {
         let mut shown = stages.get();
         shown[index] = assigned;
@@ -221,40 +226,95 @@ pub fn append(
             row.set_visible(assigned);
         }
         keep.set_visible(shown == [true; 2]);
-        group.set_visible(mode == OutputMode::Gamepad || shown.contains(&true));
         if !shown.contains(&true) {
             error.set_visible(false);
         }
-        travel.set_stages(shown);
+        stage_chart.set_stages(shown);
     };
-    for (index, (title, stage, field, legacy)) in STAGES.into_iter().enumerate() {
-        let stage_group = adw::PreferencesGroup::builder().title(title).build();
-        inspector.append(&stage_group);
+    let [partial_group, full_group] =
+        STAGES.map(|(title, ..)| adw::PreferencesGroup::builder().title(title).build());
+    partial_group.set_visible(false);
+    inspector.append(&full_group);
+    inspector.append(&partial_group);
+    for index in [1, 0] {
+        let (_, stage, field, legacy) = STAGES[index];
+        let stage_group = if index == 0 {
+            &partial_group
+        } else {
+            &full_group
+        };
         if mode == OutputMode::Gamepad {
             let current = values
                 .and_then(|table| table.get(field))
                 .and_then(Item::as_str);
             let edit = ctx.clone();
-            update_stage(index, current.is_some());
+            let analog = index == 1 && is_analog_target(current);
+            if index == 1 && !analog {
+                partial_group.set_visible(true);
+            }
+            update_stage(
+                index,
+                current.is_some() && !analog && (index == 1 || partial_group.is_visible()),
+            );
             let update_stage = update_stage.clone();
+            let partial_group = partial_group.downgrade();
+            let keep_own_entry = !exclusive && current == Some(side);
+            let choices = controller::GAMEPAD_TARGETS
+                .into_iter()
+                .filter(move |(key, _)| index == 0 || *key != side || keep_own_entry)
+                .map(move |(key, label)| {
+                    let label = match (index, key) {
+                        (1, "l2") => "Left trigger",
+                        (1, "r2") => "Right trigger",
+                        _ => label,
+                    };
+                    (key.into(), label.into())
+                });
+            let travel = travel.clone();
+            let assigned_stages = assigned_stages.clone();
+            let refresh = refresh.clone();
             stage_group.add(&controller::dropdown(
                 "Output button",
-                current,
-                "No action",
-                controller::GAMEPAD_TARGETS
-                    .into_iter()
-                    .map(|(key, label)| (key.into(), label.into())),
+                current.filter(|target| index == 0 || !exclusive || *target != side),
+                if index == 1 {
+                    "Same as controller"
+                } else {
+                    "No action"
+                },
+                choices,
                 move |action| {
+                    let analog = index == 1 && is_analog_target(action);
                     if edit.edit(|doc| {
                         let stage = settings_mut(doc, side)?;
-                        if let Some(action) = action {
+                        if let Some(action) = action.filter(|action| index == 0 || *action != side)
+                        {
                             stage.insert(field, value(action));
                         } else {
                             stage.remove(field);
                         }
+                        if index == 1 {
+                            stage.insert("full_pull_exclusive", value(true));
+                            if analog {
+                                stage.remove("partial_button");
+                            }
+                        }
                         Ok(())
                     }) {
-                        update_stage(index, action.is_some());
+                        if index == 1 {
+                            if analog && assigned_stages.get()[0] {
+                                refresh();
+                                return;
+                            }
+                            if let Some(partial_group) = partial_group.upgrade() {
+                                partial_group.set_visible(!analog);
+                            }
+                            if let Ok(doc) = edit.document()
+                                && let Ok(values) = settings(&doc, side)
+                            {
+                                travel.set_range(travel_range(values));
+                            }
+                        }
+                        update_stage(index, action.is_some() && !analog);
                     }
                 },
             ));
@@ -267,10 +327,11 @@ pub fn append(
                     bindings::binding(doc, BindingInput::Trigger(&format!("{side}:{legacy}")))
                 }
             });
-            update_stage(
-                index,
-                action.as_ref().is_ok_and(|binding| binding.is_some()),
-            );
+            let assigned = action.as_ref().is_ok_and(|binding| binding.is_some());
+            update_stage(index, assigned);
+            if assigned {
+                partial_group.set_visible(true);
+            }
             let current = match action {
                 Ok(binding)
                     if !binding.is_some_and(|table| {
@@ -295,11 +356,39 @@ pub fn append(
             };
             let edit = ctx.clone();
             let update_stage = update_stage.clone();
+            let partial_group = partial_group.downgrade();
+            let assigned_stages = assigned_stages.clone();
+            let refresh = refresh.clone();
             let changed = move |action: Option<&str>| {
                 if edit.edit(|doc| {
                     migrate_stages(doc, side)?;
-                    bindings::set_action(doc, BindingInput::Trigger(&spec), Gesture::Hold, action)
+                    bindings::set_action(doc, BindingInput::Trigger(&spec), Gesture::Hold, action)?;
+                    if index == 1 && action.is_none() {
+                        bindings::set_action(
+                            doc,
+                            BindingInput::Trigger(&format!("{side}:partial")),
+                            Gesture::Hold,
+                            None,
+                        )?;
+                    }
+                    Ok(())
                 }) {
+                    if index == 1 {
+                        if action.is_none() && assigned_stages.get()[0] {
+                            refresh();
+                            return;
+                        }
+                        if let Some(partial_group) = partial_group.upgrade() {
+                            partial_group.set_visible(action.is_some());
+                        }
+                    }
+                    if index == 0
+                        && action.is_none()
+                        && !assigned_stages.get()[1]
+                        && let Some(partial_group) = partial_group.upgrade()
+                    {
+                        partial_group.set_visible(false);
+                    }
                     update_stage(index, action.is_some());
                 }
             };
@@ -329,35 +418,55 @@ pub fn append(
     add_adaptive(inspector, ctx, side, values);
 }
 
-fn add_analog(
+fn is_analog_target(action: Option<&str>) -> bool {
+    matches!(action, None | Some("l2" | "r2"))
+}
+
+fn travel_range(settings: Option<&dyn TableLike>) -> (u8, bool) {
+    let limit = settings.and_then(|table| table.get("travel_limit_percent"));
+    let relative = limit.is_some()
+        || settings
+            .and_then(|table| table.get("full_pull_exclusive"))
+            .and_then(Item::as_bool)
+            == Some(true);
+    let percent = limit
+        .or_else(|| settings.and_then(|table| table.get("full_travel_percent")))
+        .and_then(Item::as_integer)
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|value| (1..=100).contains(value))
+        .unwrap_or(100);
+    (percent, relative)
+}
+
+fn add_travel_limit(
     group: &adw::PreferencesGroup,
     ctx: &Context,
     side: &'static str,
-    settings: Option<&dyn TableLike>,
+    mode: OutputMode,
+    full: u8,
+    chart: trigger_travel::Chart,
 ) {
-    group.add(&controller::message_row(
-        "Analog output",
-        "Same as controller",
-    ));
-    let full = settings
-        .and_then(|table| table.get("full_travel_percent"))
-        .and_then(Item::as_integer)
-        .and_then(|value| u8::try_from(value).ok())
-        .unwrap_or(100);
-    let row = spin("Travel for full analog output (%)", 1, 100, full);
-    row.set_subtitle("Physical travel needed for maximum virtual trigger output.");
+    let row = spin("Trigger travel limit (%)", 1, 100, full);
+    row.set_subtitle(if mode == OutputMode::Gamepad {
+        "Physical travel used for maximum analog output and the stage percentages."
+    } else {
+        "Physical travel used for the stage percentages."
+    });
     let edit = ctx.clone();
     row.connect_value_notify(move |row| {
-        edit.edit(|doc| {
+        let limit = row.value() as u8;
+        if edit.edit(|doc| {
             let settings = settings_mut(doc, side)?;
-            let value = row.value() as i64;
-            if value == 100 {
-                settings.remove("full_travel_percent");
+            settings.remove("full_travel_percent");
+            if limit == 100 {
+                settings.remove("travel_limit_percent");
             } else {
-                settings.insert("full_travel_percent", toml_edit::value(value));
+                settings.insert("travel_limit_percent", value(i64::from(limit)));
             }
             Ok(())
-        });
+        }) {
+            chart.set_range((limit, true));
+        }
     });
     group.add(&row);
 }

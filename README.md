@@ -317,6 +317,7 @@ Set that side's boundaries under `[triggers.l2]` or `[triggers.r2]`.
 ```toml
 [triggers.l2]
 thresholds = [45, 35, 95, 85] # Partial pull, partial release, full pull, full release in percent
+travel_limit_percent = 60
 keep_partial = false
 adaptive = { mode = "resistance", start = 3, strength = 3 }
 
@@ -325,11 +326,14 @@ trigger = "l2:partial"
 hold = "KEY_Q"
 ```
 
-For virtual buttons, set `partial_button` and `full_button` under the
-trigger instead of adding keyboard bindings. The virtual analog axis
-follows physical travel in gamepad mode. Set `full_travel_percent` to an
-integer from 1 to 100 to control where it reaches maximum. The default
-is 100. This scaling applies to the virtual axis only.
+Set `travel_limit_percent` from 1 to 100. Stage thresholds are percentages
+of that travel. For virtual gamepad routing, set `full_pull_exclusive = true`
+and choose a `full_button`. An omitted target uses the matching analog
+trigger. The targets `l2` and `r2` select an analog axis; any other target
+uses the two digital stages and allows `partial_button`.
+Existing profiles still accept `full_travel_percent` for analog-only
+scaling and retain their original routing until the Full Pull output is
+changed in the editor.
 
 For a legacy explicit trigger binding, the optional suffix sets the engagement and release thresholds on a
 scale from 0 to 1. The defaults are 0.45 and 0.35. Bindings at different
@@ -877,23 +881,23 @@ gesture or **Same as controller** to remove the base remap. Existing
 TOML profiles retain their original routing until you choose an output
 type for the button. Use **Advanced** for chords and layers.
 
-Selecting L2 or R2 shows one action picker each for **Partial pull**
-and **Full pull**. Assigning an action reveals that stage's engage
-and release points and its band in the live **Trigger travel** chart.
-The defaults engage at 45% and 95% and release at 35% and 85%. Each
-action stays active while its stage is engaged. Enable **Keep partial
-action at full pull** to keep both actions active at full travel. You can
-choose a key, mouse button or virtual gamepad button using **Output type**.
+Select L2 or R2 and choose its **Full pull** output first. In **Virtual
+gamepad** mode, **Same as controller** routes the analog axis to the
+matching virtual trigger. Selecting either virtual trigger uses the
+**Trigger travel limit (%)** as the point of maximum output. The
+engagement and release controls apply to digital stages.
+
+Selecting a non-trigger button, key or mouse button enables **Partial
+pull** as an optional second action. The travel limit is editable in
+all output modes. At a 60% travel limit, an analog trigger reaches
+maximum at 60% physical travel and an 80% digital Full Pull engages at
+48% physical travel. Release thresholds use the same scale. **Keep
+partial action at full pull** lets both digital actions stay active.
 Custom trigger gestures from older profiles can still be edited in **Advanced**.
 
-In **Virtual gamepad** mode, the analog output is **Same as controller**.
-Use **Travel for full analog output (%)** to reach maximum output
-earlier. For example, at 60%, a 30% physical pull produces 50% virtual
-output and any pull from 60% onward produces 100%. Stage actions use the
-physical position.
-
-The **Trigger travel** chart shows the live position of the selected L2
-or R2 and a band for each assigned stage. Solid lines mark engagement,
+The **Trigger travel** chart shows the configured travel range, the live
+position of the selected L2 or R2 and a band for each assigned digital
+stage. Solid lines mark engagement,
 dashed lines mark release, and the lighter band shows the gap between
 them. The Partial band turns gray from the Full Pull threshold when
 **Keep partial action at full pull** is off. While the editor is focused,

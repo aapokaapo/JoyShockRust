@@ -26,9 +26,10 @@ impl Settings {
         else {
             return None;
         };
-        let mask = match rest {
-            [] => 3,
-            &[mask @ 1..=3] => mask,
+        let (mask, limit) = match rest {
+            [] => (3, 100),
+            &[mask @ 1..=3] => (mask, 100),
+            &[mask @ 1..=3, limit @ 1..=100] => (mask, limit),
             _ => return None,
         };
         validate_trigger_thresholds([partial, partial_release, full, full_release]).ok()?;
@@ -40,8 +41,12 @@ impl Settings {
         Some(Some(Self {
             side,
             gates: [
-                (mask & 1 != 0).then(|| TriggerGate::from_percent(side, partial, partial_release)),
-                (mask & 2 != 0).then(|| TriggerGate::from_percent(side, full, full_release)),
+                (mask & 1 != 0).then(|| {
+                    TriggerGate::from_percent(side, partial, partial_release).within_travel(limit)
+                }),
+                (mask & 2 != 0).then(|| {
+                    TriggerGate::from_percent(side, full, full_release).within_travel(limit)
+                }),
             ],
         }))
     }

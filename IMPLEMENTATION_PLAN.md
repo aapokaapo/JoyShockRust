@@ -316,11 +316,11 @@ saves and applies TOML profiles. Its visual controller layout selects
 physical controls and selects an exclusive keyboard, mouse or gamepad
 output per physical button or D-pad direction in the inspector. The
 D-pad can also be a virtual gamepad target. Touchpad regions use the
-Touchpad tab. L2 and R2 expose adjustable partial and full stages with
-one action per stage, a live travel chart and haptic previews for
-assigned stages, adjustable full travel for virtual analog output,
-and optional physical resistance with a live
-editor preview. The
+Touchpad tab. L2 and R2 route Full Pull to an analog axis or a digital
+action. The digital route exposes Partial Pull. The live chart shows
+the configurable travel range and stage thresholds in gamepad, keyboard
+and mouse modes. Haptic previews and optional physical resistance are
+available in the editor. The
 standalone adaptive trigger test can isolate each side on
 USB or Bluetooth. The user verified resistance on both models after
 enabling trigger effects in the Edge's onboard profile. Keyboard pickers

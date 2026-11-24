@@ -100,11 +100,12 @@ cadence and queues a detent only on a stage transition. The preview
 expires when the editor stops refreshing it. It uses the controller
 haptics worker with USB PCM and evdev rumble fallback.
 
-2026-11-24. Stage controls, chart bands and preview cues follow action
-assignments. The profile retains stage thresholds when an action is
-cleared. Virtual gamepad mode passes through each analog trigger. Its
-optional full-travel setting scales the virtual axis after physical
-stage detection.
+2026-11-24. Full Pull selects an analog trigger or a digital output in
+the editor. An analog selection uses the travel limit for saturation.
+Digital stage thresholds and preview gates use percentages of the
+configured travel. The chart plots the range and stage bands on one
+physical axis. The profile retains prior routing and threshold
+semantics for legacy settings.
 
 ## Optional desktop device access
 

@@ -13,10 +13,10 @@ const PREVIEW_MESSAGE: &[u8] = b"\0preview-trigger-travel\n";
 #[derive(Clone)]
 pub struct Chart {
     area: gtk::DrawingArea,
-    panel: gtk::Box,
     thresholds: Rc<Cell<[u8; 4]>>,
     keep_partial: Rc<Cell<bool>>,
     stages: Rc<Cell<[bool; 2]>>,
+    range: Rc<Cell<(u8, bool)>>,
     side: u8,
 }
 
@@ -25,7 +25,7 @@ impl Chart {
         self.thresholds.set(thresholds);
         self.area.queue_draw();
         if is_active(&self.area) {
-            send(self.side, thresholds, self.stages.get());
+            send(self.side, thresholds, self.stages.get(), self.range.get());
         }
     }
 
@@ -36,12 +36,20 @@ impl Chart {
 
     pub fn set_stages(&self, stages: [bool; 2]) {
         self.stages.set(stages);
-        self.panel.set_visible(stages.contains(&true));
-        self.area
-            .set_content_height(if stages == [true; 2] { 86 } else { 58 });
+        self.area.set_content_height(
+            58 + 28 * stages.into_iter().filter(|visible| *visible).count() as i32,
+        );
         self.area.queue_draw();
         if is_active(&self.area) {
-            send(self.side, self.thresholds.get(), stages);
+            send(self.side, self.thresholds.get(), stages, self.range.get());
+        }
+    }
+
+    pub fn set_range(&self, range: (u8, bool)) {
+        self.range.set(range);
+        self.area.queue_draw();
+        if is_active(&self.area) {
+            send(self.side, self.thresholds.get(), self.stages.get(), range);
         }
     }
 }
@@ -51,16 +59,17 @@ pub fn add(
     side: &str,
     initial: [u8; 4],
     keep_partial: bool,
+    range: (u8, bool),
 ) -> Chart {
     let side = u8::from(side == "r2");
     let thresholds = Rc::new(Cell::new(initial));
     let keep_partial = Rc::new(Cell::new(keep_partial));
     let stages = Rc::new(Cell::new([false; 2]));
+    let range = Rc::new(Cell::new(range));
     let live = Rc::new(Cell::new(None));
     let panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(4)
-        .visible(false)
         .build();
     panel.set_margin_top(8);
     panel.set_margin_bottom(12);
@@ -73,16 +82,20 @@ pub fn add(
         let thresholds = thresholds.clone();
         let keep_partial = keep_partial.clone();
         let stages = stages.clone();
+        let range = range.clone();
         let live = live.clone();
         move |area, cr, width, _| {
             draw(
                 area,
                 cr,
                 width,
-                thresholds.get(),
-                keep_partial.get(),
-                stages.get(),
-                live.get(),
+                Drawing {
+                    thresholds: thresholds.get(),
+                    keep_partial: keep_partial.get(),
+                    stages: stages.get(),
+                    range: range.get(),
+                    live: live.get(),
+                },
             )
         }
     });
@@ -103,6 +116,7 @@ pub fn add(
     controller_input::watch_status(&area, "trigger_travel=", Duration::from_millis(33), {
         let thresholds = thresholds.clone();
         let stages = stages.clone();
+        let range = range.clone();
         let chart = area.downgrade();
         let armed = armed.clone();
         move |result| {
@@ -110,10 +124,10 @@ pub fn add(
                 return;
             };
             let now = Instant::now();
-            let active = is_active(&area);
+            let active = is_active(&area) && stages.get().contains(&true);
             let was_active = armed.replace(active);
             if active && (!was_active || now >= refresh_at.get()) {
-                send(side, thresholds.get(), stages.get());
+                send(side, thresholds.get(), stages.get(), range.get());
                 refresh_at.set(now + Duration::from_millis(500));
             } else if was_active && !active {
                 stop();
@@ -143,10 +157,10 @@ pub fn add(
     });
     Chart {
         area,
-        panel,
         thresholds,
         keep_partial,
         stages,
+        range,
         side,
     }
 }
@@ -167,8 +181,13 @@ fn send(
     side: u8,
     [partial, partial_release, full, full_release]: [u8; 4],
     [lower, upper]: [bool; 2],
+    (limit, relative): (u8, bool),
 ) {
     let stage_mask = u8::from(lower) | (u8::from(upper) << 1);
+    if stage_mask == 0 {
+        stop();
+        return;
+    }
     let _ = triggers::send_preview_message(
         PREVIEW_MESSAGE,
         &[
@@ -178,6 +197,7 @@ fn send(
             full,
             full_release,
             stage_mask,
+            if relative { limit } else { 100 },
         ],
     );
 }
@@ -188,14 +208,25 @@ fn read_travel(value: &str, side: u8) -> Option<f64> {
     (0.0..=1.0).contains(&travel).then_some(travel)
 }
 
+struct Drawing {
+    thresholds: [u8; 4],
+    keep_partial: bool,
+    stages: [bool; 2],
+    range: (u8, bool),
+    live: Option<f64>,
+}
+
 fn draw(
     area: &gtk::DrawingArea,
     cr: &gtk::cairo::Context,
     width: i32,
-    [partial, partial_release, full, full_release]: [u8; 4],
-    keep_partial: bool,
-    stages: [bool; 2],
-    live: Option<f64>,
+    Drawing {
+        thresholds: [partial, partial_release, full, full_release],
+        keep_partial,
+        stages,
+        range: (limit, relative),
+        live,
+    }: Drawing,
 ) {
     let left = 57.0;
     let end = (f64::from(width) - 10.0).max(left + 1.0);
@@ -218,7 +249,22 @@ fn draw(
 
     cr.set_font_size(11.0);
     let partial_end = if keep_partial { 100 } else { full };
-    let mut top = 12.0;
+    let cap = x(f64::from(limit) / 100.0);
+    let scale = f64::from(if relative { limit } else { 100 }) / 100.0;
+    color(foreground, 0.1);
+    cr.rectangle(left, 12.0, end - left, 18.0);
+    let _ = cr.fill();
+    color(accent, 0.48);
+    cr.rectangle(left, 12.0, cap - left, 18.0);
+    let _ = cr.fill();
+    color(accent, 1.0);
+    cr.set_line_width(1.5);
+    cr.move_to(cap, 9.0);
+    cr.line_to(cap, 33.0);
+    let _ = cr.stroke();
+    color(foreground, 0.9);
+    text("Travel", 0.0, 25.0);
+    let mut top = 40.0;
     for ((label, pull, release, active_end), _) in [
         ("Partial", partial, partial_release, partial_end),
         ("Full", full, full_release, 100),
@@ -227,9 +273,9 @@ fn draw(
     .zip(stages)
     .filter(|(_, visible)| *visible)
     {
-        let pull = x(f64::from(pull) / 100.0);
-        let release = x(f64::from(release) / 100.0);
-        let active_end = x(f64::from(active_end) / 100.0);
+        let pull = x(f64::from(pull) / 100.0 * scale);
+        let release = x(f64::from(release) / 100.0 * scale);
+        let active_end = x(f64::from(active_end) / 100.0 * scale);
         color(foreground, 0.1);
         cr.rectangle(left, top, end - left, 18.0);
         let _ = cr.fill();

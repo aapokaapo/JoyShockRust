@@ -364,6 +364,10 @@ impl Settings {
         grid: Option<&Grid>,
         triggers: [crate::gamepad::TriggerStages; 2],
     ) -> Result<Config, String> {
+        let scaled = |gate: TriggerGate| {
+            let index = usize::from(gate.side() == super::gyro_gate::TriggerSide::Right);
+            gate.within_travel(triggers[index].travel_percent)
+        };
         let mut gamepad_mask = GamepadMask::default();
         for name in self.button_output.keys() {
             match Source::parse(name, grid)? {
@@ -400,12 +404,12 @@ impl Settings {
                         source
                     } else if let Some((lower, upper)) = TriggerGate::partial(&spec)? {
                         BindingSource::PartialTrigger {
-                            lower,
-                            upper,
+                            lower: scaled(lower),
+                            upper: scaled(upper),
                             keep_partial: self.keep_partial.for_side(lower.side()),
                         }
                     } else {
-                        BindingSource::Single(Source::trigger(&spec)?)
+                        BindingSource::Single(Source::Trigger(scaled(TriggerGate::parse(&spec)?)))
                     };
                     (source, spec)
                 }
@@ -2063,6 +2067,47 @@ mod tests {
             assert_eq!(
                 [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
                 expected,
+            );
+        }
+    }
+
+    #[test]
+    fn trigger_travel_limit_scales_named_keyboard_and_mouse_stages() {
+        let config = config(
+            r#"
+            [triggers.l2]
+            travel_limit_percent = 60
+            thresholds = [30, 20, 80, 70]
+            [[keyboard.bindings]]
+            trigger = "l2:partial"
+            hold = "KEY_Q"
+            [[keyboard.bindings]]
+            trigger = "l2:full"
+            hold = "BTN_LEFT"
+            "#,
+        );
+        let mut state = State::new(&config);
+        for (travel, expected) in [
+            (0.19, [true, false]),
+            (0.47, [true, false]),
+            (0.49, [false, true]),
+            (0.43, [false, true]),
+            (0.41, [true, false]),
+            (0.11, [false, false]),
+        ] {
+            state
+                .update(
+                    input(Controls {
+                        left_trigger: travel,
+                        ..Default::default()
+                    }),
+                    Instant::now(),
+                    |_| Ok(()),
+                )
+                .unwrap();
+            assert_eq!(
+                [KeyCode::KEY_Q, KeyCode::BTN_LEFT].map(|key| state.held.contains(key)),
+                expected
             );
         }
     }

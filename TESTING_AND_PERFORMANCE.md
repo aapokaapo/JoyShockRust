@@ -964,15 +964,15 @@ at full pull** for L2 and save. Verify Q stays held when E engages, then
 ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
 
-On the Buttons tab, select an unbound L2 and assign a partial action.
-Confirm that its thresholds and live band appear immediately. Assign a
-full action and confirm the second band appears. Clear either action
-and check that only its controls disappear. In **Virtual gamepad** mode,
-set **Travel for full analog output (%)** to 60 and verify that the
-virtual L2 axis reaches 100% at 60% physical travel. Toggle **Keep partial action at
-full pull** and confirm the Partial band stays colored to 100% only when
-the switch is on. With L2 selected in the focused editor, slowly pull
-and release L2.
+On the Buttons tab, select L2 and choose **Same as controller** for
+Full Pull. Verify that only the travel limit is editable and that a
+limit of 60 produces 100% virtual L2 at 60% physical travel. Select a
+non-trigger Full Pull target, then assign Partial Pull. Verify that a
+Full Pull setting of 80 activates at 48% physical travel. Check the
+same relative threshold with a keyboard key and a mouse button. Toggle
+**Keep partial action at full pull** and confirm the Partial band stays
+colored through the travel limit only when the switch is on. With L2
+selected in the focused editor, slowly pull and release L2.
 Check that the marker follows the pull and that a short haptic tick
 plays at each solid line on the way down and at each dashed line on the
 way back. Hold the trigger between a stage's two lines and check that
