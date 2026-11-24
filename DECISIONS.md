@@ -563,6 +563,10 @@ Desktop polling and command execution stay outside the input process.
 [XDG Autostart](https://specifications.freedesktop.org/autostart-spec/latest/)
 · [StatusNotifierItem](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/)
 
+2026-11-24. The desktop launcher uses the editor's bundled DualSense SVG.
+The user installation places it in the `hicolor` fallback theme.
+[Icon Theme Specification](https://specifications.freedesktop.org/icon-theme-spec/latest/)
+
 For tray RWC calibration, the bridge ends its active output session
 before acknowledging the pause and keeps serving control requests.
 Discovery resumes with the existing profile and controller filter.

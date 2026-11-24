@@ -310,6 +310,7 @@ overlays up to two live contacts on the draft zone grid inside a crop
 of the same DualSense SVG shown in Buttons. Changing the rows or columns
 updates the draft grid and preview together.
 
+The application launcher uses the same DualSense SVG as the editor.
 The tray launches a native profile editor. The editor creates, validates,
 saves and applies TOML profiles. Its visual controller layout selects
 physical controls and selects an exclusive keyboard, mouse or gamepad

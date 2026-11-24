@@ -758,6 +758,7 @@ mappings.
   install -Dm644 dist/systemd/joyshockrust.service "$config_dir/systemd/user/joyshockrust.service"
   install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
   install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+  install -Dm644 crates/joyshockrust-editor/assets/dualsense.svg "$data_dir/icons/hicolor/scalable/apps/io.github.aapokaapo.JoyShockRust.svg"
   systemctl --user daemon-reload
   systemctl --user restart joyshockrust.service joyshockrust-tray.service
 )
@@ -815,6 +816,7 @@ unit and desktop launcher.
   cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-editor
   install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
   install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+  install -Dm644 crates/joyshockrust-editor/assets/dualsense.svg "$data_dir/icons/hicolor/scalable/apps/io.github.aapokaapo.JoyShockRust.svg"
   systemctl --user daemon-reload
   systemctl --user restart joyshockrust-tray.service
 )
@@ -1090,7 +1092,8 @@ you used during installation.
      "$config_dir/systemd/user/joyshockrust.service" \
      "$config_dir/systemd/user/joyshockrust-tray.service" \
      "$config_dir/autostart/io.github.aapokaapo.JoyShockRust.desktop" \
-     "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
+     "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop" \
+     "$data_dir/icons/hicolor/scalable/apps/io.github.aapokaapo.JoyShockRust.svg"
    systemctl --user daemon-reload
    ```
 
