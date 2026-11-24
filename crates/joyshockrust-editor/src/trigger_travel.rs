@@ -6,7 +6,7 @@ use std::{
 
 use adw::{gtk, prelude::*};
 
-use crate::{controller_input, triggers};
+use crate::{controller_input, response_plot, triggers};
 
 const PREVIEW_MESSAGE: &[u8] = b"\0preview-trigger-travel\n";
 
@@ -101,7 +101,7 @@ pub fn add(
     });
     panel.append(&area);
     let legend = gtk::Label::new(Some(
-        "Solid · Pull    Dashed · Release    Marker · Live travel",
+        "Gray · Physical    Blue · Scaled    Solid · Pull    Dashed · Release",
     ));
     legend.set_wrap(true);
     legend.add_css_class("caption");
@@ -124,7 +124,7 @@ pub fn add(
                 return;
             };
             let now = Instant::now();
-            let active = is_active(&area) && stages.get().contains(&true);
+            let active = is_active(&area);
             let was_active = armed.replace(active);
             if active && (!was_active || now >= refresh_at.get()) {
                 send(side, thresholds.get(), stages.get(), range.get());
@@ -142,7 +142,11 @@ pub fn add(
                 area.queue_draw();
             }
             if let Some(travel) = travel {
-                status.set_text(&format!("Live travel: {:.1}%", travel * 100.0));
+                status.set_text(&format!(
+                    "Physical: {:.1}%    Scaled: {:.1}%",
+                    travel * 100.0,
+                    scaled_travel(travel, range.get().0) * 100.0,
+                ));
             } else if unavailable {
                 status.set_text("Bridge status is unavailable");
             } else {
@@ -184,10 +188,6 @@ fn send(
     (limit, relative): (u8, bool),
 ) {
     let stage_mask = u8::from(lower) | (u8::from(upper) << 1);
-    if stage_mask == 0 {
-        stop();
-        return;
-    }
     let _ = triggers::send_preview_message(
         PREVIEW_MESSAGE,
         &[
@@ -198,6 +198,7 @@ fn send(
             full_release,
             stage_mask,
             if relative { limit } else { 100 },
+            limit,
         ],
     );
 }
@@ -206,6 +207,10 @@ fn read_travel(value: &str, side: u8) -> Option<f64> {
     let (left, right) = value.split_once(',')?;
     let travel = if side == 0 { left } else { right }.parse::<f64>().ok()?;
     (0.0..=1.0).contains(&travel).then_some(travel)
+}
+
+fn scaled_travel(travel: f64, limit: u8) -> f64 {
+    (travel / (f64::from(limit) / 100.0)).min(1.0)
 }
 
 struct Drawing {
@@ -315,14 +320,22 @@ fn draw(
         cr.move_to(marker, 10.0);
         cr.line_to(marker, top - 6.0);
         let _ = cr.stroke();
-        cr.arc(marker, 7.0, 3.0, 0.0, std::f64::consts::TAU);
-        let _ = cr.fill();
+        response_plot::draw_markers(cr, [(marker, 7.0), (x(scaled_travel(live, limit)), 7.0)]);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::read_travel;
+    use super::{read_travel, scaled_travel};
+
+    #[test]
+    fn scaled_marker_reaches_one_at_the_limit_and_stays_there() {
+        assert_eq!(scaled_travel(0.0, 60), 0.0);
+        assert_eq!(scaled_travel(0.3, 60), 0.5);
+        assert_eq!(scaled_travel(0.6, 60), 1.0);
+        assert_eq!(scaled_travel(0.9, 60), 1.0);
+        assert_eq!(scaled_travel(0.3, 100), 0.3);
+    }
 
     #[test]
     fn live_travel_selects_the_correct_side_and_rejects_invalid_values() {

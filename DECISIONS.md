@@ -96,12 +96,16 @@ Partial band shows suppression from the Full Pull threshold when stage
 overlap is disabled. The focused editor sends the selected trigger's draft
 thresholds through the control socket and refreshes them while the
 chart is mapped. The bridge applies the existing hysteresis at report
-cadence and queues a detent only on a stage transition. The preview
+cadence and queues a detent on a stage transition or when the selected
+trigger reaches its travel limit. The limit cue rearms one percentage
+point below the limit. The preview
 expires when the editor stops refreshing it. It uses the controller
 haptics worker with USB PCM and evdev rumble fallback.
 
 2026-11-24. Full Pull selects an analog trigger or a digital output in
 the editor. An analog selection uses the travel limit for saturation.
+The chart draws the same scaling as a blue live marker alongside the
+physical position.
 Digital stage thresholds and preview gates use percentages of the
 configured travel. The chart plots the range and stage bands on one
 physical axis. The profile retains prior routing and threshold

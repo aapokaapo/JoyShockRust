@@ -895,14 +895,16 @@ maximum at 60% physical travel and an 80% digital Full Pull engages at
 partial action at full pull** lets both digital actions stay active.
 Custom trigger gestures from older profiles can still be edited in **Advanced**.
 
-The **Trigger travel** chart shows the configured travel range, the live
-position of the selected L2 or R2 and a band for each assigned digital
-stage. Solid lines mark engagement,
+The **Trigger travel** chart shows the configured range and the selected
+trigger's live physical position in gray. The blue marker shows the
+scaled travel, reaching 100% at the configured limit. A band for each
+assigned digital stage shows its thresholds. Solid lines mark engagement,
 dashed lines mark release, and the lighter band shows the gap between
 them. The Partial band turns gray from the Full Pull threshold when
 **Keep partial action at full pull** is off. While the editor is focused,
 entering or leaving either stage plays a short haptic tick on the
-controller. Valid threshold edits take effect in this preview immediately.
+controller. Reaching the travel limit also plays a tick, including with
+analog output. Valid threshold edits take effect in this preview immediately.
 
 Under **Adaptive trigger**, choose **Resistance** and set the start zone
 and strength for the selected trigger, or choose **Off**. The editor

@@ -966,7 +966,11 @@ still switches stages with its default setting.
 
 On the Buttons tab, select L2 and choose **Same as controller** for
 Full Pull. Verify that only the travel limit is editable and that a
-limit of 60 produces 100% virtual L2 at 60% physical travel. Select a
+limit of 60 produces 100% virtual L2 at 60% physical travel. Confirm
+the gray marker shows 30% and the blue marker shows 50% at 30% travel.
+Hold at or above the limit and check that the haptic tick plays once.
+Release below 59% and pull back to the limit to check that it plays again.
+Select a
 non-trigger Full Pull target, then assign Partial Pull. Verify that a
 Full Pull setting of 80 activates at 48% physical travel. Check the
 same relative threshold with a keyboard key and a mouse button. Toggle

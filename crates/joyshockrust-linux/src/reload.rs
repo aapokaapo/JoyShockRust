@@ -1032,6 +1032,10 @@ mod tests {
             Some(Update::TriggerTravel(Some(_)))
         ));
         assert!(matches!(
+            read(b"\0preview-trigger-travel\n\x01\x2d\x23\x5f\x55\x00\x64\x3c"),
+            Some(Update::TriggerTravel(Some(_)))
+        ));
+        assert!(matches!(
             read(b"\0preview-trigger-travel\n"),
             Some(Update::TriggerTravel(None))
         ));

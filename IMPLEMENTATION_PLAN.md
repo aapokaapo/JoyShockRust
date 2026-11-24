@@ -318,8 +318,9 @@ output per physical button or D-pad direction in the inspector. The
 D-pad can also be a virtual gamepad target. Touchpad regions use the
 Touchpad tab. L2 and R2 route Full Pull to an analog axis or a digital
 action. The digital route exposes Partial Pull. The live chart shows
-the configurable travel range and stage thresholds in gamepad, keyboard
-and mouse modes. Haptic previews and optional physical resistance are
+the configurable travel range, physical and scaled positions, and
+stage thresholds in gamepad, keyboard and mouse modes. Haptic previews
+cover the travel limit and the assigned stages. Optional physical resistance is
 available in the editor. The
 standalone adaptive trigger test can isolate each side on
 USB or Bluetooth. The user verified resistance on both models after
