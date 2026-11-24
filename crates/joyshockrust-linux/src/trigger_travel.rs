@@ -7,7 +7,7 @@ use crate::gyro_gate::{TriggerGate, TriggerSide};
 #[derive(Clone, Copy)]
 pub struct Settings {
     side: TriggerSide,
-    gates: [TriggerGate; 2],
+    gates: [Option<TriggerGate>; 2],
 }
 
 impl Settings {
@@ -15,8 +15,21 @@ impl Settings {
         if payload.is_empty() {
             return Some(None);
         }
-        let &[side @ 0..=1, partial, partial_release, full, full_release] = payload else {
+        let &[
+            side @ 0..=1,
+            partial,
+            partial_release,
+            full,
+            full_release,
+            ref rest @ ..,
+        ] = payload
+        else {
             return None;
+        };
+        let mask = match rest {
+            [] => 3,
+            &[mask @ 1..=3] => mask,
+            _ => return None,
         };
         validate_trigger_thresholds([partial, partial_release, full, full_release]).ok()?;
         let side = if side == 0 {
@@ -27,8 +40,8 @@ impl Settings {
         Some(Some(Self {
             side,
             gates: [
-                TriggerGate::from_percent(side, partial, partial_release),
-                TriggerGate::from_percent(side, full, full_release),
+                (mask & 1 != 0).then(|| TriggerGate::from_percent(side, partial, partial_release)),
+                (mask & 2 != 0).then(|| TriggerGate::from_percent(side, full, full_release)),
             ],
         }))
     }
@@ -46,7 +59,12 @@ impl Preview {
         *current = settings.map(|settings| {
             let stages = current
                 .as_ref()
-                .filter(|old| old.expires > now && old.settings.side == settings.side)
+                .filter(|old| {
+                    old.expires > now
+                        && old.settings.side == settings.side
+                        && old.settings.gates.map(|gate| gate.is_some())
+                            == settings.gates.map(|gate| gate.is_some())
+                })
                 .and_then(|old| old.stages);
             Self {
                 settings,
@@ -58,7 +76,9 @@ impl Preview {
 
     pub fn crossed(&mut self, controls: &Controls) -> bool {
         let previous = self.stages.unwrap_or_default();
-        let next = std::array::from_fn(|i| self.settings.gates[i].pressed(controls, previous[i]));
+        let next = std::array::from_fn(|i| {
+            self.settings.gates[i].is_some_and(|gate| gate.pressed(controls, previous[i]))
+        });
         self.stages.replace(next).is_some_and(|old| old != next) && Instant::now() < self.expires
     }
 }
@@ -66,6 +86,26 @@ impl Preview {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unassigned_stage_does_not_generate_a_preview_cue() {
+        let mut preview = None;
+        Preview::refresh(
+            &mut preview,
+            Settings::parse(&[0, 45, 35, 95, 85, 1]).unwrap(),
+        );
+        let preview = preview.as_mut().unwrap();
+        let mut controls = Controls::default();
+        assert!(!preview.crossed(&controls));
+        controls.left_trigger = 0.5;
+        assert!(preview.crossed(&controls));
+        controls.left_trigger = 1.0;
+        assert!(!preview.crossed(&controls));
+        controls.left_trigger = 0.85;
+        assert!(!preview.crossed(&controls));
+        controls.left_trigger = 0.35;
+        assert!(preview.crossed(&controls));
+    }
 
     #[test]
     fn preview_cues_each_stage_with_hysteresis_and_tracks_live_edits() {

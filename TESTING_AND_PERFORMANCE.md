@@ -964,8 +964,12 @@ at full pull** for L2 and save. Verify Q stays held when E engages, then
 ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
 
-On the Buttons tab, select L2 from a different control and confirm live
-travel appears without switching tabs. Toggle **Keep partial action at
+On the Buttons tab, select an unbound L2 and assign a partial action.
+Confirm that its thresholds and live band appear immediately. Assign a
+full action and confirm the second band appears. Clear either action
+and check that only its controls disappear. In **Virtual gamepad** mode,
+set **Travel for full analog output (%)** to 60 and verify that the
+virtual L2 axis reaches 100% at 60% physical travel. Toggle **Keep partial action at
 full pull** and confirm the Partial band stays colored to 100% only when
 the switch is on. With L2 selected in the focused editor, slowly pull
 and release L2.

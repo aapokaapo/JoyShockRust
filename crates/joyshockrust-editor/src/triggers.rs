@@ -1,7 +1,9 @@
 use std::{
+    cell::Cell,
     io,
     os::unix::net::UnixDatagram,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use adw::{gtk, prelude::*};
@@ -128,7 +130,6 @@ pub fn append(
     let values = settings(doc, side);
     let group = adw::PreferencesGroup::builder()
         .title("Trigger travel")
-        .description("Set where each stage engages and releases, as a percentage of travel.")
         .build();
     inspector.append(&group);
     let (values, initial) = match values.and_then(|table| Ok((table, thresholds(table)?))) {
@@ -138,11 +139,16 @@ pub fn append(
             return;
         }
     };
+    if mode == OutputMode::Gamepad {
+        add_analog(&group, ctx, side, values);
+    }
     let overlap = values
         .and_then(|table| table.get("keep_partial"))
         .and_then(Item::as_bool)
         .unwrap_or_else(|| legacy_overlap(doc, side));
     let travel = trigger_travel::add(&group, side, initial, overlap);
+    let stages = Rc::new(Cell::new([false; 2]));
+    group.set_visible(mode == OutputMode::Gamepad);
 
     let rows = [
         "Partial pull (%)",
@@ -153,6 +159,7 @@ pub fn append(
     .map(|title| spin(title, 0, 100, 0));
     for (row, initial) in rows.iter().zip(initial) {
         row.set_value(f64::from(initial));
+        row.set_visible(false);
         group.add(row);
     }
     let error = gtk::Label::builder()
@@ -165,6 +172,7 @@ pub fn append(
     let weak = rows.each_ref().map(|row| row.downgrade());
     let edit = ctx.clone();
     let thresholds_chart = travel.clone();
+    let threshold_error = error.clone();
     let update = move |_: &adw::SpinRow| {
         let [Some(a), Some(b), Some(c), Some(d)] = weak.each_ref().map(|row| row.upgrade()) else {
             return;
@@ -177,33 +185,49 @@ pub fn append(
             settings_mut(doc, side)?.insert("thresholds", value(thresholds));
             Ok(())
         });
-        error.set_visible(result.is_err());
+        threshold_error.set_visible(result.is_err());
         if let Err(message) = result {
-            error.set_text(&message);
+            threshold_error.set_text(&message);
         } else {
             thresholds_chart.set_thresholds(proposed);
         }
     };
-    for row in rows {
+    for row in &rows {
         row.connect_value_notify(update.clone());
     }
 
     let keep = adw::SwitchRow::builder()
         .title("Keep partial action at full pull")
         .active(overlap)
+        .visible(false)
         .build();
     let edit = ctx.clone();
+    let overlap_chart = travel.clone();
     keep.connect_active_notify(move |row| {
         if edit.edit(|doc| {
             migrate_stages(doc, side)?;
             settings_mut(doc, side)?.insert("keep_partial", value(row.is_active()));
             Ok(())
         }) {
-            travel.set_keep_partial(row.is_active());
+            overlap_chart.set_keep_partial(row.is_active());
         }
     });
     group.add(&keep);
-    for (title, stage, field, legacy) in STAGES {
+    let update_stage = move |index: usize, assigned: bool| {
+        let mut shown = stages.get();
+        shown[index] = assigned;
+        stages.set(shown);
+        for row in &rows[index * 2..index * 2 + 2] {
+            row.set_visible(assigned);
+        }
+        keep.set_visible(shown == [true; 2]);
+        group.set_visible(mode == OutputMode::Gamepad || shown.contains(&true));
+        if !shown.contains(&true) {
+            error.set_visible(false);
+        }
+        travel.set_stages(shown);
+    };
+    for (index, (title, stage, field, legacy)) in STAGES.into_iter().enumerate() {
         let stage_group = adw::PreferencesGroup::builder().title(title).build();
         inspector.append(&stage_group);
         if mode == OutputMode::Gamepad {
@@ -211,6 +235,8 @@ pub fn append(
                 .and_then(|table| table.get(field))
                 .and_then(Item::as_str);
             let edit = ctx.clone();
+            update_stage(index, current.is_some());
+            let update_stage = update_stage.clone();
             stage_group.add(&controller::dropdown(
                 "Output button",
                 current,
@@ -219,7 +245,7 @@ pub fn append(
                     .into_iter()
                     .map(|(key, label)| (key.into(), label.into())),
                 move |action| {
-                    edit.edit(|doc| {
+                    if edit.edit(|doc| {
                         let stage = settings_mut(doc, side)?;
                         if let Some(action) = action {
                             stage.insert(field, value(action));
@@ -227,7 +253,9 @@ pub fn append(
                             stage.remove(field);
                         }
                         Ok(())
-                    });
+                    }) {
+                        update_stage(index, action.is_some());
+                    }
                 },
             ));
         } else {
@@ -239,6 +267,10 @@ pub fn append(
                     bindings::binding(doc, BindingInput::Trigger(&format!("{side}:{legacy}")))
                 }
             });
+            update_stage(
+                index,
+                action.as_ref().is_ok_and(|binding| binding.is_some()),
+            );
             let current = match action {
                 Ok(binding)
                     if !binding.is_some_and(|table| {
@@ -262,11 +294,14 @@ pub fn append(
                 }
             };
             let edit = ctx.clone();
+            let update_stage = update_stage.clone();
             let changed = move |action: Option<&str>| {
-                edit.edit(|doc| {
+                if edit.edit(|doc| {
                     migrate_stages(doc, side)?;
                     bindings::set_action(doc, BindingInput::Trigger(&spec), Gesture::Hold, action)
-                });
+                }) {
+                    update_stage(index, action.is_some());
+                }
             };
             if mode == OutputMode::Mouse {
                 stage_group.add(&controller::mouse_action_row("Action", current, changed));
@@ -286,12 +321,45 @@ pub fn append(
         .is_some()
         || bindings::gamepad_target(doc, side).ok().flatten().is_some()
     {
-        group.add(&controller::message_row(
+        inspector.append(&controller::message_row(
             "Existing digital trigger binding",
             ADVANCED,
         ));
     }
     add_adaptive(inspector, ctx, side, values);
+}
+
+fn add_analog(
+    group: &adw::PreferencesGroup,
+    ctx: &Context,
+    side: &'static str,
+    settings: Option<&dyn TableLike>,
+) {
+    group.add(&controller::message_row(
+        "Analog output",
+        "Same as controller",
+    ));
+    let full = settings
+        .and_then(|table| table.get("full_travel_percent"))
+        .and_then(Item::as_integer)
+        .and_then(|value| u8::try_from(value).ok())
+        .unwrap_or(100);
+    let row = spin("Travel for full analog output (%)", 1, 100, full);
+    row.set_subtitle("Physical travel needed for maximum virtual trigger output.");
+    let edit = ctx.clone();
+    row.connect_value_notify(move |row| {
+        edit.edit(|doc| {
+            let settings = settings_mut(doc, side)?;
+            let value = row.value() as i64;
+            if value == 100 {
+                settings.remove("full_travel_percent");
+            } else {
+                settings.insert("full_travel_percent", toml_edit::value(value));
+            }
+            Ok(())
+        });
+    });
+    group.add(&row);
 }
 
 fn spin(title: &str, min: u8, max: u8, initial: u8) -> adw::SpinRow {

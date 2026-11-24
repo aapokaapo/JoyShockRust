@@ -1408,6 +1408,14 @@ fn map_gamepad_controls(
         });
     let trigger_buttons =
         layer_state.trigger_outputs(&controls, runtime.trigger_stages, &mut suppressed);
+    for (axis, full) in [&mut controls.left_trigger, &mut controls.right_trigger]
+        .into_iter()
+        .zip(runtime.trigger_full_travel)
+    {
+        if let Some(full) = full {
+            *axis = (*axis / (f32::from(full) / 100.0)).min(1.0);
+        }
+    }
     runtime.remaps.apply_filtered(
         controls,
         layer_state,
@@ -1874,6 +1882,47 @@ keep_partial = true
             assert!(!mapped.buttons.contains(Button::RightTrigger));
             assert_eq!(mapped.right_trigger, report.controls.right_trigger);
             assert_eq!(mapped.dpad, hat);
+        }
+    }
+
+    #[test]
+    fn virtual_trigger_travel_saturates_at_the_configured_physical_travel() {
+        let runtime = super::profile::parse(
+            "version = 1\n[triggers.l2]\nfull_travel_percent = 60\nfull_button = 'cross'\n",
+        )
+        .unwrap();
+        for invalid in [0, 101] {
+            assert!(
+                super::profile::parse(&format!(
+                    "version = 1\n[triggers.l2]\nfull_travel_percent = {invalid}\n"
+                ))
+                .is_err()
+            );
+        }
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        frame[8] = 8;
+        frame[6] = 102;
+        let mut layers = super::gamepad::RemapState::default();
+        let mut click = super::touchpad::ClickState::default();
+        for (left, expected, action) in [
+            (0, 0.0, false),
+            (102, 2.0 / 3.0, false),
+            (153, 1.0, false),
+            (255, 1.0, true),
+        ] {
+            frame[5] = left;
+            let report =
+                joyshockrust_input::parse_report(USB_EDGE.model, USB_EDGE.transport, &frame, None)
+                    .unwrap();
+            let mapped =
+                super::map_gamepad_controls(&runtime, None, &report, &mut layers, &mut click);
+            assert!((mapped.left_trigger - expected).abs() < 0.0001);
+            assert_eq!(mapped.right_trigger, report.controls.right_trigger);
+            assert_eq!(
+                mapped.buttons.contains(joyshockrust_core::Button::South),
+                action
+            );
         }
     }
 

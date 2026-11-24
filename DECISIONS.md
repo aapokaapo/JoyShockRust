@@ -100,6 +100,12 @@ cadence and queues a detent only on a stage transition. The preview
 expires when the editor stops refreshing it. It uses the controller
 haptics worker with USB PCM and evdev rumble fallback.
 
+2026-11-24. Stage controls, chart bands and preview cues follow action
+assignments. The profile retains stage thresholds when an action is
+cleared. Virtual gamepad mode passes through each analog trigger. Its
+optional full-travel setting scales the virtual axis after physical
+stage detection.
+
 ## Optional desktop device access
 
 Reviewed 2026-11-24. Ship separate hidraw and uinput fallback rules for

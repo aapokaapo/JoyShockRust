@@ -1109,19 +1109,7 @@ pub(crate) mod tests {
                 .into_iter()
                 .find(|area| area.widget_name() == "trigger-travel-chart")
                 .unwrap();
-            assert!(chart.is_mapped());
-            let started = Rc::new(Cell::new(false));
-            crate::controller_input::watch_status(
-                &chart,
-                "trigger_travel=",
-                std::time::Duration::from_millis(33),
-                {
-                    let started = started.clone();
-                    move |_| started.set(true)
-                },
-            );
-            while context.iteration(false) {}
-            assert!(started.get(), "{side} chart should start without remapping");
+            assert!(!chart.is_mapped(), "{side} has no bound stages");
         }
         let bounds = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
             .into_iter()
@@ -1175,7 +1163,22 @@ pub(crate) mod tests {
                 .find(|row| row.title() == "Output type")
                 .unwrap()
         };
+        let spin = |title: &str| {
+            descendants::<adw::SpinRow>(&page)
+                .into_iter()
+                .find(|row| row.title() == title)
+                .unwrap()
+        };
+        let analog = spin("Travel for full analog output (%)");
+        assert_eq!(analog.value(), 100.0);
+        analog.set_value(70.0);
+        assert_eq!(
+            ctx.document().unwrap()["triggers"]["l2"]["full_travel_percent"].as_integer(),
+            Some(70)
+        );
         select(&output_type(&page), "Keyboard");
+        assert!(!spin("Partial pull (%)").is_visible());
+        assert!(!spin("Full pull (%)").is_visible());
         assert!(
             !descendants::<adw::ActionRow>(&page)
                 .iter()
@@ -1189,6 +1192,15 @@ pub(crate) mod tests {
             let group = groups.iter().find(|group| group.title() == stage).unwrap();
             let row = key_row(group.upcast_ref(), "Action");
             press_capture_key(&row, keyval, code);
+            assert!(spin(&format!("{stage} (%)")).is_visible());
+            if stage == "Partial pull" {
+                assert!(!spin("Full pull (%)").is_visible());
+            }
+            let chart = descendants::<gtk::DrawingArea>(&page)
+                .into_iter()
+                .find(|area| area.widget_name() == "trigger-travel-chart")
+                .unwrap();
+            assert!(chart.is_mapped());
             let saved = ctx.document().unwrap().to_string();
             press_capture_key(&row, gtk::gdk::Key::Escape, evdev::KeyCode::KEY_ESC);
             assert_eq!(ctx.document().unwrap().to_string(), saved);
@@ -1216,12 +1228,6 @@ pub(crate) mod tests {
         }
         assert_eq!(button.label().as_deref(), Some("Bind key…"));
         assert_eq!(ctx.document().unwrap().to_string(), saved);
-        let spin = |title: &str| {
-            descendants::<adw::SpinRow>(&page)
-                .into_iter()
-                .find(|row| row.title() == title)
-                .unwrap()
-        };
         spin("Partial pull (%)").set_value(40.0);
         spin("Full pull (%)").set_value(90.0);
         let effect = descendants::<adw::ComboRow>(&page)
@@ -1246,7 +1252,14 @@ pub(crate) mod tests {
         l2.set_active(true);
         ctx.editor.borrow_mut().selected = "r2";
         let r2_page = controller::page(&ctx);
-        select(&output_type(&r2_page), "Keyboard");
+        let targets = descendants::<adw::ComboRow>(&r2_page)
+            .into_iter()
+            .filter(|row| row.title() == "Output button")
+            .collect::<Vec<_>>();
+        assert_eq!(targets.len(), 2);
+        for row in targets {
+            select(&row, "South · A / Cross");
+        }
         let r2 = keep_partial(&r2_page);
         assert!(!r2.is_active());
         r2.set_active(true);
@@ -1305,6 +1318,7 @@ pub(crate) mod tests {
         assert!(unbind.is_sensitive());
         unbind.emit_clicked();
         assert!(!unbind.is_sensitive());
+        assert!(!spin("Partial pull (%)").is_visible());
         assert!(
             crate::bindings::binding(
                 &ctx.document().unwrap(),

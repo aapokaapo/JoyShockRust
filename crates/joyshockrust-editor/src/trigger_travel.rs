@@ -13,8 +13,10 @@ const PREVIEW_MESSAGE: &[u8] = b"\0preview-trigger-travel\n";
 #[derive(Clone)]
 pub struct Chart {
     area: gtk::DrawingArea,
+    panel: gtk::Box,
     thresholds: Rc<Cell<[u8; 4]>>,
     keep_partial: Rc<Cell<bool>>,
+    stages: Rc<Cell<[bool; 2]>>,
     side: u8,
 }
 
@@ -23,13 +25,24 @@ impl Chart {
         self.thresholds.set(thresholds);
         self.area.queue_draw();
         if is_active(&self.area) {
-            send(self.side, thresholds);
+            send(self.side, thresholds, self.stages.get());
         }
     }
 
     pub fn set_keep_partial(&self, keep: bool) {
         self.keep_partial.set(keep);
         self.area.queue_draw();
+    }
+
+    pub fn set_stages(&self, stages: [bool; 2]) {
+        self.stages.set(stages);
+        self.panel.set_visible(stages.contains(&true));
+        self.area
+            .set_content_height(if stages == [true; 2] { 86 } else { 58 });
+        self.area.queue_draw();
+        if is_active(&self.area) {
+            send(self.side, self.thresholds.get(), stages);
+        }
     }
 }
 
@@ -42,10 +55,12 @@ pub fn add(
     let side = u8::from(side == "r2");
     let thresholds = Rc::new(Cell::new(initial));
     let keep_partial = Rc::new(Cell::new(keep_partial));
+    let stages = Rc::new(Cell::new([false; 2]));
     let live = Rc::new(Cell::new(None));
     let panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(4)
+        .visible(false)
         .build();
     panel.set_margin_top(8);
     panel.set_margin_bottom(12);
@@ -57,6 +72,7 @@ pub fn add(
     area.set_draw_func({
         let thresholds = thresholds.clone();
         let keep_partial = keep_partial.clone();
+        let stages = stages.clone();
         let live = live.clone();
         move |area, cr, width, _| {
             draw(
@@ -65,6 +81,7 @@ pub fn add(
                 width,
                 thresholds.get(),
                 keep_partial.get(),
+                stages.get(),
                 live.get(),
             )
         }
@@ -85,6 +102,7 @@ pub fn add(
     let refresh_at = Cell::new(Instant::now());
     controller_input::watch_status(&area, "trigger_travel=", Duration::from_millis(33), {
         let thresholds = thresholds.clone();
+        let stages = stages.clone();
         let chart = area.downgrade();
         let armed = armed.clone();
         move |result| {
@@ -95,7 +113,7 @@ pub fn add(
             let active = is_active(&area);
             let was_active = armed.replace(active);
             if active && (!was_active || now >= refresh_at.get()) {
-                send(side, thresholds.get());
+                send(side, thresholds.get(), stages.get());
                 refresh_at.set(now + Duration::from_millis(500));
             } else if was_active && !active {
                 stop();
@@ -125,8 +143,10 @@ pub fn add(
     });
     Chart {
         area,
+        panel,
         thresholds,
         keep_partial,
+        stages,
         side,
     }
 }
@@ -143,10 +163,22 @@ fn stop() {
     let _ = triggers::send_preview_message(PREVIEW_MESSAGE, &[]);
 }
 
-fn send(side: u8, [partial, partial_release, full, full_release]: [u8; 4]) {
+fn send(
+    side: u8,
+    [partial, partial_release, full, full_release]: [u8; 4],
+    [lower, upper]: [bool; 2],
+) {
+    let stage_mask = u8::from(lower) | (u8::from(upper) << 1);
     let _ = triggers::send_preview_message(
         PREVIEW_MESSAGE,
-        &[side, partial, partial_release, full, full_release],
+        &[
+            side,
+            partial,
+            partial_release,
+            full,
+            full_release,
+            stage_mask,
+        ],
     );
 }
 
@@ -162,6 +194,7 @@ fn draw(
     width: i32,
     [partial, partial_release, full, full_release]: [u8; 4],
     keep_partial: bool,
+    stages: [bool; 2],
     live: Option<f64>,
 ) {
     let left = 57.0;
@@ -185,10 +218,15 @@ fn draw(
 
     cr.set_font_size(11.0);
     let partial_end = if keep_partial { 100 } else { full };
-    for (label, top, pull, release, active_end) in [
-        ("Partial", 12.0, partial, partial_release, partial_end),
-        ("Full", 40.0, full, full_release, 100),
-    ] {
+    let mut top = 12.0;
+    for ((label, pull, release, active_end), _) in [
+        ("Partial", partial, partial_release, partial_end),
+        ("Full", full, full_release, 100),
+    ]
+    .into_iter()
+    .zip(stages)
+    .filter(|(_, visible)| *visible)
+    {
         let pull = x(f64::from(pull) / 100.0);
         let release = x(f64::from(release) / 100.0);
         let active_end = x(f64::from(active_end) / 100.0);
@@ -214,6 +252,7 @@ fn draw(
         }
         color(foreground, 0.9);
         text(label, 0.0, top + 13.0);
+        top += 28.0;
     }
     color(foreground, 0.85);
     for (label, position, offset) in [
@@ -221,14 +260,14 @@ fn draw(
         ("50%", x(0.5), 12.0),
         ("100%", end, 27.0),
     ] {
-        text(label, position - offset, 79.0);
+        text(label, position - offset, top + 11.0);
     }
     if let Some(live) = live {
         let marker = x(live);
         color(foreground, 1.0);
         cr.set_line_width(2.0);
         cr.move_to(marker, 10.0);
-        cr.line_to(marker, 62.0);
+        cr.line_to(marker, top - 6.0);
         let _ = cr.stroke();
         cr.arc(marker, 7.0, 3.0, 0.0, std::f64::consts::TAU);
         let _ = cr.fill();

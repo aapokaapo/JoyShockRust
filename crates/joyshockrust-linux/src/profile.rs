@@ -59,6 +59,7 @@ struct TriggerProfiles {
 #[serde(default, deny_unknown_fields)]
 struct TriggerProfile {
     thresholds: Option<[u8; 4]>,
+    full_travel_percent: Option<u8>,
     partial_button: Option<String>,
     full_button: Option<String>,
     keep_partial: bool,
@@ -66,6 +67,14 @@ struct TriggerProfile {
 }
 
 impl TriggerProfile {
+    fn full_travel(&self) -> Result<Option<u8>, &'static str> {
+        match self.full_travel_percent {
+            None | Some(100) => Ok(None),
+            Some(value @ 1..=99) => Ok(Some(value)),
+            _ => Err("full_travel_percent must be between 1 and 100"),
+        }
+    }
+
     fn resolve(
         &self,
         side: gyro_gate::TriggerSide,
@@ -229,6 +238,7 @@ pub struct RuntimeOptions {
     pub keyboard: Option<keyboard::Config>,
     pub grab_touchpad: bool,
     pub trigger_stages: Option<[crate::gamepad::TriggerStages; 2]>,
+    pub trigger_full_travel: [Option<u8>; 2],
     pub adaptive_triggers: [Effect; 2],
 }
 
@@ -476,6 +486,10 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
             .iter()
             .any(|stage| stage.targets != [None; 2])
             .then_some(trigger_stages),
+        trigger_full_travel: [
+            profile.triggers.l2.full_travel()?,
+            profile.triggers.r2.full_travel()?,
+        ],
         adaptive_triggers,
     })
 }

@@ -327,7 +327,9 @@ hold = "KEY_Q"
 
 For virtual buttons, set `partial_button` and `full_button` under the
 trigger instead of adding keyboard bindings. The virtual analog axis
-continues to follow physical travel in gamepad mode.
+follows physical travel in gamepad mode. Set `full_travel_percent` to an
+integer from 1 to 100 to control where it reaches maximum. The default
+is 100. This scaling applies to the virtual axis only.
 
 For a legacy explicit trigger binding, the optional suffix sets the engagement and release thresholds on a
 scale from 0 to 1. The defaults are 0.45 and 0.35. Bindings at different
@@ -875,16 +877,23 @@ gesture or **Same as controller** to remove the base remap. Existing
 TOML profiles retain their original routing until you choose an output
 type for the button. Use **Advanced** for chords and layers.
 
-Selecting L2 or R2 shows **Trigger travel**, with adjustable engage and
-release points and one action each for **Partial pull** and **Full pull**.
+Selecting L2 or R2 shows one action picker each for **Partial pull**
+and **Full pull**. Assigning an action reveals that stage's engage
+and release points and its band in the live **Trigger travel** chart.
 The defaults engage at 45% and 95% and release at 35% and 85%. Each
 action stays active while its stage is engaged. Enable **Keep partial
 action at full pull** to keep both actions active at full travel. You can
 choose a key, mouse button or virtual gamepad button using **Output type**.
 Custom trigger gestures from older profiles can still be edited in **Advanced**.
 
+In **Virtual gamepad** mode, the analog output is **Same as controller**.
+Use **Travel for full analog output (%)** to reach maximum output
+earlier. For example, at 60%, a 30% physical pull produces 50% virtual
+output and any pull from 60% onward produces 100%. Stage actions use the
+physical position.
+
 The **Trigger travel** chart shows the live position of the selected L2
-or R2 and separate partial and full bands. Solid lines mark engagement,
+or R2 and a band for each assigned stage. Solid lines mark engagement,
 dashed lines mark release, and the lighter band shows the gap between
 them. The Partial band turns gray from the Full Pull threshold when
 **Keep partial action at full pull** is off. While the editor is focused,
