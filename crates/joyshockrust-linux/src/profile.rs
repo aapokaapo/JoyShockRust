@@ -643,6 +643,37 @@ mod tests {
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
 
     #[test]
+    fn legacy_trigger_aliases_and_profile_precision_are_preserved() {
+        let aliases = r#"
+version = 1
+[[keyboard.bindings]]
+trigger = "l2"
+hold = "KEY_Q"
+[[keyboard.bindings]]
+trigger = "l2:0.45:0.35"
+hold = "KEY_E"
+"#;
+        assert!(
+            parse(aliases)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("duplicate keyboard binding")
+        );
+        assert!(parse("version = 1\n[gyro]\nsensitivity_x = 100.0000001").is_ok());
+        assert!(parse("version = 1\n[gyro]\nsensitivity_x = nan").is_err());
+        assert!(
+            parse(
+                r#"
+version = 1
+touchpad = { rows = 1, columns = 2, regions = [{ row = 1, column = 1, touch = "cross" }] }
+"#
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn controller_gyro_calibration_bindings_are_opt_in_and_validated() {
         let config = |button, hold| {
             format!("version = 1\n[gyro.calibration_hold]\nbutton = {button:?}\n{hold}")

@@ -471,6 +471,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_trigger_matching_keeps_the_editor_lookup_contract() {
+        assert!(!matching_triggers("l2", "l2:0.45:0.35"));
+        assert!(matching_triggers("l2:0.450:0.35", "l2:0.45:0.350"));
+        assert!(!matching_triggers("r2:partial", "l2:partial"));
+    }
+
+    #[test]
     fn editing_single_keys_preserves_custom_actions_and_other_profile_sections() {
         let mut doc = r#"
 version = 1
