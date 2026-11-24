@@ -51,6 +51,12 @@ independent of profile activation and avoids a second hidraw reader.
 The touch snapshot distinguishes finger release from connection loss.
 The touchpad preview projects zone boundaries and contact positions
 onto the same tapered surface so both follow the illustrated pad.
+Buttons and Touchpad share the bundled DualSense SVG. Touchpad crops the
+artwork in view-box coordinates so the grid stays aligned when resized.
+The editor applies valid dimensions to the draft when the row or column
+value changes and retains the live preview across those edits.
+Response charts reuse the bridge's stick travel and projected gyro speed
+and apply the editor's draft curve settings to those inputs.
 
 ## Optional desktop device access
 

@@ -6,7 +6,7 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike, Value, value
 
 use crate::{
     bindings::{self, Gesture, region_input, replace_value},
-    controller, controller_input,
+    controller, controller_art, controller_input,
     ui::{self, Context},
 };
 
@@ -219,40 +219,6 @@ fn set_output(
     Ok(())
 }
 
-const GYRO_MODES: [(&str, &str); 5] = [
-    ("hold", "Enable while touching"),
-    ("disable-while-held", "Disable while touching"),
-    ("toggle", "Toggle on contact"),
-    ("tap-hold", "Toggle on tap, enable while held"),
-    ("double-tap", "Toggle on double tap"),
-];
-const ADVANCED_GYRO: &str = "Use the Gyro tab to edit this activation binding.";
-
-fn gyro_binding(doc: &DocumentMut) -> Result<Option<(Cell, &str)>, &'static str> {
-    let Some((mode, input)) = crate::gyro_activation::binding(doc)? else {
-        return Ok(None);
-    };
-    let (kind, row, column) = region_input(input).ok_or(ADVANCED_GYRO)?;
-    if kind != "touch" || !GYRO_MODES.iter().any(|(key, _)| *key == mode) {
-        return Err(ADVANCED_GYRO);
-    }
-    Ok(Some((Cell { row, column }, mode)))
-}
-
-fn set_gyro_binding(
-    doc: &mut DocumentMut,
-    cell: Cell,
-    mode: Option<&str>,
-) -> Result<(), &'static str> {
-    let current = gyro_binding(doc)?;
-    if let Some(mode) = mode {
-        crate::gyro_activation::set_binding(doc, mode, &cell.input("touch"))?;
-    } else if current.is_some_and(|(configured, _)| configured == cell) {
-        crate::gyro_activation::clear_binding(doc)?;
-    }
-    Ok(())
-}
-
 pub fn gyro_inputs(doc: &DocumentMut) -> impl Iterator<Item = (String, String)> {
     grid(doc).ok().into_iter().flat_map(|size| {
         (1..=size.row).flat_map(move |row| {
@@ -304,42 +270,66 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         .build();
     let rows = dimension_row("Rows", size.row);
     let columns = dimension_row("Columns", size.column);
-    let apply = gtk::Button::with_label("Set Grid");
-    dimensions.set_header_suffix(Some(&apply));
     dimensions.add(&rows);
     dimensions.add(&columns);
+    let error = gtk::Label::builder()
+        .wrap(true)
+        .xalign(0.0)
+        .visible(false)
+        .css_classes(["error"])
+        .build();
+    dimensions.add(&error);
     page.add(&dimensions);
 
     let cells = adw::PreferencesGroup::new();
     let actions = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let selectors = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let selected = Rc::new(State::new(FIRST_CELL));
+    let grid_size = Rc::new(State::new(size));
+    let preview = live_preview(grid_size.clone(), selected.clone(), &layout);
+    layout.append(&selectors);
     cells.add(&layout);
     page.add(&cells);
     cells.add(&actions);
-    show_cells(ctx, size, &layout, &actions);
+    show_cells(ctx, size, &selectors, &actions, &selected, &preview);
 
     let ctx = ctx.clone();
-    let layout = layout.downgrade();
+    let selectors = selectors.downgrade();
     let actions = actions.downgrade();
-    let rows = rows.downgrade();
-    let columns = columns.downgrade();
-    apply.connect_clicked(move |_| {
-        let (Some(layout), Some(actions), Some(rows), Some(columns)) = (
-            layout.upgrade(),
-            actions.upgrade(),
-            rows.upgrade(),
-            columns.upgrade(),
-        ) else {
+    let preview = preview.downgrade();
+    let weak_rows = rows.downgrade();
+    let weak_columns = columns.downgrade();
+    let update = move |_: &adw::SpinRow| {
+        let (Some(rows), Some(columns)) = (weak_rows.upgrade(), weak_columns.upgrade()) else {
             return;
         };
         let size = Cell {
             row: rows.value() as i64,
             column: columns.value() as i64,
         };
-        if ctx.edit(|doc| resize(doc, size)) {
-            show_cells(&ctx, size, &layout, &actions);
+        error.set_visible(false);
+        if size == grid_size.get() {
+            return;
         }
-    });
+        if let Err(message) = ctx.try_edit(|doc| resize(doc, size)) {
+            error.set_text(&message);
+            error.set_visible(true);
+            return;
+        }
+        grid_size.set(size);
+        if !selected.get().in_grid(size) {
+            selected.set(FIRST_CELL);
+        }
+        if let (Some(selectors), Some(actions), Some(preview)) =
+            (selectors.upgrade(), actions.upgrade(), preview.upgrade())
+        {
+            show_cells(&ctx, size, &selectors, &actions, &selected, &preview);
+            preview.queue_draw();
+        }
+    };
+    rows.connect_value_notify(update.clone());
+    columns.connect_value_notify(update);
     page.upcast()
 }
 
@@ -351,12 +341,17 @@ fn dimension_row(title: &str, initial: i64) -> adw::SpinRow {
     row
 }
 
-fn show_cells(ctx: &Context, size: Cell, layout: &gtk::Box, actions: &gtk::Box) {
+fn show_cells(
+    ctx: &Context,
+    size: Cell,
+    layout: &gtk::Box,
+    actions: &gtk::Box,
+    selected: &Rc<State<Cell>>,
+    preview: &gtk::DrawingArea,
+) {
     while let Some(child) = layout.first_child() {
         layout.remove(&child);
     }
-    let selected = Rc::new(State::new(FIRST_CELL));
-    let preview = live_preview(size, selected.clone(), layout);
     let grid = gtk::Grid::builder()
         .column_homogeneous(true)
         .column_spacing(4)
@@ -378,9 +373,9 @@ fn show_cells(ctx: &Context, size: Cell, layout: &gtk::Box, actions: &gtk::Box) 
             if let Some(first) = &first {
                 button.set_group(Some(first));
             } else {
-                button.set_active(true);
                 first = Some(button.clone());
             }
+            button.set_active(cell == selected.get());
             let ctx = ctx.clone();
             let actions = actions.downgrade();
             let selected = selected.clone();
@@ -399,7 +394,7 @@ fn show_cells(ctx: &Context, size: Cell, layout: &gtk::Box, actions: &gtk::Box) 
             grid.attach(&button, column as i32 - 1, row as i32 - 1, 1, 1);
         }
     }
-    show_actions(ctx, FIRST_CELL, actions);
+    show_actions(ctx, selected.get(), actions);
 }
 
 type Contacts = [Option<(f64, f64)>; 2];
@@ -423,7 +418,11 @@ fn parse_contacts(value: &str) -> Option<Contacts> {
     Some(contacts)
 }
 
-fn live_preview(size: Cell, selected: Rc<State<Cell>>, layout: &gtk::Box) -> gtk::DrawingArea {
+fn live_preview(
+    size: Rc<State<Cell>>,
+    selected: Rc<State<Cell>>,
+    layout: &gtk::Box,
+) -> gtk::DrawingArea {
     let preview = gtk::Box::new(gtk::Orientation::Vertical, 6);
     preview.set_margin_bottom(12);
     let area = gtk::DrawingArea::builder().content_height(194).build();
@@ -438,14 +437,20 @@ fn live_preview(size: Cell, selected: Rc<State<Cell>>, layout: &gtk::Box) -> gtk
 
     let contacts = Rc::new(State::new(Contacts::default()));
     let drawn_contacts = contacts.clone();
+    let svg = controller_art::load()
+        .map_err(|error| {
+            eprintln!("DualSense art unavailable: {error}");
+        })
+        .ok();
     area.set_draw_func(move |area, cr, width, height| {
         draw_preview(
             area,
             cr,
             (width, height),
-            size,
+            size.get(),
             selected.get(),
             drawn_contacts.get(),
+            svg.as_ref(),
         );
     });
     let chart = area.clone();
@@ -470,13 +475,14 @@ fn live_preview(size: Cell, selected: Rc<State<Cell>>, layout: &gtk::Box) -> gtk
     area
 }
 
-const PREVIEW_WIDTH: f64 = 420.0;
-const PREVIEW_HEIGHT: f64 = 180.0;
-const PAD_CENTER: f64 = PREVIEW_WIDTH / 2.0;
-const PAD_TOP: f64 = 35.0;
-const PAD_BOTTOM: f64 = 144.0;
-const PAD_TOP_WIDTH: f64 = 190.0;
-const PAD_BOTTOM_WIDTH: f64 = 166.0;
+const CROP_TOP: f64 = 56.0;
+const CROP_HEIGHT: f64 = 80.0;
+// SVG viewBox coordinates for the touch surface.
+const PAD_CENTER: f64 = controller_art::SIZE / 2.0;
+const PAD_TOP: f64 = 72.0;
+const PAD_BOTTOM: f64 = 118.0;
+const PAD_TOP_WIDTH: f64 = 68.0;
+const PAD_BOTTOM_WIDTH: f64 = 54.2;
 
 fn touch_position(x: f64, y: f64) -> (f64, f64) {
     let width = PAD_TOP_WIDTH + y * (PAD_BOTTOM_WIDTH - PAD_TOP_WIDTH);
@@ -493,6 +499,7 @@ fn draw_preview(
     size: Cell,
     selected: Cell,
     contacts: Contacts,
+    svg: Option<&gtk::gdk_pixbuf::Pixbuf>,
 ) {
     let style = area.style_context();
     let fg = style.color();
@@ -500,67 +507,32 @@ fn draw_preview(
     let color = |c: gtk::gdk::RGBA, alpha| {
         cr.set_source_rgba(c.red().into(), c.green().into(), c.blue().into(), alpha);
     };
-    let scale = ((f64::from(width) - 12.0) / PREVIEW_WIDTH)
-        .min((f64::from(height) - 12.0) / PREVIEW_HEIGHT);
+    let scale = ((f64::from(width) - 12.0) / controller_art::SIZE)
+        .min((f64::from(height) - 12.0) / CROP_HEIGHT);
     if scale <= 0.0 {
         return;
     }
     let _ = cr.save();
     cr.translate(
-        (f64::from(width) - PREVIEW_WIDTH * scale) / 2.0,
-        (f64::from(height) - PREVIEW_HEIGHT * scale) / 2.0,
+        (f64::from(width) - controller_art::SIZE * scale) / 2.0,
+        (f64::from(height) - CROP_HEIGHT * scale) / 2.0,
     );
     cr.scale(scale, scale);
-    draw_upper_shell(cr, |alpha| color(fg, alpha));
+    cr.rectangle(0.0, 0.0, controller_art::SIZE, CROP_HEIGHT);
+    cr.clip();
+    cr.translate(0.0, -CROP_TOP);
 
-    // Round the trapezoid corners without changing the coordinate mapping.
-    let (lt, _) = touch_position(0.0, 0.0);
-    let (rt, _) = touch_position(1.0, 0.0);
-    let (lb, _) = touch_position(0.0, 1.0);
-    let (rb, _) = touch_position(1.0, 1.0);
-    cr.move_to(lt + 10.0, PAD_TOP);
-    cr.line_to(rt - 10.0, PAD_TOP);
-    cr.curve_to(
-        rt - 3.0,
-        PAD_TOP,
-        rt + 0.5,
-        PAD_TOP + 4.0,
-        rt - 1.0,
-        PAD_TOP + 11.0,
-    );
-    cr.line_to(rb + 1.0, PAD_BOTTOM - 9.0);
-    cr.curve_to(
-        rb,
-        PAD_BOTTOM - 3.0,
-        rb - 4.0,
-        PAD_BOTTOM,
-        rb - 10.0,
-        PAD_BOTTOM,
-    );
-    cr.line_to(lb + 10.0, PAD_BOTTOM);
-    cr.curve_to(
-        lb + 4.0,
-        PAD_BOTTOM,
-        lb,
-        PAD_BOTTOM - 3.0,
-        lb - 1.0,
-        PAD_BOTTOM - 9.0,
-    );
-    cr.line_to(lt + 1.0, PAD_TOP + 11.0);
-    cr.curve_to(
-        lt - 0.5,
-        PAD_TOP + 4.0,
-        lt + 3.0,
-        PAD_TOP,
-        lt + 10.0,
-        PAD_TOP,
-    );
+    let _ = cr.save();
+    // Clip the overlays using the outline's touchpad path.
+    cr.move_to(94.0, PAD_TOP);
+    cr.line_to(100.0, 112.0);
+    cr.curve_to(101.0, 116.0, 104.0, PAD_BOTTOM, 108.0, PAD_BOTTOM);
+    cr.line_to(148.0, PAD_BOTTOM);
+    cr.curve_to(152.0, PAD_BOTTOM, 155.0, 116.0, 156.0, 112.0);
+    cr.line_to(162.0, PAD_TOP);
     cr.close_path();
     color(fg, 0.09);
     let _ = cr.fill_preserve();
-    color(fg, 0.62);
-    cr.set_line_width(1.5);
-    let _ = cr.stroke_preserve();
     cr.clip();
 
     // Zone edges and contact dots share the same surface projection.
@@ -606,73 +578,10 @@ fn draw_preview(
         let _ = cr.stroke();
     }
     let _ = cr.restore();
-}
-
-fn draw_upper_shell(cr: &gtk::cairo::Context, color: impl Fn(f64)) {
-    // Leave the lower edge open where the grips continue beyond this view.
-    cr.move_to(22.0, 164.0);
-    cr.curve_to(32.0, 123.0, 30.0, 70.0, 60.0, 44.0);
-    cr.curve_to(82.0, 24.0, 108.0, 22.0, 141.0, 23.0);
-    cr.line_to(279.0, 23.0);
-    cr.curve_to(312.0, 22.0, 338.0, 24.0, 360.0, 44.0);
-    cr.curve_to(390.0, 70.0, 388.0, 123.0, 398.0, 164.0);
-    cr.curve_to(318.0, 178.0, 102.0, 178.0, 22.0, 164.0);
-    color(0.055);
-    let _ = cr.fill();
-
-    for side in [1.0, -1.0] {
-        let _ = cr.save();
-        cr.translate(PAD_CENTER, 0.0);
-        cr.scale(side, 1.0);
-        cr.move_to(-188.0, 164.0);
-        cr.curve_to(-178.0, 123.0, -180.0, 70.0, -150.0, 44.0);
-        cr.curve_to(-128.0, 24.0, -102.0, 22.0, -69.0, 23.0);
-        cr.line_to(0.0, 23.0);
-        cr.move_to(-147.0, 41.0);
-        cr.curve_to(-147.0, 14.0, -127.0, 7.0, -99.0, 7.0);
-        cr.line_to(-76.0, 7.0);
-        cr.curve_to(-65.0, 7.0, -63.0, 15.0, -63.0, 23.0);
-        cr.move_to(-105.0, 66.0);
-        cr.line_to(-97.0, 118.0);
-        color(0.31);
-        cr.set_line_width(1.8);
-        cr.set_line_cap(gtk::cairo::LineCap::Round);
-        let _ = cr.stroke();
-        let _ = cr.restore();
+    if let Some(svg) = svg {
+        controller_art::draw(cr, svg, fg, 0.60);
     }
-
-    // The D-pad, face buttons and speaker grille distinguish the top view.
-    for (x, y) in [
-        (70.0, 81.0),
-        (78.0, 81.0),
-        (78.0, 93.0),
-        (90.0, 93.0),
-        (90.0, 101.0),
-        (78.0, 101.0),
-        (78.0, 113.0),
-        (70.0, 113.0),
-        (70.0, 101.0),
-        (58.0, 101.0),
-        (58.0, 93.0),
-        (70.0, 93.0),
-    ] {
-        cr.line_to(x, y);
-    }
-    cr.close_path();
-    for (x, y) in [(346.0, 79.0), (328.0, 97.0), (364.0, 97.0), (346.0, 115.0)] {
-        cr.new_sub_path();
-        cr.arc(x, y, 7.0, 0.0, std::f64::consts::TAU);
-    }
-    color(0.28);
-    cr.set_line_width(1.4);
-    let _ = cr.stroke();
-    for y in [154.0, 160.0] {
-        for x in [198.0, 204.0, 210.0, 216.0, 222.0] {
-            cr.new_sub_path();
-            cr.arc(x, y, 1.2, 0.0, std::f64::consts::TAU);
-        }
-    }
-    let _ = cr.fill();
+    let _ = cr.restore();
 }
 
 fn show_actions(ctx: &Context, cell: Cell, actions: &gtk::Box) {
@@ -729,50 +638,6 @@ fn show_actions(ctx: &Context, cell: Cell, actions: &gtk::Box) {
             group.add(&row);
         }
         actions.append(&group);
-    }
-
-    let gyro = adw::PreferencesGroup::builder()
-        .title("Gyro activation")
-        .margin_top(18)
-        .build();
-    match gyro_binding(&doc) {
-        Ok(binding) => {
-            let current = binding
-                .filter(|(configured, _)| *configured == cell)
-                .map(|(_, mode)| mode);
-            gyro.set_description(Some(&gyro_description(cell, binding)));
-            let ctx = ctx.clone();
-            let group = gyro.downgrade();
-            gyro.add(&controller::dropdown(
-                "Touch activation",
-                current,
-                "No binding for this cell",
-                GYRO_MODES
-                    .into_iter()
-                    .map(|(key, label)| (key.into(), label.into())),
-                move |mode| {
-                    if ctx.edit(|doc| set_gyro_binding(doc, cell, mode))
-                        && let Some(group) = group.upgrade()
-                        && let Ok(doc) = ctx.document()
-                        && let Ok(binding) = gyro_binding(&doc)
-                    {
-                        group.set_description(Some(&gyro_description(cell, binding)));
-                    }
-                },
-            ));
-        }
-        Err(error) => gyro.add(&controller::message_row("Gyro binding", error)),
-    }
-    actions.append(&gyro);
-}
-
-fn gyro_description(cell: Cell, binding: Option<(Cell, &str)>) -> String {
-    match binding {
-        Some((configured, _)) if configured != cell => format!(
-            "Gyro is bound to row {}, column {}. Choosing a mode here moves the binding.",
-            configured.row, configured.column,
-        ),
-        _ => "Clearing the touch binding leaves the configured gyro always active.".into(),
     }
 }
 
@@ -835,45 +700,6 @@ mod tests {
         assert_eq!(binding["tap"].as_str(), Some("KEY_SPACE"));
         set_keyboard_action(&mut doc, &input, Gesture::Tap, None).unwrap();
         assert!(bindings::keyboard_binding(&doc, &input).unwrap().is_some());
-    }
-
-    #[test]
-    fn setting_gyro_moves_only_a_simple_touch_binding() {
-        let text = r#"version = 1
-[touchpad]
-rows = 1
-columns = 2
-[gyro]
-sensitivity_x = 2.0
-binding = { mode = "hold", input = "touch:1:1" }
-"#;
-        let mut doc = text.parse::<DocumentMut>().unwrap();
-        set_gyro_binding(&mut doc, RIGHT, Some("disable-while-held")).unwrap();
-        let mut doc = doc.to_string().parse::<DocumentMut>().unwrap();
-        assert_eq!(gyro_binding(&doc), Ok(Some((RIGHT, "disable-while-held"))));
-        set_gyro_binding(&mut doc, FIRST_CELL, None).unwrap();
-        assert!(gyro_binding(&doc).unwrap().is_some());
-        set_gyro_binding(&mut doc, RIGHT, None).unwrap();
-        assert_eq!(gyro_binding(&doc), Ok(None));
-        assert_eq!(doc["gyro"]["sensitivity_x"].as_float(), Some(2.0));
-
-        let mut inline = "version = 1\ngyro = { sensitivity_x = 2.0 }\n"
-            .parse::<DocumentMut>()
-            .unwrap();
-        set_gyro_binding(&mut inline, RIGHT, Some("hold")).unwrap();
-        let inline = inline.to_string().parse::<DocumentMut>().unwrap();
-        assert_eq!(gyro_binding(&inline), Ok(Some((RIGHT, "hold"))));
-        assert_eq!(inline["gyro"]["sensitivity_x"].as_float(), Some(2.0));
-
-        for input in ["l2", "l1,touch:1:1"] {
-            let mut doc = text
-                .replace("touch:1:1", input)
-                .parse::<DocumentMut>()
-                .unwrap();
-            let original = doc.to_string();
-            assert!(set_gyro_binding(&mut doc, RIGHT, Some("hold")).is_err());
-            assert_eq!(doc.to_string(), original);
-        }
     }
 
     #[test]

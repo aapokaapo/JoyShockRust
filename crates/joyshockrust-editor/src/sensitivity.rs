@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    time::Duration,
 };
 
 use adw::{gtk, prelude::*};
@@ -15,7 +16,7 @@ use joyshockrust_motion::aim_response::{
 
 use crate::{
     bindings::replace_value,
-    controller,
+    controller, controller_input,
     response_plot::{self, Curve},
     ui::{self, Context},
 };
@@ -342,12 +343,15 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
             ctx.edit(|doc| set_gyro_numbers(doc, [(RESPONSE_FIELDS[axis], values[axis])]));
         });
     }
+    let live_speed = Rc::new(Cell::new(None));
     let plot = response_plot::add(
         &group,
         "Gyro speed response",
         "Equivalent output speed (°/s)",
         "Projected aim speed (°/s)",
+        true,
         {
+            let live_speed = live_speed.clone();
             let [minimum, start, end, multiplier]: [gtk::Adjustment; 4] = adjustments
                 .clone()
                 .try_into()
@@ -364,7 +368,21 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
                 .with_acceleration_enabled(
                     acceleration.upgrade().is_some_and(|row| row.is_active()),
                 );
-                gyro_curve(response)
+                gyro_curve(response, live_speed.get())
+            }
+        },
+    );
+    let plot_ref = plot.downgrade();
+    controller_input::watch_status(
+        &group,
+        "gyro_speed_dps=",
+        Duration::from_millis(33),
+        move |result| {
+            let speed = result.ok().flatten().as_deref().and_then(response_input);
+            if live_speed.replace(speed) != speed
+                && let Some(plot) = plot_ref.upgrade()
+            {
+                plot.queue_draw();
             }
         },
     );
@@ -389,9 +407,21 @@ fn watch_plot(plot: &gtk::DrawingArea, settings: &[gtk::Adjustment]) {
     }
 }
 
-fn gyro_curve(response: GyroResponse) -> Curve {
+fn response_input(value: &str) -> Option<f64> {
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn gyro_curve(response: GyroResponse, live_speed: Option<f64>) -> Curve {
     let [minimum, start, end, _] = response.values();
-    let input_max = (((minimum.max(end) * 1.2).max(40.0) / 40.0).ceil()) * 40.0;
+    let input_max = ((minimum.max(end) * 1.2)
+        .max(live_speed.unwrap_or_default())
+        .max(40.0)
+        / 40.0)
+        .ceil()
+        * 40.0;
     let mut speeds: Vec<_> = (0..=100)
         .map(|i| f64::from(i) / 100.0 * input_max)
         .collect();
@@ -401,6 +431,7 @@ fn gyro_curve(response: GyroResponse) -> Curve {
     Curve {
         input_max,
         output_max,
+        sample: live_speed.map(|speed| (speed, speed * response.gain_at_speed(speed))),
         points: speeds
             .into_iter()
             .map(|speed| (speed, speed * response.gain_at_speed(speed)))
@@ -568,6 +599,7 @@ fn flick_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesG
             title,
             "Turn before game calibration (°)",
             "Stick angle change (°)",
+            false,
             {
                 let setting = setting.clone();
                 let base = base.clone();
@@ -577,6 +609,7 @@ fn flick_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesG
                     Curve {
                         input_max,
                         output_max,
+                        sample: None,
                         points: (0..=90)
                             .map(|i| {
                                 let angle = f64::from(i) / 90.0 * input_max;
@@ -896,30 +929,39 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
         page.add(&flick_group(ctx, gyro));
     }
     let fallback = number(doc.as_table(), "stick_curve", 1.0);
-    for ((key, title), side) in STICK_FIELDS
+    let live_travel = Rc::new(Cell::new(None::<[f64; 2]>));
+    let mut plots = Vec::new();
+    for (index, ((key, title), side)) in STICK_FIELDS
         .into_iter()
         .zip(["Left stick", "Right stick"])
         .zip(["left", "right"])
+        .enumerate()
     {
         let group = adw::PreferencesGroup::builder()
             .title(title)
             .description("Lower exponents give more response near the center. 1.00 is linear.")
             .build();
         let initial = number(doc.as_table(), key, fallback);
-        let plot = gtk::DrawingArea::builder()
-            .content_height(122)
-            .hexpand(true)
-            .build();
-        plot.set_margin_top(12);
-        plot.set_margin_bottom(12);
-        plot.set_margin_start(12);
-        plot.set_margin_end(12);
         let exponent = Rc::new(Cell::new(initial));
-        let plot_state = exponent.clone();
-        plot.set_draw_func(move |area, cr, width, height| {
-            draw_curve(area, cr, width, height, plot_state.get())
-        });
+        let plot = response_plot::add(
+            &group,
+            "Stick response",
+            "Output travel (%)",
+            "Physical travel (%)",
+            true,
+            {
+                let exponent = exponent.clone();
+                let live_travel = live_travel.clone();
+                move || {
+                    stick_curve(
+                        exponent.get(),
+                        live_travel.get().map(|travel| travel[index]),
+                    )
+                }
+            },
+        );
         let plot_ref = plot.downgrade();
+        plots.push(plot_ref.clone());
         let curve_ctx = ctx.clone();
         let row = scale_row("Response exponent", initial, 0.25, 4.0, 20, move |value| {
             exponent.set(value);
@@ -931,11 +973,23 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
                 Ok(())
             });
         });
-        group.add(&plot);
         group.add(&row);
         group.add(&crate::stick_keys::editor_row(ctx, side, title));
         page.add(&group);
     }
+    controller_input::watch_status(
+        &page,
+        "stick_travel=",
+        Duration::from_millis(33),
+        move |result| {
+            let travel = result.ok().flatten().as_deref().and_then(stick_travel);
+            if live_travel.replace(travel) != travel {
+                for plot in plots.iter().filter_map(adw::glib::WeakRef::upgrade) {
+                    plot.queue_draw();
+                }
+            }
+        },
+    );
     page.upcast()
 }
 
@@ -974,61 +1028,42 @@ fn scale_row(
     row
 }
 
-fn draw_curve(
-    area: &gtk::DrawingArea,
-    cr: &gtk::cairo::Context,
-    width: i32,
-    height: i32,
-    exponent: f64,
-) {
-    let width = f64::from(width) - 2.0;
-    let height = f64::from(height) - 2.0;
-    let at = |x: f64, y: f64| (1.0 + x * width, 1.0 + (1.0 - y) * height);
-    let line = |from, to| {
-        let (x, y) = from;
-        cr.move_to(x, y);
-        let (x, y) = to;
-        cr.line_to(x, y);
-    };
-    let foreground = area.style_context().color();
-    let rgb = (
-        foreground.red().into(),
-        foreground.green().into(),
-        foreground.blue().into(),
-    );
-    cr.set_source_rgba(rgb.0, rgb.1, rgb.2, 0.16);
-    cr.set_line_width(1.0);
-    for tick in 0..=4 {
-        let fraction = f64::from(tick) / 4.0;
-        line(at(fraction, 0.0), at(fraction, 1.0));
-        line(at(0.0, fraction), at(1.0, fraction));
-    }
-    let _ = cr.stroke();
-    cr.set_source_rgba(rgb.0, rgb.1, rgb.2, 0.45);
-    line(at(0.0, 0.0), at(1.0, 1.0));
-    let _ = cr.stroke();
-    let accent = area
-        .style_context()
-        .lookup_color("accent_color")
-        .unwrap_or(foreground);
-    cr.set_source_rgb(
-        accent.red().into(),
-        accent.green().into(),
-        accent.blue().into(),
-    );
-    cr.set_line_width(2.5);
-    let (x, y) = at(0.0, 0.0);
-    cr.move_to(x, y);
-    for index in 1..=64 {
-        let x = f64::from(index) / 64.0;
-        let (x, y) = at(x, x.powf(exponent.clamp(0.25, 4.0)));
-        cr.line_to(x, y);
-    }
-    let _ = cr.stroke();
+fn stick_travel(value: &str) -> Option<[f64; 2]> {
+    let (left, right) = value.split_once(',')?;
+    let travel = [response_input(left)?, response_input(right)?];
+    travel.iter().all(|&value| value <= 100.0).then_some(travel)
 }
+
+fn stick_curve(exponent: f64, travel: Option<f64>) -> Curve {
+    let exponent = exponent.clamp(0.25, 4.0);
+    let output = |input: f64| 100.0 * (input / 100.0).powf(exponent);
+    Curve {
+        input_max: 100.0,
+        output_max: 100.0,
+        points: (0..=100)
+            .map(|input| (f64::from(input), output(f64::from(input))))
+            .collect(),
+        sample: travel.map(|input| (input, output(input))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_points_use_the_configured_curve_at_the_measured_input() {
+        assert_eq!(stick_travel("50,75"), Some([50.0, 75.0]));
+        assert_eq!(stick_travel("101,50"), None);
+        assert_eq!(stick_curve(2.0, Some(50.0)).sample, Some((50.0, 25.0)));
+
+        let response = GyroResponse::new(10.0, 20.0, 100.0, 2.0).unwrap();
+        assert_eq!(gyro_curve(response, Some(5.0)).sample, Some((5.0, 0.0)));
+        let high = gyro_curve(response, Some(300.0));
+        assert_eq!(high.sample, Some((300.0, 600.0)));
+        assert!(high.input_max >= 300.0 && high.output_max >= 600.0);
+        assert_eq!(gyro_curve(response, None).sample, None);
+    }
 
     #[test]
     fn calibration_uses_positive_finite_values_and_accepts_decimal_comma() {

@@ -4,6 +4,7 @@ pub struct Curve {
     pub input_max: f64,
     pub output_max: f64,
     pub points: Vec<(f64, f64)>,
+    pub sample: Option<(f64, f64)>,
 }
 
 pub fn add(
@@ -11,6 +12,7 @@ pub fn add(
     title: &str,
     output: &str,
     input: &str,
+    live: bool,
     curve: impl Fn() -> Curve + 'static,
 ) -> gtk::DrawingArea {
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -23,6 +25,12 @@ pub fn add(
     legend.add_css_class("dim-label");
     legend.set_wrap(true);
     panel.append(&legend);
+    if live {
+        let markers = gtk::Label::new(Some("Gray · Input    Blue · Response"));
+        markers.add_css_class("dim-label");
+        markers.set_wrap(true);
+        panel.append(&markers);
+    }
     let output = gtk::Label::new(Some(output));
     output.set_xalign(0.0);
     output.add_css_class("caption");
@@ -97,4 +105,24 @@ fn draw(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, width: i32, height: i
         }
     }
     let _ = cr.stroke();
+    if let Some((input, output)) = curve.sample {
+        draw_markers(cr, [pos(input, input), pos(input, output)]);
+    }
+}
+
+pub fn draw_markers(cr: &gtk::cairo::Context, [input, output]: [(f64, f64); 2]) {
+    // The larger input dot remains visible as a ring if both values coincide.
+    for ((x, y), color, radius) in [
+        (input, gtk::gdk::RGBA::new(0.60, 0.60, 0.60, 1.0), 6.0),
+        (output, gtk::gdk::RGBA::new(0.24, 0.56, 0.96, 1.0), 4.0),
+    ] {
+        cr.new_sub_path();
+        cr.arc(x, y, radius, 0.0, std::f64::consts::TAU);
+        cr.set_source_rgb(
+            color.red().into(),
+            color.green().into(),
+            color.blue().into(),
+        );
+        let _ = cr.fill();
+    }
 }
