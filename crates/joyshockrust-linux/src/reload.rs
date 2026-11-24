@@ -33,6 +33,7 @@ use crate::{
     hidraw::ControllerId,
     profile::{self, BridgeOptions, RuntimeOptions},
     status::{self, ProfileSource, StatusSocket},
+    trigger_travel,
 };
 
 const MAX_PROFILE_BYTES: usize = 64 * 1024;
@@ -47,6 +48,7 @@ const SET_EMULATION_PREFIX: &[u8] = b"\0set-emulation\n";
 const SET_EMULATION_MASTER_PREFIX: &[u8] = b"\0set-emulation-master\n";
 const SET_OUTPUTS_PREFIX: &[u8] = b"\0set-outputs\n";
 const TRIGGER_PREVIEW_PREFIX: &[u8] = b"\0preview-trigger\n";
+const TRIGGER_TRAVEL_PREFIX: &[u8] = b"\0preview-trigger-travel\n";
 
 pub struct Reload {
     path: Option<PathBuf>,
@@ -146,6 +148,7 @@ enum Client {
     Reload(UnixStream),
     Load(SocketAddr, Vec<u8>),
     TriggerPreview(Preview),
+    TriggerTravel(Option<trigger_travel::Settings>),
 }
 
 pub enum Update {
@@ -154,6 +157,7 @@ pub enum Update {
     Emulation(OutputTarget, bool),
     OutputsPaused(bool),
     TriggerPreview(Preview),
+    TriggerTravel(Option<trigger_travel::Settings>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,6 +286,9 @@ impl Request<'_> {
     pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
         if let Some(Client::TriggerPreview(preview)) = &self.client {
             return Some(Update::TriggerPreview(*preview));
+        }
+        if let Some(Client::TriggerTravel(settings)) = &self.client {
+            return Some(Update::TriggerTravel(*settings));
         }
         if let Some(payload) = self.command_payload(SET_OUTPUTS_PREFIX) {
             if !self.reload.allow_controller_switch {
@@ -462,7 +469,7 @@ impl Request<'_> {
                     let _ = socket.send_to_addr(response, address);
                 }
             }
-            Some(Client::TriggerPreview(_)) | None => {}
+            Some(Client::TriggerPreview(_) | Client::TriggerTravel(_)) | None => {}
         }
     }
 }
@@ -752,6 +759,11 @@ pub fn wait<'a>(
                         && let Ok(preview) = Preview::parse(payload)
                     {
                         client = Some(Client::TriggerPreview(preview));
+                    } else if let Some(settings) = data[..len]
+                        .strip_prefix(TRIGGER_TRAVEL_PREFIX)
+                        .and_then(trigger_travel::Settings::parse)
+                    {
+                        client = Some(Client::TriggerTravel(settings));
                     }
                 }
                 Ok((len, address)) => {
@@ -1015,6 +1027,15 @@ mod tests {
             Some(Update::TriggerPreview(Preview::Reset))
         ));
         assert!(read(b"\0preview-trigger\n\x00\x0a\x07").is_none());
+        assert!(matches!(
+            read(b"\0preview-trigger-travel\n\x01\x2d\x23\x5f\x55"),
+            Some(Update::TriggerTravel(Some(_)))
+        ));
+        assert!(matches!(
+            read(b"\0preview-trigger-travel\n"),
+            Some(Update::TriggerTravel(None))
+        ));
+        assert!(read(b"\0preview-trigger-travel\n\x02\x2d\x23\x5f\x55").is_none());
         assert!(read(b"version = 1\n").is_none());
         assert_eq!(reload.outcome(), "applied");
     }

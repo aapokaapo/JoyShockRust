@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use joyshockrust_core::Stick;
+use joyshockrust_core::{Controls, Stick};
 use joyshockrust_input::{
     BatteryReading, BatteryState, DeviceModel, FactoryCalibration, RawImuSample, TouchContact,
     Transport,
@@ -86,6 +86,7 @@ struct Snapshot {
     battery: Option<BatteryReading>,
     touch_contacts: Option<[Option<TouchContact>; 2]>,
     sticks: Option<[Stick; 2]>,
+    triggers: Option<[f32; 2]>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -273,10 +274,15 @@ impl StatusSocket {
         }
     }
 
-    pub fn observe_sticks(&self, sticks: [Stick; 2]) {
+    pub fn observe_analog(&self, controls: &Controls) {
         let mut snapshot = self.snapshot.get();
-        if snapshot.identity.is_some() && snapshot.sticks != Some(sticks) {
+        let sticks = [controls.left_stick, controls.right_stick];
+        let triggers = [controls.left_trigger, controls.right_trigger];
+        if snapshot.identity.is_some()
+            && (snapshot.sticks != Some(sticks) || snapshot.triggers != Some(triggers))
+        {
             snapshot.sticks = Some(sticks);
+            snapshot.triggers = Some(triggers);
             self.snapshot.set(snapshot);
         }
     }
@@ -394,6 +400,10 @@ impl StatusSocket {
             let [left, right] =
                 sticks.map(|stick| 100.0 * f64::from(stick.x).hypot(f64::from(stick.y)).min(1.0));
             let _ = writeln!(response, "stick_travel={left:.4},{right:.4}");
+        }
+        if let Some([left, right]) = snapshot.triggers {
+            use std::fmt::Write;
+            let _ = writeln!(response, "trigger_travel={left:.6},{right:.6}");
         }
         if let Some(contacts) = snapshot.touch_contacts {
             use std::fmt::Write;
@@ -517,7 +527,13 @@ mod tests {
             }),
             Some(([3.0, 4.0], Duration::from_millis(50))),
         );
-        status.observe_sticks([Stick { x: 0.3, y: 0.4 }, Stick { x: 1.0, y: 1.0 }]);
+        status.observe_analog(&Controls {
+            left_stick: Stick { x: 0.3, y: 0.4 },
+            right_stick: Stick { x: 1.0, y: 1.0 },
+            left_trigger: 0.6,
+            right_trigger: 1.0,
+            ..Controls::default()
+        });
         let request = || {
             let mut socket = UnixStream::connect(&path).unwrap();
             status.respond("not_attempted").unwrap();
@@ -536,8 +552,10 @@ mod tests {
         assert!(!disconnected.contains("\nimu="));
         assert!(active.contains("\ngyro_speed_dps=100.0000\n"));
         assert!(active.contains("\nstick_travel=50.0000,100.0000\n"));
+        assert!(active.contains("\ntrigger_travel=0.600000,1.000000\n"));
         assert!(!disconnected.contains("\ngyro_speed_dps="));
         assert!(!disconnected.contains("\nstick_travel="));
+        assert!(!disconnected.contains("\ntrigger_travel="));
     }
 
     #[test]

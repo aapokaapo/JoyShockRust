@@ -43,6 +43,8 @@ mod status;
 mod systemd;
 #[cfg(target_os = "linux")]
 mod touchpad;
+#[cfg(target_os = "linux")]
+mod trigger_travel;
 
 #[cfg(target_os = "linux")]
 use hidraw::Identity;
@@ -771,7 +773,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             }
                             None
                         }
-                        Some(reload::Update::TriggerPreview(_)) | None => return Ok(None),
+                        Some(
+                            reload::Update::TriggerPreview(_) | reload::Update::TriggerTravel(_),
+                        )
+                        | None => return Ok(None),
                     };
                     reload.applied(status);
                     Ok(selection)
@@ -943,6 +948,8 @@ fn serve_session(
 
     let mut active_gyro = emulation.gyro(runtime.gyro);
     let mut adaptive = adaptive_trigger::AdaptiveTriggers::new(identity.transport);
+    let mut travel_preview: Option<trigger_travel::Preview> = None;
+    let mut travel_haptics = None;
     let mut mouse = open_mouse(input, identity.transport, active_gyro)?;
     let mut keyboard = keyboard::Keyboard::open(runtime.keyboard.as_ref(), status)?;
     let keyboard_deadline = Cell::new(None);
@@ -1036,6 +1043,16 @@ fn serve_session(
                                 runtime.adaptive_triggers,
                                 preview,
                             );
+                            return Ok(ControlFlow::Continue(()));
+                        }
+                        Some(reload::Update::TriggerTravel(settings)) => {
+                            if settings.is_some() && travel_haptics.is_none() {
+                                travel_haptics = haptics::Haptics::open_controller(
+                                    reload_input.as_ref().expect("reload descriptor"),
+                                    identity.transport,
+                                );
+                            }
+                            trigger_travel::Preview::refresh(&mut travel_preview, settings);
                             return Ok(ControlFlow::Continue(()));
                         }
                         Some(reload::Update::Selection(selection))
@@ -1278,7 +1295,7 @@ fn serve_session(
             };
             if let Some(status) = status {
                 status.observe_touch(report.touch_contacts);
-                status.observe_sticks([report.controls.left_stick, report.controls.right_stick]);
+                status.observe_analog(&report.controls);
                 status.observe_imu(
                     report.imu,
                     mouse
@@ -1291,6 +1308,12 @@ fn serve_session(
                 if gamepad_batch || mouse_batch {
                     status.observe_outputs(gamepad_batch, mouse_batch);
                 }
+            }
+            if let Some(preview) = &mut travel_preview
+                && preview.crossed(&report.controls)
+                && let Some(haptics) = &travel_haptics
+            {
+                haptics.send(haptics::Cue::Detent);
             }
             Ok(ControlFlow::Continue(()))
         },

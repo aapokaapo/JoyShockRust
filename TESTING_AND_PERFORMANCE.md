@@ -964,6 +964,15 @@ at full pull** for L2 and save. Verify Q stays held when E engages, then
 ease off until E releases at 85% and Q releases at 35%. Check that R2
 still switches stages with its default setting.
 
+With L2 selected in the focused editor, slowly pull and release L2.
+Check that the marker follows the pull and that a short haptic tick
+plays at each solid line on the way down and at each dashed line on the
+way back. Hold the trigger between a stage's two lines and check that
+small movements do not repeat the tick. With the trigger held, edit a
+valid threshold and check that the chart updates immediately. Select
+R2 and repeat. Switch away from the editor and confirm the preview
+ticks stop. Repeat with USB and Bluetooth.
+
 On USB and Bluetooth, select **Resistance** under **Adaptive trigger**
 for one side. Change the start zone and strength. Check each change
 before saving and verify the other side stays as it was. Select **Off**

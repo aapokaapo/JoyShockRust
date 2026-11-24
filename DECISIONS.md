@@ -89,6 +89,14 @@ reload status alone. Closing the editor or switching drafts requests
 restoration of the active profile's effects. A new controller session
 starts with the active profile.
 
+2026-11-24. Trigger travel uses the bridge's raw normalized input
+snapshot. The focused editor sends the selected trigger's draft
+thresholds through the control socket and refreshes them while the
+chart is mapped. The bridge applies the existing hysteresis at report
+cadence and queues a detent only on a stage transition. The preview
+expires when the editor stops refreshing it. It uses the controller
+haptics worker with USB PCM and evdev rumble fallback.
+
 ## Optional desktop device access
 
 Reviewed 2026-11-24. Ship separate hidraw and uinput fallback rules for

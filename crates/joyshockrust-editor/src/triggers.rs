@@ -10,7 +10,7 @@ use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, TableLike, Value, 
 
 use crate::{
     bindings::{self, BindingInput, Gesture, OutputMode},
-    controller,
+    controller, trigger_travel,
     ui::Context,
 };
 
@@ -26,19 +26,24 @@ const STAGES: [(&str, &str, &str, &str); 2] = [
 ];
 
 pub fn send_preview(payload: &[u8]) -> io::Result<()> {
+    send_preview_message(b"\0preview-trigger\n", payload)
+}
+
+pub(crate) fn send_preview_message(prefix: &[u8], payload: &[u8]) -> io::Result<()> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .filter(|path| !path.is_empty())
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
     send_preview_to(
         &PathBuf::from(runtime).join("joyshockrust/reload.sock.load"),
+        prefix,
         payload,
     )
 }
 
-fn send_preview_to(path: &Path, payload: &[u8]) -> io::Result<()> {
+fn send_preview_to(path: &Path, prefix: &[u8], payload: &[u8]) -> io::Result<()> {
     let socket = UnixDatagram::unbound()?;
     socket.set_nonblocking(true)?;
-    let mut message = b"\0preview-trigger\n".to_vec();
+    let mut message = prefix.to_vec();
     message.extend_from_slice(payload);
     socket.send_to(&message, path)?;
     Ok(())
@@ -133,6 +138,7 @@ pub fn append(
             return;
         }
     };
+    let travel = trigger_travel::add(&group, side, initial);
 
     let rows = [
         "Partial pull (%)",
@@ -169,6 +175,8 @@ pub fn append(
         error.set_visible(result.is_err());
         if let Err(message) = result {
             error.set_text(&message);
+        } else {
+            travel.set_thresholds(proposed);
         }
     };
     for row in rows {
@@ -435,7 +443,7 @@ mod tests {
             (&[0, 0, 0][..], &b"\0preview-trigger\n\x00\x00\x00"[..]),
             (&[][..], &b"\0preview-trigger\n"[..]),
         ] {
-            send_preview_to(&path, payload).unwrap();
+            send_preview_to(&path, b"\0preview-trigger\n", payload).unwrap();
             let mut buffer = [0; 32];
             let (len, sender) = listener.recv_from(&mut buffer).unwrap();
             assert!(sender.is_unnamed());

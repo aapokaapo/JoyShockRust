@@ -21,6 +21,7 @@ mod response_plot;
 mod sensitivity;
 mod stick_keys;
 mod touchpad;
+mod trigger_travel;
 mod triggers;
 mod ui;
 

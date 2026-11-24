@@ -1100,6 +1100,11 @@ pub(crate) mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(diagram.width() > 0);
+        assert!(
+            descendants::<gtk::DrawingArea>(&page)
+                .iter()
+                .any(|area| area.widget_name() == "trigger-travel-chart" && area.width() > 0)
+        );
         let bounds = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
             .into_iter()
             .map(|button| {
