@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
-use joyshockrust_core::{Controls, validate_trigger_thresholds};
+use joyshockrust_core::Controls;
+use joyshockrust_ipc::control::TravelPreview;
 
 use crate::gyro_gate::{TriggerGate, TriggerSide};
 
@@ -13,46 +14,32 @@ pub struct Settings {
 
 impl Settings {
     pub fn parse(payload: &[u8]) -> Option<Option<Self>> {
-        if payload.is_empty() {
-            return Some(None);
-        }
-        let &[
-            side @ 0..=1,
-            partial,
-            partial_release,
-            full,
-            full_release,
-            ref rest @ ..,
-        ] = payload
-        else {
-            return None;
-        };
-        let (mask, scale, travel_limit) = match rest {
-            [] => (3, 100, None),
-            &[mask @ 1..=3] => (mask, 100, None),
-            &[mask @ 1..=3, scale @ 1..=100] => (mask, scale, None),
-            &[mask @ 0..=3, scale @ 1..=100, limit @ 1..=100] => (mask, scale, Some(limit)),
-            _ => return None,
-        };
-        validate_trigger_thresholds([partial, partial_release, full, full_release]).ok()?;
-        let side = if side == 0 {
-            TriggerSide::Left
-        } else {
-            TriggerSide::Right
-        };
-        Some(Some(Self {
-            side,
-            gates: [
-                (mask & 1 != 0).then(|| {
-                    TriggerGate::from_percent(side, partial, partial_release).within_travel(scale)
-                }),
-                (mask & 2 != 0).then(|| {
-                    TriggerGate::from_percent(side, full, full_release).within_travel(scale)
-                }),
-            ],
-            travel_limit: travel_limit
-                .map(|limit| TriggerGate::from_percent(side, limit, limit - 1)),
-        }))
+        TravelPreview::parse(payload).map(|request| {
+            request.map(|request| {
+                let TravelPreview {
+                    side,
+                    thresholds: [partial, partial_release, full, full_release],
+                    stages: [lower, upper],
+                    threshold_scale,
+                    travel_limit,
+                } = request;
+                Self {
+                    side,
+                    gates: [
+                        lower.then(|| {
+                            TriggerGate::from_percent(side, partial, partial_release)
+                                .within_travel(threshold_scale)
+                        }),
+                        upper.then(|| {
+                            TriggerGate::from_percent(side, full, full_release)
+                                .within_travel(threshold_scale)
+                        }),
+                    ],
+                    travel_limit: travel_limit
+                        .map(|limit| TriggerGate::from_percent(side, limit, limit - 1)),
+                }
+            })
+        })
     }
 }
 

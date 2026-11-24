@@ -1,3 +1,6 @@
+use joyshockrust_core::trigger::TriggerSide;
+use joyshockrust_ipc::control::TravelPreview;
+use joyshockrust_ipc::status::Field;
 use std::{
     cell::Cell,
     rc::Rc,
@@ -7,8 +10,6 @@ use std::{
 use adw::{gtk, prelude::*};
 
 use crate::{controller_input, response_plot, triggers};
-
-const PREVIEW_MESSAGE: &[u8] = b"\0preview-trigger-travel\n";
 
 #[derive(Clone)]
 pub struct Chart {
@@ -113,7 +114,7 @@ pub fn add(
 
     let armed = Rc::new(Cell::new(false));
     let refresh_at = Cell::new(Instant::now());
-    controller_input::watch_status(&area, "trigger_travel=", Duration::from_millis(33), {
+    controller_input::watch_status(&area, Field::TriggerTravel, Duration::from_millis(33), {
         let thresholds = thresholds.clone();
         let stages = stages.clone();
         let range = range.clone();
@@ -178,7 +179,7 @@ fn is_active(area: &gtk::DrawingArea) -> bool {
 }
 
 fn stop() {
-    let _ = triggers::send_preview_message(PREVIEW_MESSAGE, &[]);
+    let _ = triggers::send_preview_message(&TravelPreview::encode(None));
 }
 
 fn send(
@@ -187,20 +188,18 @@ fn send(
     [lower, upper]: [bool; 2],
     (limit, relative): (u8, bool),
 ) {
-    let stage_mask = u8::from(lower) | (u8::from(upper) << 1);
-    let _ = triggers::send_preview_message(
-        PREVIEW_MESSAGE,
-        &[
-            side,
-            partial,
-            partial_release,
-            full,
-            full_release,
-            stage_mask,
-            if relative { limit } else { 100 },
-            limit,
-        ],
-    );
+    let request = TravelPreview {
+        side: if side == 0 {
+            TriggerSide::Left
+        } else {
+            TriggerSide::Right
+        },
+        thresholds: [partial, partial_release, full, full_release],
+        stages: [lower, upper],
+        threshold_scale: if relative { limit } else { 100 },
+        travel_limit: Some(limit),
+    };
+    let _ = triggers::send_preview_message(&TravelPreview::encode(Some(request)));
 }
 
 fn read_travel(value: &str, side: u8) -> Option<f64> {

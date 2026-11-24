@@ -1,3 +1,4 @@
+use joyshockrust_ipc::status::Field;
 use std::time::Duration;
 
 use adw::{gtk, prelude::*};
@@ -47,27 +48,32 @@ pub fn group() -> adw::PreferencesGroup {
         .build();
     group.add(&status);
 
-    controller_input::watch_status(&group, "imu=", Duration::from_millis(33), move |result| {
-        let (sample, message) = match result {
-            Ok(value) => match value.as_deref().and_then(parse_sample) {
-                Some(sample) => (Some(sample), ""),
-                None => (None, "Waiting for calibrated reports…"),
-            },
-            Err(()) => (None, "Bridge status is unavailable."),
-        };
-        status.set_text(message);
-        status.set_visible(!message.is_empty());
-        for (index, (row, scale)) in velocity.iter().enumerate() {
-            let value = sample.map(|sample| sample[0][index]);
-            scale.set_value(f64::from(value.unwrap_or_default()));
-            scale.set_opacity(if value.is_some() { 1.0 } else { 0.45 });
-            row.set_subtitle(&value.map_or_else(|| "—".into(), |value| format!("{value:+.3}")));
-        }
-        acceleration.set_subtitle(&sample.map_or_else(
-            || "—".into(),
-            |[_, [x, y, z]]| format!("X {x:+.3}    Y {y:+.3}    Z {z:+.3}"),
-        ));
-    });
+    controller_input::watch_status(
+        &group,
+        Field::Imu,
+        Duration::from_millis(33),
+        move |result| {
+            let (sample, message) = match result {
+                Ok(value) => match value.as_deref().and_then(parse_sample) {
+                    Some(sample) => (Some(sample), ""),
+                    None => (None, "Waiting for calibrated reports…"),
+                },
+                Err(()) => (None, "Bridge status is unavailable."),
+            };
+            status.set_text(message);
+            status.set_visible(!message.is_empty());
+            for (index, (row, scale)) in velocity.iter().enumerate() {
+                let value = sample.map(|sample| sample[0][index]);
+                scale.set_value(f64::from(value.unwrap_or_default()));
+                scale.set_opacity(if value.is_some() { 1.0 } else { 0.45 });
+                row.set_subtitle(&value.map_or_else(|| "—".into(), |value| format!("{value:+.3}")));
+            }
+            acceleration.set_subtitle(&sample.map_or_else(
+                || "—".into(),
+                |[_, [x, y, z]]| format!("X {x:+.3}    Y {y:+.3}    Z {z:+.3}"),
+            ));
+        },
+    );
     group
 }
 

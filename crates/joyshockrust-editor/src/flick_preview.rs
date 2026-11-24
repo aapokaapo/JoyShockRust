@@ -1,3 +1,4 @@
+use joyshockrust_ipc::status::Field;
 use std::{
     cell::{Cell, RefCell},
     f64::consts::{FRAC_PI_2, TAU},
@@ -136,7 +137,7 @@ async fn active_node(
     address: &gio::UnixSocketAddress,
 ) -> Result<Option<PathBuf>, glib::Error> {
     Ok(
-        controller_input::status_value(client, address, "active_hidraw=")
+        controller_input::status_value(client, address, Field::ActiveHidraw)
             .await?
             .as_deref()
             .and_then(hidraw_path),
@@ -144,9 +145,7 @@ async fn active_node(
 }
 
 fn hidraw_path(value: &str) -> Option<PathBuf> {
-    let suffix = value.strip_prefix("/dev/hidraw")?;
-    (!suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| PathBuf::from(value))
+    joyshockrust_ipc::status::hidraw_device_name(value).then(|| PathBuf::from(value))
 }
 
 async fn poll_input(

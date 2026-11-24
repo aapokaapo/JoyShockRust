@@ -768,6 +768,7 @@ dependencies = [
  "joyshockrust-config",
  "joyshockrust-core",
  "joyshockrust-input",
+ "joyshockrust-ipc",
  "joyshockrust-motion",
  "libadwaita",
  "libc",
@@ -783,6 +784,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "joyshockrust-ipc"
+version = "0.1.0"
+dependencies = [
+ "joyshockrust-core",
+]
+
+[[package]]
 name = "joyshockrust-linux"
 version = "0.1.0"
 dependencies = [
@@ -791,6 +799,7 @@ dependencies = [
  "joyshockrust-config",
  "joyshockrust-core",
  "joyshockrust-input",
+ "joyshockrust-ipc",
  "joyshockrust-motion",
  "nix",
  "serde",
@@ -811,6 +820,7 @@ name = "joyshockrust-tray"
 version = "0.1.0"
 dependencies = [
  "joyshockrust-config",
+ "joyshockrust-ipc",
  "ksni",
 ]
 

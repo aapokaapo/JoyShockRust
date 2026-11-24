@@ -1,6 +1,15 @@
+use joyshockrust_ipc::{
+    RELOAD_SOCKET,
+    control::{
+        InlineProfile, LOAD_PROFILE_PATH_PREFIX, MAX_PROFILE_BYTES, MAX_PROFILE_NAME_BYTES, Reply,
+        SELECT_CONTROLLER_PREFIX, SET_EMULATION_MASTER_PREFIX, SET_EMULATION_PREFIX,
+        SET_GAMEPAD_PREFIX, SET_GYRO_MOUSE_PREFIX, SET_OUTPUTS_PREFIX, TRIGGER_PREVIEW_PREFIX,
+        TRIGGER_TRAVEL_PREFIX, UNLOAD_PROFILE_REQUEST, load_socket_path, profile_path_payload,
+    },
+};
+
 use std::{
     cell::Cell,
-    ffi::OsStr,
     fmt::Display,
     fs::OpenOptions,
     io::{self, Read, Write},
@@ -8,7 +17,6 @@ use std::{
         fd::{AsFd, BorrowedFd},
         linux::net::SocketAddrExt,
         unix::{
-            ffi::OsStrExt,
             fs::OpenOptionsExt,
             net::{SocketAddr, UnixDatagram, UnixListener, UnixStream},
         },
@@ -35,20 +43,6 @@ use crate::{
     status::{self, ProfileSource, StatusSocket},
     trigger_travel,
 };
-
-const MAX_PROFILE_BYTES: usize = 64 * 1024;
-const MAX_PROFILE_NAME_BYTES: usize = 4096;
-const LOAD_PROFILE_PREFIX: &[u8] = b"\0load-profile\n";
-const LOAD_PROFILE_PATH_PREFIX: &[u8] = b"\0load-profile-path\n";
-const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
-const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
-const SET_GAMEPAD_PREFIX: &[u8] = b"\0set-gamepad\n";
-const SET_GYRO_MOUSE_PREFIX: &[u8] = b"\0set-gyro-mouse\n";
-const SET_EMULATION_PREFIX: &[u8] = b"\0set-emulation\n";
-const SET_EMULATION_MASTER_PREFIX: &[u8] = b"\0set-emulation-master\n";
-const SET_OUTPUTS_PREFIX: &[u8] = b"\0set-outputs\n";
-const TRIGGER_PREVIEW_PREFIX: &[u8] = b"\0preview-trigger\n";
-const TRIGGER_TRAVEL_PREFIX: &[u8] = b"\0preview-trigger-travel\n";
 
 pub struct Reload {
     path: Option<PathBuf>,
@@ -203,12 +197,6 @@ impl OutputTarget {
     }
 }
 
-struct InlineProfile<'a> {
-    name: Option<&'a OsStr>,
-    path: Option<&'a Path>,
-    contents: &'a [u8],
-}
-
 impl Request<'_> {
     fn is_unload(&self) -> bool {
         matches!(&self.client, Some(Client::Load(_, data)) if data == UNLOAD_PROFILE_REQUEST)
@@ -240,47 +228,10 @@ impl Request<'_> {
     }
 
     fn inline_profile(&self) -> Result<Option<InlineProfile<'_>>, &'static str> {
-        let Some(Client::Load(_, data)) = &self.client else {
-            return Ok(None);
-        };
-        let (data, has_path) = if let Some(data) = data.strip_prefix(LOAD_PROFILE_PATH_PREFIX) {
-            (data, true)
-        } else if let Some(data) = data.strip_prefix(LOAD_PROFILE_PREFIX) {
-            (data, false)
-        } else {
-            // Older clients send only the TOML bytes.
-            return Ok(Some(InlineProfile {
-                name: None,
-                path: None,
-                contents: data,
-            }));
-        };
-        let end = data
-            .iter()
-            .position(|&byte| byte == 0)
-            .ok_or("profile request needs a source and profile")?;
-        let source = &data[..end];
-        if source.is_empty() || source.len() > MAX_PROFILE_NAME_BYTES {
-            return Err("invalid profile source");
+        match &self.client {
+            Some(Client::Load(_, data)) => InlineProfile::decode(data).map(Some),
+            _ => Ok(None),
         }
-        let name = OsStr::from_bytes(source);
-        let path = Path::new(name);
-        let (name, path) = if has_path {
-            if !path.is_absolute() || path.file_name().is_none() {
-                return Err("expected an absolute profile path");
-            }
-            (path.file_name(), Some(path))
-        } else {
-            if source.contains(&b'/') {
-                return Err("invalid profile filename");
-            }
-            (Some(name), None)
-        };
-        Ok(Some(InlineProfile {
-            name,
-            path,
-            contents: &data[end + 1..],
-        }))
     }
 
     pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
@@ -353,7 +304,7 @@ impl Request<'_> {
         } else if let Some(path) = &self.reload.path {
             profile::load(path)
         } else {
-            self.reply(b"unavailable\n");
+            self.reply(Reply::Unavailable.bytes());
             return None;
         };
         match profile {
@@ -388,17 +339,17 @@ impl Request<'_> {
 
     pub fn applied(self, status: Option<&StatusSocket>) {
         if self.command_payload(SET_OUTPUTS_PREFIX).is_some() {
-            self.reply(b"applied\n");
+            self.reply(Reply::Applied.bytes());
             return;
         }
         if self.emulation_payload().is_some() {
             eprintln!("Emulation setting updated from CLI");
-            self.reply(b"applied\n");
+            self.reply(Reply::Applied.bytes());
             return;
         }
         if self.selection_payload().is_some() {
             eprintln!("Controller selection updated from CLI");
-            self.reply(b"applied\n");
+            self.reply(Reply::Applied.bytes());
             return;
         }
         self.reload.outcome.set(Outcome::Applied);
@@ -436,17 +387,17 @@ impl Request<'_> {
         if let Some(status) = status {
             status.set_profile(source, name, path);
         }
-        self.reply(b"applied\n");
+        self.reply(Reply::Applied.bytes());
     }
     pub fn rejected(&self, err: impl Display) {
         if self.emulation_payload().is_some() {
             eprintln!("Emulation setting rejected: {err}");
-            self.reply(b"rejected\n");
+            self.reply(Reply::Rejected.bytes());
             return;
         }
         if self.selection_payload().is_some() {
             eprintln!("Controller selection rejected: {err}");
-            self.reply(b"rejected\n");
+            self.reply(Reply::Rejected.bytes());
             return;
         }
         self.reload.outcome.set(Outcome::Rejected);
@@ -455,7 +406,7 @@ impl Request<'_> {
         } else if let Some(path) = &self.reload.path {
             eprintln!("Profile reload rejected ({}): {err}", path.display());
         }
-        self.reply(b"rejected\n");
+        self.reply(Reply::Rejected.bytes());
     }
 
     fn reply(&self, response: &[u8]) {
@@ -475,33 +426,27 @@ impl Request<'_> {
 }
 
 pub fn request(path: Option<&Path>) -> io::Result<()> {
-    let stream = status::connect(path, "reload.sock")?;
+    let stream = status::connect(path, RELOAD_SOCKET)?;
     let mut response = Vec::new();
     stream.take(32).read_to_end(&mut response)?;
     check_reply(&response, "profile reload")
 }
 
 fn check_reply(response: &[u8], operation: &str) -> io::Result<()> {
-    match response {
-        b"applied\n" => Ok(()),
-        b"unavailable\n" => Err(io::Error::new(
+    match Reply::parse(response) {
+        Some(Reply::Applied) => Ok(()),
+        Some(Reply::Unavailable) => Err(io::Error::new(
             io::ErrorKind::NotFound,
             "no startup profile configured; use --load-profile PATH",
         )),
-        b"rejected\n" => Err(io::Error::other(format!(
+        Some(Reply::Rejected) => Err(io::Error::other(format!(
             "{operation} rejected; see the bridge log for details"
         ))),
-        _ => Err(io::Error::new(
+        None => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("{operation} returned no valid result"),
         )),
     }
-}
-
-fn load_socket_path(reload_socket: &Path) -> PathBuf {
-    let mut path = reload_socket.as_os_str().to_owned();
-    path.push(".load");
-    path.into()
 }
 
 pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<()> {
@@ -526,20 +471,7 @@ pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<(
         ));
     }
 
-    let absolute = std::path::absolute(source)?;
-    let path = absolute.as_os_str().as_bytes();
-    if path.len() > MAX_PROFILE_NAME_BYTES || absolute.file_name().is_none() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "invalid profile path",
-        ));
-    }
-    let mut payload =
-        Vec::with_capacity(LOAD_PROFILE_PATH_PREFIX.len() + path.len() + 1 + profile.len());
-    payload.extend_from_slice(LOAD_PROFILE_PATH_PREFIX);
-    payload.extend_from_slice(path);
-    payload.push(0);
-    payload.extend_from_slice(&profile);
+    let payload = profile_path_payload(&std::path::absolute(source)?, &profile)?;
     send_update(&payload, reload_socket, "profile reload")
 }
 
@@ -624,7 +556,7 @@ pub fn select_controller(
 }
 
 fn send_update(payload: &[u8], reload_socket: Option<&Path>, operation: &str) -> io::Result<()> {
-    let path = load_socket_path(&status::socket_path(reload_socket, "reload.sock")?);
+    let path = load_socket_path(&status::socket_path(reload_socket, RELOAD_SOCKET)?);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

@@ -3,6 +3,7 @@ members = [
     "crates/joyshockrust-core",
     "crates/joyshockrust-config",
     "crates/joyshockrust-input",
+    "crates/joyshockrust-ipc",
     "crates/joyshockrust-linux",
     "crates/joyshockrust-motion",
     "crates/joyshockrust-tray",

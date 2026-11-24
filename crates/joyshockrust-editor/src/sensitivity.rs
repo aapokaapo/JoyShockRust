@@ -1,3 +1,4 @@
+use joyshockrust_ipc::status::Field;
 use joyshockrust_motion::{
     game_calibration::GameCalibration,
     sensitivity::{DEFAULT_GYRO_SENSITIVITY, MAX_GYRO_SENSITIVITY},
@@ -378,7 +379,7 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
     let plot_ref = plot.downgrade();
     controller_input::watch_status(
         &group,
-        "gyro_speed_dps=",
+        Field::GyroSpeedDps,
         Duration::from_millis(33),
         move |result| {
             let speed = result.ok().flatten().as_deref().and_then(response_input);
@@ -990,7 +991,7 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
     }
     controller_input::watch_status(
         &page,
-        "stick_travel=",
+        Field::StickTravel,
         Duration::from_millis(33),
         move |result| {
             let travel = result.ok().flatten().as_deref().and_then(stick_travel);

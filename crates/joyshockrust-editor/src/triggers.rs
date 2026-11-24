@@ -1,3 +1,5 @@
+use joyshockrust_core::trigger::TriggerSide;
+use joyshockrust_ipc::control::ResistancePreview;
 use std::{cell::Cell, io, os::unix::net::UnixDatagram, path::Path, rc::Rc};
 
 use adw::{gtk, prelude::*};
@@ -21,22 +23,17 @@ const STAGES: [(&str, &str, &str, &str); 2] = [
     ("Full pull", "full", "full_button", "0.95:0.85"),
 ];
 
-pub fn send_preview(payload: &[u8]) -> io::Result<()> {
-    send_preview_message(b"\0preview-trigger\n", payload)
+pub(crate) fn send_preview_message(message: &[u8]) -> io::Result<()> {
+    let path =
+        joyshockrust_config::paths::runtime_socket(joyshockrust_ipc::DEFAULT_LOAD_SOCKET, false)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
+    send_preview_to(&path, message)
 }
 
-pub(crate) fn send_preview_message(prefix: &[u8], payload: &[u8]) -> io::Result<()> {
-    let path = joyshockrust_config::paths::runtime_socket("reload.sock.load", false)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
-    send_preview_to(&path, prefix, payload)
-}
-
-fn send_preview_to(path: &Path, prefix: &[u8], payload: &[u8]) -> io::Result<()> {
+fn send_preview_to(path: &Path, message: &[u8]) -> io::Result<()> {
     let socket = UnixDatagram::unbound()?;
     socket.set_nonblocking(true)?;
-    let mut message = prefix.to_vec();
-    message.extend_from_slice(payload);
-    socket.send_to(&message, path)?;
+    socket.send_to(message, path)?;
     Ok(())
 }
 
@@ -585,12 +582,16 @@ fn save_effect(
     }) {
         return;
     }
-    let side = u8::from(side == "r2");
+    let side = TriggerSide::parse(side).expect("trigger inspector selected a trigger");
     let [start, strength] = if enabled { [start, strength] } else { [0, 0] };
     let result = ctx
         .editor
         .borrow_mut()
-        .preview_trigger([side, start, strength]);
+        .preview_trigger(ResistancePreview::Set {
+            side,
+            start,
+            strength,
+        });
     feedback.set_visible(result.is_err());
     if let Err(error) = result {
         feedback.set_text(&format!(
@@ -617,7 +618,7 @@ mod tests {
             (&[0, 0, 0][..], &b"\0preview-trigger\n\x00\x00\x00"[..]),
             (&[][..], &b"\0preview-trigger\n"[..]),
         ] {
-            send_preview_to(&path, b"\0preview-trigger\n", payload).unwrap();
+            send_preview_to(&path, &ResistancePreview::parse(payload).unwrap().encode()).unwrap();
             let mut buffer = [0; 32];
             let (len, sender) = listener.recv_from(&mut buffer).unwrap();
             assert!(sender.is_unnamed());

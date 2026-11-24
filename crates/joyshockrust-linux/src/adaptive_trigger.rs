@@ -32,10 +32,8 @@ pub enum Effect {
 
 impl Effect {
     pub fn validate(self) -> Result<Self, &'static str> {
-        if let Self::Resistance { start, strength } = self
-            && (start > 9 || !(1..=8).contains(&strength))
-        {
-            return Err("adaptive trigger resistance requires start 0–9 and strength 1–8");
+        if let Self::Resistance { start, strength } = self {
+            joyshockrust_core::trigger::validate_resistance(start, strength)?;
         }
         Ok(self)
     }
@@ -66,20 +64,25 @@ pub enum Preview {
 
 impl Preview {
     pub fn parse(payload: &[u8]) -> Result<Self, &'static str> {
-        match payload {
-            [] => Ok(Self::Reset),
-            &[side @ 0..=1, start, strength] => {
-                let effect = if start == 0 && strength == 0 {
+        use joyshockrust_core::trigger::TriggerSide;
+        use joyshockrust_ipc::control::ResistancePreview;
+        match ResistancePreview::parse(payload)? {
+            ResistancePreview::Reset => Ok(Self::Reset),
+            ResistancePreview::Set {
+                side,
+                start,
+                strength,
+            } => {
+                let effect = if strength == 0 {
                     Effect::Off
                 } else {
-                    Effect::Resistance { start, strength }.validate()?
+                    Effect::Resistance { start, strength }
                 };
                 Ok(Self::Set {
-                    side: usize::from(side),
+                    side: usize::from(side == TriggerSide::Right),
                     effect,
                 })
             }
-            _ => Err("invalid adaptive trigger preview"),
         }
     }
 }

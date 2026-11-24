@@ -1,3 +1,4 @@
+use joyshockrust_ipc::status::Field;
 use std::{
     cell::RefCell,
     fs::{File, OpenOptions},
@@ -16,14 +17,14 @@ use joyshockrust_input::{
 };
 
 pub fn status_address() -> Option<gio::UnixSocketAddress> {
-    joyshockrust_config::paths::runtime_socket("status.sock", true)
+    joyshockrust_config::paths::runtime_socket(joyshockrust_ipc::STATUS_SOCKET, true)
         .map(|path| gio::UnixSocketAddress::new(&path))
 }
 
 pub async fn status_value(
     client: &gio::SocketClient,
     address: &gio::UnixSocketAddress,
-    key: &str,
+    key: Field,
 ) -> Result<Option<String>, glib::Error> {
     let connection = client.connect_future(address).await?;
     let stream = gio::DataInputStream::new(&connection.input_stream());
@@ -34,7 +35,7 @@ pub async fn status_value(
         else {
             break;
         };
-        if let Some(value) = line.strip_prefix(key) {
+        if let Some(value) = key.line_value(&line) {
             return Ok(Some(value.to_owned()));
         }
     }
@@ -43,7 +44,7 @@ pub async fn status_value(
 
 pub fn watch_status(
     widget: &impl IsA<gtk::Widget>,
-    key: &'static str,
+    key: Field,
     interval: Duration,
     update: impl Fn(Result<Option<String>, ()>) + 'static,
 ) {

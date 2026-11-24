@@ -24,7 +24,7 @@ pub struct TriggerGate {
     release: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TriggerSide {
     Left,
     Right,
@@ -152,5 +152,13 @@ fn parse_pair<T: FromStr + From<u8> + PartialOrd>(
         Ok((press, release))
     } else {
         Err("trigger thresholds must satisfy 0 <= release < press <= 1")
+    }
+}
+
+pub fn validate_resistance(start: u8, strength: u8) -> Result<(), &'static str> {
+    if start > 9 || !(1..=8).contains(&strength) {
+        Err("adaptive trigger resistance requires start 0–9 and strength 1–8")
+    } else {
+        Ok(())
     }
 }

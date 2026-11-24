@@ -1,9 +1,13 @@
 use joyshockrust_config::paths::{self, APP_DIRECTORY, PROFILE_FILE, PROFILES_DIRECTORY};
+use joyshockrust_ipc::{
+    STATUS_SOCKET,
+    status::{Field, STATUS_VERSION, decode_profile_path, hidraw_device_name},
+};
 
 use std::{
     env, fs,
     io::{self, Read},
-    os::unix::{ffi::OsStringExt, net::UnixStream},
+    os::unix::net::UnixStream,
     path::PathBuf,
     process::{Child, Command},
     sync::mpsc,
@@ -82,27 +86,22 @@ struct Status {
 
 impl Status {
     fn parse(reply: &str) -> Option<Self> {
-        let raw_field = |key| {
-            reply
-                .lines()
-                .filter_map(|line| line.split_once('='))
-                .find_map(|(name, value)| (name == key).then_some(value))
-        };
+        let raw_field = |key: Field| key.value(reply);
         let field = |key| raw_field(key).filter(|&value| value != "none");
-        if field("version") != Some("1") {
+        if field(Field::Version) != Some(STATUS_VERSION) {
             return None;
         }
-        let connected = match field("controller")? {
+        let connected = match field(Field::Controller)? {
             "connected" => true,
             "waiting" => false,
             _ => return None,
         };
-        let model = match field("model") {
+        let model = match field(Field::Model) {
             Some("dualsense") => "DualSense",
             Some("dualsense_edge") => "DualSense Edge",
             _ => "Controller",
         };
-        let transport = field("transport").filter(|_| connected);
+        let transport = field(Field::Transport).filter(|_| connected);
         let connection_icon = match transport {
             Some("usb") => "drive-harddisk-usb-symbolic",
             Some("bluetooth") => "bluetooth-symbolic",
@@ -114,14 +113,14 @@ impl Status {
             "No active controller"
         }
         .into();
-        let rate = field("report_rate_hz")
+        let rate = field(Field::ReportRateHz)
             .filter(|_| connected)
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|value| value.is_finite() && *value >= 0.0)
             .map_or_else(|| "—".into(), |rate| format!("{rate:.1} Hz"));
-        let battery = match field("battery_state").filter(|_| transport == Some("bluetooth")) {
+        let battery = match field(Field::BatteryState).filter(|_| transport == Some("bluetooth")) {
             Some("discharging") => Some(
-                field("battery_percent")
+                field(Field::BatteryPercent)
                     .and_then(|value| value.parse::<u8>().ok())
                     .filter(|&value| value <= 100)
                     .map_or_else(
@@ -137,13 +136,13 @@ impl Status {
             Some("not_charging") => Some("🔋⏸".into()),
             _ => None,
         };
-        let fallback_profile = match field("profile_source") {
+        let fallback_profile = match field(Field::ProfileSource) {
             Some("loaded") => "Loaded profile",
             Some("startup") => "Startup profile",
             Some("command_line") => "Command-line mappings",
             _ => "Default mappings",
         };
-        let profile = raw_field("profile_name")
+        let profile = raw_field(Field::ProfileName)
             .filter(|name| !name.is_empty())
             .unwrap_or(fallback_profile);
         let enabled = |key| field(key).and_then(|value| value.parse::<bool>().ok());
@@ -152,32 +151,19 @@ impl Status {
             connection_icon,
             rate,
             battery,
-            active_node: field("active_hidraw")
+            active_node: field(Field::ActiveHidraw)
                 .filter(|_| connected)
                 .map(str::to_owned),
             profile: profile.into(),
-            active_profile: field("profile_path_hex").and_then(decode_profile_path),
-            outputs_paused: field("outputs_paused") == Some("true"),
-            emulation_master: enabled("emulation_master_enabled"),
-            gamepad_selected: enabled("virtual_gamepad_selected")
-                .or_else(|| enabled("virtual_gamepad_enabled")),
-            gyro_mouse_selected: enabled("gyro_mouse_selected")
-                .or_else(|| enabled("gyro_mouse_enabled")),
+            active_profile: field(Field::ProfilePathHex).and_then(decode_profile_path),
+            outputs_paused: field(Field::OutputsPaused) == Some("true"),
+            emulation_master: enabled(Field::EmulationMasterEnabled),
+            gamepad_selected: enabled(Field::VirtualGamepadSelected)
+                .or_else(|| enabled(Field::VirtualGamepadEnabled)),
+            gyro_mouse_selected: enabled(Field::GyroMouseSelected)
+                .or_else(|| enabled(Field::GyroMouseEnabled)),
         })
     }
-}
-
-fn decode_profile_path(hex: &str) -> Option<PathBuf> {
-    let (chunks, remainder) = hex.as_bytes().as_chunks::<2>();
-    if !remainder.is_empty() {
-        return None;
-    }
-    let bytes: Vec<u8> = chunks
-        .iter()
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
-        .collect::<Option<_>>()?;
-    let path = PathBuf::from(std::ffi::OsString::from_vec(bytes));
-    path.is_absolute().then_some(path)
 }
 
 #[derive(Clone, Debug)]
@@ -464,11 +450,7 @@ impl Desktop {
         let node = status
             .active_node
             .as_deref()
-            .filter(|node| {
-                node.strip_prefix("/dev/hidraw").is_some_and(|suffix| {
-                    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-                })
-            })
+            .filter(|node| hidraw_device_name(node))
             .ok_or_else(|| io::Error::other("connect a controller to calibrate"))?;
         let mut dialog = Command::new(self.bridge.with_file_name("joyshockrust-editor"));
         if game {
@@ -586,7 +568,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         bridge: env::current_exe()?.with_file_name("joyshockrust-linux"),
         config: paths::config_home(paths::absolute_env("XDG_CONFIG_HOME"), Some(home))
             .expect("absolute home has a config fallback"),
-        status_socket: paths::runtime_socket("status.sock", true)
+        status_socket: paths::runtime_socket(STATUS_SOCKET, true)
             .ok_or("XDG_RUNTIME_DIR must be an absolute path")?,
     };
     let (sender, receiver) = mpsc::channel();

@@ -1,3 +1,4 @@
+use joyshockrust_ipc::status::Field;
 use std::{cell::Cell as State, rc::Rc, time::Duration};
 
 use adw::{gtk, prelude::*};
@@ -461,7 +462,7 @@ fn live_preview(
     let chart = area.clone();
     controller_input::watch_status(
         &preview,
-        "touch_contacts=",
+        Field::TouchContacts,
         Duration::from_millis(33),
         move |result| {
             let (points, message) = match result {

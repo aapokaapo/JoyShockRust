@@ -1,3 +1,7 @@
+use joyshockrust_ipc::{
+    STATUS_SOCKET,
+    status::{Field, STATUS_VERSION, encode_profile_path, write_field},
+};
 use std::{
     cell::{Cell, RefCell},
     ffi::OsStr,
@@ -5,10 +9,7 @@ use std::{
     io::{self, Read, Write},
     os::{
         fd::{AsFd, BorrowedFd},
-        unix::{
-            ffi::OsStrExt,
-            net::{UnixListener, UnixStream},
-        },
+        unix::net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -150,19 +151,10 @@ impl StatusSocket {
         self.profile_source.set(source);
         self.profile_name
             .replace(name.map(|name| name.to_string_lossy().escape_debug().to_string()));
-        self.profile_path_hex
-            .replace(
-                path.and_then(|path| std::path::absolute(path).ok())
-                    .map(|path| {
-                        use std::fmt::Write;
-                        let bytes = path.as_os_str().as_bytes();
-                        let mut encoded = String::with_capacity(bytes.len() * 2);
-                        for byte in bytes {
-                            let _ = write!(encoded, "{byte:02x}");
-                        }
-                        encoded
-                    }),
-            );
+        self.profile_path_hex.replace(
+            path.and_then(|path| std::path::absolute(path).ok())
+                .map(|path| encode_profile_path(&path)),
+        );
     }
 
     pub fn set_active_hidraw(&self, path: &Path) {
@@ -359,54 +351,132 @@ impl StatusSocket {
         let outputs_paused = self.outputs_paused.get();
         let gyro_selected = self.gyro_override.get().unwrap_or(snapshot.gyro_configured);
         let gyro_enabled = master_enabled && gyro_selected;
-        let mut response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\nactive_hidraw={active_hidraw}\nvirtual_gamepad_enabled={gamepad_enabled}\nvirtual_gamepad_kind={gamepad_kind}\nvirtual_gamepad_sysfs={gamepad_sysfs}\nnative_touchpad_grabbed={touchpad_grabbed}\nnative_touchpad_grab_requested={touchpad_grab_requested}\noutputs_paused={outputs_paused}\nprofile_name={profile_name}\ngyro_mouse_enabled={gyro_enabled}\nemulation_master_enabled={master_enabled}\nvirtual_gamepad_selected={gamepad_selected}\ngyro_mouse_selected={gyro_selected}\n",
+        let mut response = String::with_capacity(1024);
+        write_field(&mut response, Field::Version, STATUS_VERSION);
+        write_field(&mut response, Field::Controller, controller);
+        write_field(
+            &mut response,
+            Field::GyroConfigured,
             snapshot.gyro_configured,
-            reports.decoded,
-            reports.rejected,
+        );
+        write_field(&mut response, Field::LastReload, last_reload);
+        write_field(&mut response, Field::Transport, transport);
+        write_field(&mut response, Field::Model, model);
+        write_field(&mut response, Field::BatteryState, battery_state);
+        write_field(&mut response, Field::BatteryPercent, percent);
+        write_field(&mut response, Field::ReportsDecoded, reports.decoded);
+        write_field(&mut response, Field::ReportsRejected, reports.rejected);
+        write_field(&mut response, Field::ReportRateHz, rate);
+        write_field(
+            &mut response,
+            Field::ReportFullBatches,
             reports.full_batches,
+        );
+        write_field(
+            &mut response,
+            Field::UinputGamepadBatches,
             reports.gamepad_batches,
+        );
+        write_field(
+            &mut response,
+            Field::UinputMouseBatches,
             reports.mouse_batches,
+        );
+        write_field(
+            &mut response,
+            Field::ControllerSessionsStarted,
             sessions.started,
+        );
+        write_field(
+            &mut response,
+            Field::ControllerSessionsEnded,
             sessions.ended,
+        );
+        write_field(&mut response, Field::SelectedTransport, selected_transport);
+        write_field(&mut response, Field::SelectedModel, selected_model);
+        write_field(
+            &mut response,
+            Field::ControllerIdConfigured,
             filter.controller_id.is_some(),
+        );
+        write_field(
+            &mut response,
+            Field::UinputKeyboardBatches,
             reports.keyboard_batches,
+        );
+        write_field(
+            &mut response,
+            Field::UinputMouseButtonBatches,
             reports.mouse_button_batches,
         );
+        write_field(&mut response, Field::ProfileSource, profile_source);
+        write_field(&mut response, Field::ActiveHidraw, active_hidraw);
+        write_field(&mut response, Field::VirtualGamepadEnabled, gamepad_enabled);
+        write_field(&mut response, Field::VirtualGamepadKind, gamepad_kind);
+        write_field(&mut response, Field::VirtualGamepadSysfs, gamepad_sysfs);
+        write_field(
+            &mut response,
+            Field::NativeTouchpadGrabbed,
+            touchpad_grabbed,
+        );
+        write_field(
+            &mut response,
+            Field::NativeTouchpadGrabRequested,
+            touchpad_grab_requested,
+        );
+        write_field(&mut response, Field::OutputsPaused, outputs_paused);
+        write_field(&mut response, Field::ProfileName, profile_name);
+        write_field(&mut response, Field::GyroMouseEnabled, gyro_enabled);
+        write_field(&mut response, Field::EmulationMasterEnabled, master_enabled);
+        write_field(
+            &mut response,
+            Field::VirtualGamepadSelected,
+            gamepad_selected,
+        );
+        write_field(&mut response, Field::GyroMouseSelected, gyro_selected);
         if let Some(path) = self.profile_path_hex.borrow().as_deref() {
-            use std::fmt::Write;
-            let _ = writeln!(response, "profile_path_hex={path}");
+            write_field(&mut response, Field::ProfilePathHex, path);
         }
         let imu = self.imu.get();
         if let (Some(factory), Some(raw)) = (imu.factory, imu.sample) {
-            use std::fmt::Write;
             let sample = factory.convert(raw);
             let [gx, gy, gz] =
                 std::array::from_fn(|i| sample.gyro_dps[i] - imu.bias.gyro_bias_dps[i]);
             let [ax, ay, az] = sample.accel_g;
-            let _ = writeln!(
-                response,
-                "imu={gx:.4},{gy:.4},{gz:.4},{ax:.4},{ay:.4},{az:.4}"
+            write_field(
+                &mut response,
+                Field::Imu,
+                format_args!("{gx:.4},{gy:.4},{gz:.4},{ax:.4},{ay:.4},{az:.4}"),
             );
             let speed = imu.projected_interval.map_or_else(
                 || f64::from(gx).hypot(f64::from(gy)),
                 |([x, y], duration)| f64::from(x).hypot(f64::from(y)) / duration.as_secs_f64(),
             );
-            let _ = writeln!(response, "gyro_speed_dps={speed:.4}");
+            write_field(
+                &mut response,
+                Field::GyroSpeedDps,
+                format_args!("{speed:.4}"),
+            );
         }
         if let Some(sticks) = snapshot.sticks {
-            use std::fmt::Write;
             let [left, right] =
                 sticks.map(|stick| 100.0 * f64::from(stick.x).hypot(f64::from(stick.y)).min(1.0));
-            let _ = writeln!(response, "stick_travel={left:.4},{right:.4}");
+            write_field(
+                &mut response,
+                Field::StickTravel,
+                format_args!("{left:.4},{right:.4}"),
+            );
         }
         if let Some([left, right]) = snapshot.triggers {
-            use std::fmt::Write;
-            let _ = writeln!(response, "trigger_travel={left:.6},{right:.6}");
+            write_field(
+                &mut response,
+                Field::TriggerTravel,
+                format_args!("{left:.6},{right:.6}"),
+            );
         }
         if let Some(contacts) = snapshot.touch_contacts {
             use std::fmt::Write;
-            let _ = write!(response, "touch_contacts=");
+            let _ = write!(response, "{}=", Field::TouchContacts.name());
             for (index, contact) in contacts.into_iter().flatten().enumerate() {
                 let separator = if index == 0 { "" } else { ";" };
                 let _ = write!(response, "{separator}{},{}", contact.x, contact.y);
@@ -437,7 +507,7 @@ impl StatusSocket {
 }
 
 pub fn query(path: Option<&Path>, mut output: impl Write) -> io::Result<()> {
-    let stream = connect(path, "status.sock")?;
+    let stream = connect(path, STATUS_SOCKET)?;
     // Allow a full escaped Linux path in the active_hidraw field.
     io::copy(&mut stream.take(64 * 1024), &mut output)?;
     Ok(())

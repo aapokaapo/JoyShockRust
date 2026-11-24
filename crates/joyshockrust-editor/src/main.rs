@@ -1,3 +1,4 @@
+use joyshockrust_ipc::control::ResistancePreview;
 use std::{
     env, fs,
     io::{self, Write},
@@ -137,15 +138,15 @@ impl Editor {
         Ok(())
     }
 
-    fn preview_trigger(&mut self, payload: [u8; 3]) -> io::Result<()> {
-        triggers::send_preview(&payload)?;
+    fn preview_trigger(&mut self, preview: ResistancePreview) -> io::Result<()> {
+        triggers::send_preview_message(&preview.encode())?;
         self.trigger_preview_active = true;
         Ok(())
     }
 
     fn clear_trigger_preview(&mut self) {
         if self.trigger_preview_active {
-            if let Err(error) = triggers::send_preview(&[]) {
+            if let Err(error) = triggers::send_preview_message(&ResistancePreview::Reset.encode()) {
                 eprintln!("Could not end adaptive trigger preview: {error}");
             }
             self.trigger_preview_active = false;
