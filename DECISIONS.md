@@ -567,6 +567,10 @@ Desktop polling and command execution stay outside the input process.
 The user installation places it in the `hicolor` fallback theme.
 [Icon Theme Specification](https://specifications.freedesktop.org/icon-theme-spec/latest/)
 
+The running profile editor uses the desktop entry's application ID
+so Wayland shells can associate its window with the installed icon.
+[XDG Shell application ID](https://wayland.app/protocols/xdg-shell#xdg_toplevel:request:set_app_id)
+
 For tray RWC calibration, the bridge ends its active output session
 before acknowledging the pause and keeps serving control requests.
 Discovery resumes with the existing profile and controller filter.

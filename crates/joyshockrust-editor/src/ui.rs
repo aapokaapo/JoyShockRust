@@ -70,6 +70,7 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("JoyShockRust Profiles")
+        .icon_name(crate::DESKTOP_APP_ID)
         .default_width(1040)
         .default_height(760)
         .build();
