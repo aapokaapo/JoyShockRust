@@ -90,6 +90,7 @@ impl TriggerGate {
         self.side
     }
 
+    #[inline]
     pub fn pressed(self, controls: &Controls, was_pressed: bool) -> bool {
         let travel = match self.side {
             TriggerSide::Left => controls.left_trigger,

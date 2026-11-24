@@ -30,6 +30,7 @@ impl GridSize {
     }
 
     /// Index a point already validated against the input surface dimensions.
+    #[inline]
     pub fn contact_index(self, x: usize, y: usize, width: usize, height: usize) -> usize {
         let column = x * self.columns / width;
         let row = y * self.rows / height;

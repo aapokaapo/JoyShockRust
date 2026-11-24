@@ -54,6 +54,7 @@ impl StickCurve {
         controls
     }
 
+    #[inline]
     fn shape(stick: Stick, exponent: f32) -> Stick {
         let radius_squared = stick.x * stick.x + stick.y * stick.y;
         // Keep center and full travel unchanged, including square corners.
