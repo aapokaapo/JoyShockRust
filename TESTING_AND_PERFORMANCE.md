@@ -59,10 +59,10 @@ These are **engineering targets**, not established measurements. Measure USB and
 
 ## Current acceptance priorities
 
-Use the latest build from the `test` branch. For the revisions
-through `d761a87`, workspace tests and eight headless Wayland editor tests
-passed. Those editor tests exercise GTK controls and synthetic events.
-Use the sequence below to verify the current physical behavior. Record
+Use the latest build from the `test` branch. The
+[headless editor suite](#headless-wayland-editor-tests) covers GTK
+controls and synthetic events. Use the sequence below to verify the
+current physical behavior. Record
 the commit, controller model, USB/Bluetooth, Fedora/kernel, and game and
 input backend where relevant.
 
@@ -80,6 +80,25 @@ and reconnect, Steam controller visibility with the SDL filter, and one
 successful four-turn RWC measure/save. These results precede the current
 editor changes. The detailed procedures below retain their recorded
 scope. [Desktop test procedure](#desktop-tray-acceptance) · [Benchmark procedure](#live-bridge-benchmark)
+
+## Headless Wayland editor tests
+
+CI runs the editor's display-dependent tests using Weston and a private
+D-Bus session. The runner builds the bridge for the stick-mapping test
+and starts a fresh GTK process for each case. It uses a temporary
+runtime directory for the Wayland socket and the editor's IPC paths.
+
+With Weston and `dbus-run-session` available, run from the repository:
+
+```sh
+cargo fetch --locked
+scripts/test-editor-wayland.sh
+```
+
+Set `JOYSHOCKRUST_TEST_BRIDGE` to use a bridge binary from a different
+build location. The tests cover profile draft protection, calibration
+dialogs, key capture and cancellation, output modes, trigger mappings,
+stick zones, touchpad regions, gyro activation and sensitivity.
 
 ## Virtual gamepad acceptance
 

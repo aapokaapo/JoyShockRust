@@ -16,6 +16,10 @@ Characterization tests cover compatibility at their boundaries.
 Synthetic replay and headless editor checks cover the implementation.
 Physical acceptance is tracked separately. [Refactor verification](TESTING_AND_PERFORMANCE.md#shared-library-refactor-verification)
 
+CI also runs the display-dependent editor suite in a headless Wayland
+session. The physical editor sequence remains the next device
+acceptance check. [Headless Wayland editor tests](TESTING_AND_PERFORMANCE.md#headless-wayland-editor-tests)
+
 | Area | Shipped | Next acceptance step |
 |---|---|---|
 | Desktop controls | Tray lifecycle and telemetry, independent controller/profile selection, guided calibration, and a GTK/Wayland editor with live previews and exclusive per-button routing. | Verify the latest editor on Fedora with a physical controller. Check keyboard capture, output isolation, tray profile restore, and calibration navigation. |
