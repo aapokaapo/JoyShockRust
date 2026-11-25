@@ -415,15 +415,23 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         let [x, y] = control.center.map(f64::from);
         let [width, height] = control.size.map(f64::from);
         button.add_css_class("diagram-control");
-        button.set_size_request(width as i32, height as i32);
         if matches!(
             id,
             "triangle" | "cross" | "square" | "circle" | "l3" | "r3" | "ps"
         ) {
             button.add_css_class("circular");
         }
+        if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        }
+        // Keep the SVG coordinates independent of the label's natural width.
+        let slot = gtk::Overlay::builder()
+            .width_request(width as i32)
+            .height_request(height as i32)
+            .build();
+        slot.add_overlay(&button);
         diagram.put(
-            &button,
+            &slot,
             x * ART_SCALE - width / 2.0,
             (y - ART_TOP) * ART_SCALE - height / 2.0,
         );

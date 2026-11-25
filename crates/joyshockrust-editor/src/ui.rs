@@ -1088,13 +1088,24 @@ pub(crate) mod tests {
             overlay: glib::WeakRef::new(),
         };
         let page = controller::page(&ctx);
+        let diagram = descendants::<gtk::Fixed>(&page).into_iter().next().unwrap();
+        // Exercise the diagram with a label wider than its artwork slot.
+        let label_style = gtk::CssProvider::new();
+        label_style.load_from_data("label { letter-spacing: 3px; }");
+        let paddle = descendants::<gtk::ToggleButton>(diagram.upcast_ref())
+            .into_iter()
+            .find(|button| button.label().as_deref() == Some("Right paddle"))
+            .unwrap();
+        let label = paddle.child().and_downcast::<gtk::Label>().unwrap();
+        label
+            .style_context()
+            .add_provider(&label_style, gtk::STYLE_PROVIDER_PRIORITY_USER);
         let window = adw::Window::builder()
             .default_width(460)
             .default_height(620)
             .content(&page)
             .build();
         window.present();
-        let diagram = descendants::<gtk::Fixed>(&page).into_iter().next().unwrap();
         let context = glib::MainContext::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while diagram.width() == 0 && std::time::Instant::now() < deadline {
@@ -1131,18 +1142,22 @@ pub(crate) mod tests {
         assert_eq!(bounds.len(), 22);
         assert!(bounds.iter().all(|(label, _)| label != "Touchpad"));
         let control_bounds = |name: &str| bounds.iter().find(|(label, _)| label == name).unwrap().1;
-        for (stick, function) in [
+        for (upper_label, lower_label) in [
             ("L3", "Left Fn"),
             ("R3", "Right Fn"),
             ("Left Fn", "Left paddle"),
             ("Right Fn", "Right paddle"),
         ] {
-            let stick = control_bounds(stick);
-            let function = control_bounds(function);
-            assert!(function.y() >= stick.y() + stick.height());
+            let upper = control_bounds(upper_label);
+            let lower = control_bounds(lower_label);
+            assert!(
+                lower.y() >= upper.y() + upper.height(),
+                "{lower_label} must be below {upper_label}"
+            );
             assert_eq!(
-                stick.x() + stick.width() / 2.0,
-                function.x() + function.width() / 2.0
+                upper.x() + upper.width() / 2.0,
+                lower.x() + lower.width() / 2.0,
+                "{lower_label} must be centered below {upper_label}"
             );
         }
         for (index, (label, rect)) in bounds.iter().enumerate() {
