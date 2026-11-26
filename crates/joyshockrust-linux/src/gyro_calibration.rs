@@ -87,11 +87,10 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error
             measure(Path::new(&node))?;
         }
         Some("--save") => {
-            let id = args
-                .next()
+            let id = args.next();
+            let id = id
                 .as_deref()
                 .and_then(|arg| arg.to_str())
-                .and_then(ControllerId::parse)
                 .ok_or("expected a controller ID")?;
             let bias = [
                 parse_number(args.next())?,
@@ -101,11 +100,17 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error
             if args.next().is_some() {
                 return Err("expected a controller ID and three bias values".into());
             }
-            save(&bias_path(id)?, bias)?;
+            save_for(id, bias)?;
         }
         _ => return Err("expected --measure or --save".into()),
     }
     Ok(())
+}
+
+/// Store a measured bias for the controller with the given stable ID.
+pub(crate) fn save_for(id: &str, bias: [f32; 3]) -> Result<(), Box<dyn Error>> {
+    let id = ControllerId::parse(id).ok_or("expected a controller ID")?;
+    save(&bias_path(id)?, bias)
 }
 
 fn save(path: &Path, bias: [f32; 3]) -> Result<(), Box<dyn Error>> {

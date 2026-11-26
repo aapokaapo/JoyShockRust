@@ -92,10 +92,10 @@ ordered stick history.
 | `joyshockrust-core` | Transport-neutral controller state, canonical input names, analog trigger gates and touch-grid geometry. |
 | `joyshockrust-config` | TOML profile compilation, legacy compatibility, Linux key names, atomic profile persistence and desktop paths. |
 | `joyshockrust-input` | USB and Bluetooth parsing, factory conversion and device timebase. |
-| `joyshockrust-ipc` | Local status fields, typed telemetry, control and controller inventory codecs, Unix clients and subscription transport. |
+| `joyshockrust-ipc` | Local status fields, typed telemetry, control, calibration session and controller inventory codecs, Unix clients and subscription transport. |
 | `joyshockrust-motion` | Deterministic calibration, gyro and fusion aim, Flick Stick composition, integer pointer motion and stick response. |
 | `joyshockrust-mapping` | Gamepad, keyboard and mouse routing, gesture deadlines, gyro activation, touch regions, layers and trigger stages. |
-| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, runtime profile activation, IPC dispatch at report boundaries, uinput event encoding and feedback. |
+| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, calibration session ownership, runtime profile activation, IPC dispatch at report boundaries, uinput event encoding and feedback. |
 | `joyshockrust-tray` | StatusNotifierItem, desktop lifecycle and calibration launch. |
 | `joyshockrust-editor` | GTK 4/libadwaita profile editing with `toml_edit`, live charts and Wayland calibration windows. |
 

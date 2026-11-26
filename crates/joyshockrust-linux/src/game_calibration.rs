@@ -107,7 +107,7 @@ fn parse_arg<T: std::str::FromStr>(
     arg.and_then(|arg| arg.to_str()?.parse().ok()).ok_or(error)
 }
 
-fn save_measurement(
+pub(crate) fn save_measurement(
     path: &Path,
     counts: i32,
     sensitivity: f64,

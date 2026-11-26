@@ -1,4 +1,7 @@
+mod calibration;
 mod profile_work;
+
+pub use self::calibration::LeaseAction;
 
 use self::profile_work::{
     Completion, PrepareError, PreparedProfile, ProfileInput, ProfileOrigin, Worker,
@@ -7,6 +10,7 @@ pub use joyshockrust_ipc::control::OutputTarget;
 
 use joyshockrust_ipc::{
     RELOAD_SOCKET,
+    calibration::calibration_socket_path,
     control::{
         AddressedCommand, ControlCommand, DecodeError, MAX_DATAGRAM_BYTES, PreviewCommand, Reply,
         load_socket_path,
@@ -23,6 +27,7 @@ use std::{
         unix::net::{SocketAddr, UnixDatagram, UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
+    sync::mpsc::SyncSender,
     time::Instant,
 };
 
@@ -54,6 +59,16 @@ pub struct Reload {
     load_socket: Option<UnixDatagram>,
     outcome: Cell<Outcome>,
     worker: Worker,
+    calibration: Option<calibration::Server>,
+    lease: Cell<Option<Lease>>,
+}
+
+/// Outputs held paused by a calibration session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Lease {
+    session: u64,
+    /// The pause state to restore when the session ends.
+    restore_paused: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -113,6 +128,16 @@ impl Reload {
         let signal =
             SignalFd::with_flags(&signals, SfdFlags::SFD_CLOEXEC | SfdFlags::SFD_NONBLOCK)?;
         let worker = Worker::new(path.clone(), bridge_at_startup)?;
+        // Sessions pause outputs, which requires automatic discovery.
+        let calibration = socket
+            .filter(|_| allow_controller_switch)
+            .and_then(|socket| match start_calibration(socket) {
+                Ok(server) => Some(server),
+                Err(err) => {
+                    eprintln!("Calibration sessions unavailable: {err}");
+                    None
+                }
+            });
         Ok(Self {
             path,
             selection_path,
@@ -123,6 +148,8 @@ impl Reload {
             load_socket,
             outcome: Cell::new(Outcome::NotAttempted),
             worker,
+            calibration,
+            lease: Cell::new(None),
         })
     }
 
@@ -145,6 +172,7 @@ pub struct Request<'a> {
 enum ReplyTo {
     Reload(UnixStream),
     Datagram(SocketAddr),
+    Lease(SyncSender<bool>),
 }
 
 enum Action {
@@ -160,6 +188,7 @@ enum Action {
     Emulation(OutputTarget, bool),
     OutputsPaused(bool),
     Preview(PreviewCommand),
+    Lease(LeaseAction),
 }
 
 pub enum Update {
@@ -186,12 +215,42 @@ impl Request<'_> {
             })),
             Action::Emulation(target, enabled) => Some(Update::Emulation(*target, *enabled)),
             Action::OutputsPaused(paused) => Some(Update::OutputsPaused(*paused)),
+            Action::Lease(LeaseAction::Acquire(session)) => {
+                if self.reload.lease.get().is_some() {
+                    return None;
+                }
+                // Discovery corrects this when outputs were already paused.
+                self.reload.lease.set(Some(Lease {
+                    session: *session,
+                    restore_paused: false,
+                }));
+                Some(Update::OutputsPaused(true))
+            }
+            Action::Lease(LeaseAction::Release(session)) => self
+                .reload
+                .lease
+                .get()
+                .filter(|lease| lease.session == *session)
+                .map(|lease| Update::OutputsPaused(lease.restore_paused)),
             Action::Preview(PreviewCommand::Resistance(preview)) => {
                 Some(Update::TriggerPreview((*preview).into()))
             }
             Action::Preview(PreviewCommand::Travel(preview)) => {
                 Some(Update::TriggerTravel(preview.map(Into::into)))
             }
+        }
+    }
+
+    /// Record the pause state seen before applying a resolved update.
+    pub fn outputs_were_paused(&self, paused: bool) {
+        if let Action::Lease(LeaseAction::Acquire(session)) = self.action
+            && let Some(lease) = self.reload.lease.get()
+            && lease.session == session
+        {
+            self.reload.lease.set(Some(Lease {
+                restore_paused: paused,
+                ..lease
+            }));
         }
     }
 
@@ -209,6 +268,16 @@ impl Request<'_> {
                 match action {
                     Action::Emulation(..) => eprintln!("Emulation setting updated from CLI"),
                     Action::Selection { .. } => eprintln!("Controller selection updated from CLI"),
+                    Action::OutputsPaused(true) => {
+                        // Keep a pause requested during a session after it ends.
+                        if let Some(lease) = self.reload.lease.get() {
+                            self.reload.lease.set(Some(Lease {
+                                restore_paused: true,
+                                ..lease
+                            }));
+                        }
+                    }
+                    Action::Lease(LeaseAction::Release(_)) => self.reload.lease.set(None),
                     _ => {}
                 }
                 self.reload.respond(self.reply.as_ref(), Reply::Applied);
@@ -264,6 +333,16 @@ impl Request<'_> {
             Action::Selection { .. } => eprintln!("Controller selection rejected: {err}"),
             Action::OutputsPaused(_) => eprintln!("Virtual output update rejected: {err}"),
             Action::Preview(_) => eprintln!("Preview rejected: {err}"),
+            Action::Lease(action) => {
+                eprintln!("Calibration session lease rejected: {err}");
+                // A failed acquire holds nothing; a failed release must not
+                // leave outputs locked by a session that has ended.
+                if let Some(lease) = self.reload.lease.get()
+                    && matches!(action, LeaseAction::Acquire(session) | LeaseAction::Release(session) if session == lease.session)
+                {
+                    self.reload.lease.set(None);
+                }
+            }
         }
         self.reload.respond(self.reply.as_ref(), Reply::Rejected);
     }
@@ -280,6 +359,9 @@ impl Reload {
                 if let Some(socket) = &self.load_socket {
                     let _ = socket.send_to_addr(response.bytes(), address);
                 }
+            }
+            Some(ReplyTo::Lease(sender)) => {
+                let _ = sender.try_send(response == Reply::Applied);
             }
             None => {}
         }
@@ -360,6 +442,9 @@ impl Reload {
                 return Ok(None);
             }
             ControlCommand::Emulation { target, enabled } => Ok(Action::Emulation(target, enabled)),
+            ControlCommand::OutputsPaused(false) if self.lease.get().is_some() => {
+                Err("a calibration session owns the controller")
+            }
             ControlCommand::OutputsPaused(paused) if self.allow_controller_switch => {
                 Ok(Action::OutputsPaused(paused))
             }
@@ -383,6 +468,24 @@ impl Reload {
             }
         }
     }
+}
+
+fn start_calibration(reload_socket: &Path) -> io::Result<calibration::Server> {
+    let path = calibration_socket_path(reload_socket);
+    let listener = UnixListener::bind(&path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("could not bind {}: {err}", path.display()),
+        )
+    })?;
+    calibration::Server::start(
+        listener,
+        calibration::Config {
+            program: std::env::current_exe()?,
+            timeouts: calibration::Timeouts::default(),
+            store: Box::new(calibration::Files),
+        },
+    )
 }
 
 pub fn request(path: Option<&Path>) -> io::Result<()> {
@@ -461,6 +564,7 @@ pub fn wait<'a>(
         .chain(preview_at)
         .min();
     let listener = reload.and_then(|reload| reload.listener.as_ref());
+    let calibration = reload.and_then(|reload| reload.calibration.as_ref());
     let load_socket = reload.and_then(|reload| reload.load_socket.as_ref());
     let mut descriptors = [
         PollFd::new(fd, PollFlags::POLLIN),
@@ -478,8 +582,14 @@ pub fn wait<'a>(
             PollFlags::POLLIN,
         ),
         PollFd::new(preview_fd.unwrap_or(fd), PollFlags::POLLIN),
+        PollFd::new(
+            calibration.map_or(fd, |server| server.wake.as_fd()),
+            PollFlags::POLLIN,
+        ),
     ];
-    let len = if preview_fd.is_some() {
+    let len = if calibration.is_some() {
+        10
+    } else if preview_fd.is_some() {
         9
     } else if reload.is_some() {
         8
@@ -565,6 +675,21 @@ pub fn wait<'a>(
             }
         } else if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Err(io::Error::other("profile worker descriptor lost"));
+        }
+    }
+    if let (Some(reload), Some(server)) = (reload, calibration) {
+        let flags = descriptors[9].revents().unwrap_or_else(PollFlags::empty);
+        if flags.contains(PollFlags::POLLIN) {
+            if let Some(lease) = server.receive()? {
+                let request = Request {
+                    reload,
+                    reply: Some(ReplyTo::Lease(lease.reply)),
+                    action: Action::Lease(lease.action),
+                };
+                return Ok((ready, Some(request), feedback_ready));
+            }
+        } else if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
+            return Err(io::Error::other("calibration session descriptor lost"));
         }
     }
     let mut requested = false;
@@ -710,6 +835,8 @@ mod tests {
             listener: None,
             load_socket: None,
             outcome: Cell::new(Outcome::NotAttempted),
+            calibration: None,
+            lease: Cell::new(None),
             worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let current = ControllerFilter {
@@ -769,6 +896,8 @@ mod tests {
             listener: None,
             load_socket: Some(load_socket),
             outcome: Cell::new(Outcome::NotAttempted),
+            calibration: None,
+            lease: Cell::new(None),
             worker: Worker::new(
                 None,
                 BridgeOptions {
@@ -835,6 +964,8 @@ mod tests {
             load_socket: Some(load_socket),
             outcome: Cell::new(Outcome::Applied),
             worker: Worker::new(None, BridgeOptions::default()).unwrap(),
+            calibration: None,
+            lease: Cell::new(None),
         };
         let client = UnixDatagram::unbound().unwrap();
         let (_sender, input) = UnixStream::pair().unwrap();
@@ -908,6 +1039,8 @@ mod tests {
             listener: Some(listener),
             load_socket: None,
             outcome: Cell::new(Outcome::NotAttempted),
+            calibration: None,
+            lease: Cell::new(None),
             worker: Worker::new(Some(startup), BridgeOptions::default()).unwrap(),
         };
         let (_sender, input) = UnixStream::pair().unwrap();
@@ -951,6 +1084,8 @@ mod tests {
             listener: None,
             load_socket: Some(load_socket),
             outcome: Cell::new(Outcome::NotAttempted),
+            calibration: None,
+            lease: Cell::new(None),
             worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let client = UnixDatagram::bind_addr(
@@ -1008,5 +1143,460 @@ mod tests {
         .unwrap();
         assert!(observed_feedback);
         assert_eq!(reload.outcome(), "unavailable");
+    }
+
+    mod calibration_sessions {
+        use std::{
+            fs,
+            io::{BufRead, BufReader},
+            os::unix::fs::PermissionsExt,
+            sync::{Arc, Mutex},
+            thread,
+            time::Duration,
+        };
+
+        use joyshockrust_ipc::calibration::{
+            BridgeMessage, ClientMessage, CloseReason, Progress, SessionKind,
+        };
+
+        use super::super::calibration::{Config, Server, Store, Timeouts};
+        use super::*;
+
+        const WORKER: &str = r#"#!/bin/sh
+case "$1:$2" in
+    --gyro-calibration:--measure)
+        case "${3##*/}" in
+            gyro) printf 'ready\nbias 00:11:22:33:44:55 0.25 0 -0.1\n' ;;
+            unplugged)
+                printf 'ready\n'
+                printf 'Error: "Controller disconnected before gyro calibration finished."\n' >&2
+                exit 1 ;;
+            *) exit 2 ;;
+        esac ;;
+    --calibrate-game:--measure-stick)
+        [ "$3" = 2.5 ] || exit 1
+        case "${4##*/}" in
+            game) printf 'ready\ncenter-stick\nstarted\nno-motion\ncounts 28800\n' ;;
+            slow)
+                printf 'ready\n'
+                echo $$ > "${0%/*}/slow.pid"
+                exec sleep 60 ;;
+            *) exit 2 ;;
+        esac ;;
+    *) exit 3 ;;
+esac
+"#;
+
+        #[derive(Clone, Default)]
+        struct Record(Arc<Mutex<Vec<String>>>);
+
+        impl Store for Record {
+            fn save_gyro(&self, controller: &str, bias: [f32; 3]) -> Result<(), String> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(format!("gyro {controller} {bias:?}"));
+                Ok(())
+            }
+
+            fn save_game(
+                &self,
+                profile: &Path,
+                counts: i32,
+                sensitivity: f64,
+                turns: u32,
+            ) -> Result<f64, String> {
+                if profile.ends_with("fail.toml") {
+                    return Err("disk full".into());
+                }
+                self.0.lock().unwrap().push(format!(
+                    "game {} {counts} {sensitivity} {turns}",
+                    profile.display()
+                ));
+                Ok(40.0)
+            }
+        }
+
+        struct Fixture {
+            directory: PathBuf,
+            socket: PathBuf,
+            reload: Reload,
+            record: Record,
+            paused: Cell<bool>,
+        }
+
+        impl Fixture {
+            fn new(name: &str, timeouts: Timeouts) -> Self {
+                let directory =
+                    std::env::temp_dir().join(format!("jsr-calibration-{name}-{}", process::id()));
+                let _ = fs::remove_dir_all(&directory);
+                fs::create_dir(&directory).unwrap();
+                let program = directory.join("worker");
+                fs::write(&program, WORKER).unwrap();
+                fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+                let socket = directory.join("calibration");
+                let record = Record::default();
+                let server = Server::start(
+                    UnixListener::bind(&socket).unwrap(),
+                    Config {
+                        program,
+                        timeouts,
+                        store: Box::new(record.clone()),
+                    },
+                )
+                .unwrap();
+                let reload = Reload {
+                    path: None,
+                    selection_path: None,
+                    bridge_at_startup: BridgeOptions::default(),
+                    allow_controller_switch: true,
+                    signal: SignalFd::new(&SigSet::empty()).unwrap(),
+                    listener: None,
+                    load_socket: None,
+                    outcome: Cell::new(Outcome::NotAttempted),
+                    worker: Worker::new(None, BridgeOptions::default()).unwrap(),
+                    calibration: Some(server),
+                    lease: Cell::new(None),
+                };
+                Self {
+                    directory,
+                    socket,
+                    reload,
+                    record,
+                    paused: Cell::new(false),
+                }
+            }
+
+            /// Serve lease requests like the discovery loop until `client` ends
+            /// and no lease remains.
+            fn run<T: Send + 'static>(
+                &self,
+                client: impl FnOnce(PathBuf) -> T + Send + 'static,
+            ) -> T {
+                let socket = self.socket.clone();
+                let client = thread::spawn(move || client(socket));
+                let (_sender, idle) = UnixStream::pair().unwrap();
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !client.is_finished() || self.reload.lease.get().is_some() {
+                    assert!(Instant::now() < deadline, "calibration session hung");
+                    let (_, request, _) = wait(
+                        idle.as_fd(),
+                        Some(&self.reload),
+                        None,
+                        None,
+                        Some(Instant::now() + Duration::from_millis(20)),
+                    )
+                    .unwrap();
+                    if let Some(request) = request {
+                        match request.resolve(ControllerFilter::default()) {
+                            Some(Update::OutputsPaused(paused)) => {
+                                request.outputs_were_paused(self.paused.get());
+                                self.paused.set(paused);
+                                request.applied(None).unwrap();
+                            }
+                            Some(_) => panic!("unexpected update"),
+                            None => {}
+                        }
+                    }
+                }
+                client.join().unwrap()
+            }
+        }
+
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.directory);
+            }
+        }
+
+        struct Client {
+            reader: BufReader<UnixStream>,
+            writer: UnixStream,
+        }
+
+        impl Client {
+            fn connect(socket: &Path) -> Self {
+                let writer = UnixStream::connect(socket).unwrap();
+                writer
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                Self {
+                    reader: BufReader::new(writer.try_clone().unwrap()),
+                    writer,
+                }
+            }
+
+            fn begin(socket: &Path, kind: SessionKind, node: &str) -> Self {
+                let mut client = Self::connect(socket);
+                client.send(ClientMessage::Begin {
+                    kind,
+                    node: PathBuf::from("/dev").join(node),
+                });
+                assert!(matches!(client.receive(), BridgeMessage::Started { .. }));
+                client
+            }
+
+            fn send(&mut self, message: ClientMessage) {
+                self.writer
+                    .write_all(message.encode().unwrap().as_bytes())
+                    .unwrap();
+            }
+
+            fn receive(&mut self) -> BridgeMessage {
+                let mut line = String::new();
+                assert_ne!(
+                    self.reader.read_line(&mut line).unwrap(),
+                    0,
+                    "session closed"
+                );
+                BridgeMessage::decode(line.trim_end()).unwrap()
+            }
+
+            fn closed(&mut self) -> bool {
+                let mut line = String::new();
+                self.reader.read_line(&mut line).unwrap() == 0
+            }
+        }
+
+        fn measured_gyro(client: &mut Client) -> u64 {
+            client.send(ClientMessage::MeasureGyro);
+            assert_eq!(client.receive(), BridgeMessage::Progress(Progress::Ready));
+            match client.receive() {
+                BridgeMessage::GyroMeasured {
+                    measurement,
+                    controller,
+                    bias_dps,
+                } => {
+                    assert_eq!(controller, "00:11:22:33:44:55");
+                    assert_eq!(bias_dps, [0.25, 0.0, -0.1]);
+                    measurement
+                }
+                other => panic!("unexpected reply {other:?}"),
+            }
+        }
+
+        #[test]
+        fn gyro_session_saves_the_latest_measurement_and_resumes_outputs() {
+            let fixture = Fixture::new("gyro", Timeouts::default());
+            fixture.run(|socket| {
+                let mut client = Client::begin(&socket, SessionKind::Gyro, "gyro");
+                // Only one session may own the controller.
+                let mut second = Client::connect(&socket);
+                assert_eq!(second.receive(), BridgeMessage::Busy);
+                client.send(ClientMessage::SaveGyro { measurement: 1 });
+                assert!(matches!(client.receive(), BridgeMessage::Rejected(_)));
+                let first = measured_gyro(&mut client);
+                let latest = measured_gyro(&mut client);
+                assert_ne!(first, latest);
+                client.send(ClientMessage::SaveGyro { measurement: first });
+                assert!(matches!(client.receive(), BridgeMessage::Rejected(_)));
+                client.send(ClientMessage::MeasureGame { sensitivity: 2.5 });
+                assert!(matches!(client.receive(), BridgeMessage::Rejected(_)));
+                client.send(ClientMessage::SaveGyro {
+                    measurement: latest,
+                });
+                assert_eq!(client.receive(), BridgeMessage::GyroSaved);
+                client.send(ClientMessage::End);
+                assert!(client.closed());
+            });
+            assert!(!fixture.paused.get());
+            assert_eq!(
+                *fixture.record.0.lock().unwrap(),
+                ["gyro 00:11:22:33:44:55 [0.25, 0.0, -0.1]"]
+            );
+        }
+
+        #[test]
+        fn game_session_reports_progress_and_save_failures() {
+            let fixture = Fixture::new("game", Timeouts::default());
+            fixture.run(|socket| {
+                let mut client = Client::begin(&socket, SessionKind::Game, "game");
+                client.send(ClientMessage::MeasureGame { sensitivity: 2.5 });
+                for progress in [
+                    Progress::Ready,
+                    Progress::CenterStick,
+                    Progress::Started,
+                    Progress::NoMotion,
+                ] {
+                    assert_eq!(client.receive(), BridgeMessage::Progress(progress));
+                }
+                let BridgeMessage::GameMeasured {
+                    measurement,
+                    counts: 28_800,
+                } = client.receive()
+                else {
+                    panic!("expected a measurement");
+                };
+                client.send(ClientMessage::SaveGame {
+                    measurement,
+                    turns: 2,
+                    profile: "/profiles/fail.toml".into(),
+                });
+                assert_eq!(client.receive(), BridgeMessage::Failed("disk full".into()));
+                client.send(ClientMessage::SaveGame {
+                    measurement,
+                    turns: 2,
+                    profile: "/profiles/game.toml".into(),
+                });
+                assert_eq!(
+                    client.receive(),
+                    BridgeMessage::GameSaved { calibration: 40.0 }
+                );
+            });
+            assert!(!fixture.paused.get());
+            assert_eq!(
+                *fixture.record.0.lock().unwrap(),
+                ["game /profiles/game.toml 28800 2.5 2"]
+            );
+        }
+
+        #[test]
+        fn previously_paused_outputs_stay_paused_after_a_failed_measurement() {
+            let fixture = Fixture::new("paused", Timeouts::default());
+            fixture.paused.set(true);
+            fixture.run(|socket| {
+                let mut client = Client::begin(&socket, SessionKind::Gyro, "unplugged");
+                client.send(ClientMessage::MeasureGyro);
+                assert_eq!(client.receive(), BridgeMessage::Progress(Progress::Ready));
+                assert_eq!(
+                    client.receive(),
+                    BridgeMessage::Failed(
+                        "Controller disconnected before gyro calibration finished.".into()
+                    )
+                );
+                client.send(ClientMessage::SaveGyro { measurement: 1 });
+                assert!(matches!(client.receive(), BridgeMessage::Rejected(_)));
+            });
+            assert!(fixture.paused.get());
+            assert!(fixture.record.0.lock().unwrap().is_empty());
+        }
+
+        #[test]
+        fn client_disconnect_stops_the_worker_and_restores_outputs() {
+            let fixture = Fixture::new("crash", Timeouts::default());
+            let pid_file = fixture.directory.join("slow.pid");
+            let pid = fixture.run(move |socket| {
+                let mut client = Client::begin(&socket, SessionKind::Game, "slow");
+                client.send(ClientMessage::MeasureGame { sensitivity: 2.5 });
+                assert_eq!(client.receive(), BridgeMessage::Progress(Progress::Ready));
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let pid = loop {
+                    if let Some(pid) = fs::read_to_string(&pid_file)
+                        .ok()
+                        .and_then(|text| text.trim().parse::<i32>().ok())
+                    {
+                        break pid;
+                    }
+                    assert!(Instant::now() < deadline);
+                    thread::sleep(Duration::from_millis(10));
+                };
+                // Simulate the window crashing mid-measurement.
+                drop(client);
+                pid
+            });
+            assert!(!fixture.paused.get());
+            assert!(!Path::new(&format!("/proc/{pid}")).exists());
+        }
+
+        #[test]
+        fn cancel_and_timeouts_are_bounded() {
+            let fixture = Fixture::new(
+                "timeouts",
+                Timeouts {
+                    game: Duration::from_millis(300),
+                    idle: Duration::from_millis(600),
+                    ..Timeouts::default()
+                },
+            );
+            fixture.run(|socket| {
+                let mut client = Client::begin(&socket, SessionKind::Game, "slow");
+                client.send(ClientMessage::Cancel);
+                assert!(matches!(client.receive(), BridgeMessage::Rejected(_)));
+                client.send(ClientMessage::MeasureGame { sensitivity: 2.5 });
+                assert_eq!(client.receive(), BridgeMessage::Progress(Progress::Ready));
+                client.send(ClientMessage::Cancel);
+                assert_eq!(client.receive(), BridgeMessage::Cancelled);
+                client.send(ClientMessage::MeasureGame { sensitivity: 2.5 });
+                assert_eq!(client.receive(), BridgeMessage::Progress(Progress::Ready));
+                assert_eq!(
+                    client.receive(),
+                    BridgeMessage::Failed("The measurement timed out.".into())
+                );
+                assert_eq!(client.receive(), BridgeMessage::Closed(CloseReason::Idle));
+                assert!(client.closed());
+            });
+            assert!(!fixture.paused.get());
+        }
+
+        #[test]
+        fn sessions_require_begin_and_handshake_in_time() {
+            let fixture = Fixture::new(
+                "handshake",
+                Timeouts {
+                    handshake: Duration::from_millis(200),
+                    ..Timeouts::default()
+                },
+            );
+            fixture.run(|socket| {
+                let mut client = Client::connect(&socket);
+                client.send(ClientMessage::MeasureGyro);
+                assert!(matches!(client.receive(), BridgeMessage::Rejected(_)));
+                assert!(client.closed());
+                let mut silent = Client::connect(&socket);
+                assert!(silent.closed());
+            });
+            assert!(!fixture.paused.get());
+        }
+
+        #[test]
+        fn a_session_lease_blocks_resume_and_keeps_a_requested_pause() {
+            let fixture = Fixture::new("lease", Timeouts::default());
+            let reload = &fixture.reload;
+            reload.lease.set(Some(Lease {
+                session: 9,
+                restore_paused: false,
+            }));
+            let address = SocketAddr::from_abstract_name("joyshockrust-lease-test").unwrap();
+            let command = |paused| {
+                reload
+                    .addressed_request(
+                        address.clone(),
+                        &ControlCommand::OutputsPaused(paused).encode(),
+                    )
+                    .unwrap()
+            };
+            assert!(command(false).is_none());
+            let pause = command(true).unwrap();
+            assert!(matches!(
+                pause.resolve(ControllerFilter::default()),
+                Some(Update::OutputsPaused(true))
+            ));
+            pause.applied(None).unwrap();
+            assert_eq!(
+                reload.lease.get(),
+                Some(Lease {
+                    session: 9,
+                    restore_paused: true
+                })
+            );
+            let release = Request {
+                reload,
+                reply: None,
+                action: Action::Lease(LeaseAction::Release(8)),
+            };
+            assert!(release.resolve(ControllerFilter::default()).is_none());
+            let release = Request {
+                reload,
+                reply: None,
+                action: Action::Lease(LeaseAction::Release(9)),
+            };
+            assert!(matches!(
+                release.resolve(ControllerFilter::default()),
+                Some(Update::OutputsPaused(true))
+            ));
+            release.applied(None).unwrap();
+            assert!(reload.lease.get().is_none());
+            assert!(command(false).is_some());
+        }
     }
 }
