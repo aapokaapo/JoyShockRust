@@ -49,13 +49,18 @@ impl ControlClient {
         let mut profile = Vec::new();
         file.take(MAX_PROFILE_BYTES as u64 + 1)
             .read_to_end(&mut profile)?;
+        self.load_profile_contents(source, &profile)
+    }
+
+    /// Activate the exact contents already read or written by the caller.
+    pub fn load_profile_contents(&self, source: &Path, profile: &[u8]) -> io::Result<()> {
         if profile.len() > MAX_PROFILE_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "profile exceeds 64 KiB",
             ));
         }
-        let payload = profile_path_payload(&std::path::absolute(source)?, &profile)?;
+        let payload = profile_path_payload(&std::path::absolute(source)?, profile)?;
         self.request(&payload, "profile reload")
     }
 

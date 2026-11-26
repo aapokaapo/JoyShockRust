@@ -8,20 +8,12 @@ use evdev::{
     AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode, RelativeAxisCode as Axis,
     uinput::VirtualDevice,
 };
-use joyshockrust_core::{Button, StickSide};
 use joyshockrust_input::{FactoryCalibration, InputReport, Transport};
-use joyshockrust_motion::{
-    AimMode, Calibration, StationaryCalibration,
-    aim_response::{
-        DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_STEERING_SENSITIVITY, GyroResponse,
-    },
-    pointer::{FlickOptions, PointerMotion, PointerOptions},
-};
+use joyshockrust_motion::{Calibration, StationaryCalibration, pointer::PointerMotion};
 
 use super::{
-    game_calibration::GameCalibration,
     gyro_calibration::BiasWriter,
-    gyro_gate::{Binding, GyroGate},
+    gyro_gate::GyroGate,
     haptics::{Cue, Haptics},
 };
 
@@ -33,29 +25,6 @@ pub struct GyroMouse {
     shortcut: Option<ShortcutCalibration>,
     haptics: Option<Haptics>,
     bias_writer: Option<BiasWriter>,
-}
-
-#[derive(Clone, Copy, Default, PartialEq)]
-pub struct Options {
-    pub calibrate: bool,
-    pub aim_mode: AimMode,
-    pub calibration_hold: Option<HoldBinding>,
-    pub binding: Binding,
-    pub flick_stick: Option<f64>,
-    pub flick_stick_side: StickSide,
-    pub flick_engage_percent: Option<f64>,
-    pub flick_duration_ms: Option<f64>,
-    pub flick_axial_threshold_deg: Option<f64>,
-    pub flick_steering_sensitivity: Option<f64>,
-    pub response: GyroResponse,
-    pub sensitivity: Sensitivity,
-    pub game_calibration: GameCalibration,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub struct HoldBinding {
-    pub button: Button,
-    pub duration: Duration,
 }
 
 struct HoldDetector {
@@ -96,59 +65,10 @@ struct ShortcutCalibration {
     measuring: bool,
 }
 
+use joyshockrust_config::profile::gyro::HoldBinding;
+pub use joyshockrust_config::profile::gyro::{Options, validate_flick_scale};
+#[cfg(test)]
 pub use joyshockrust_motion::sensitivity::GyroSensitivity as Sensitivity;
-
-impl Options {
-    fn gyro_scale(self) -> [f64; 2] {
-        self.sensitivity
-            .axes()
-            .map(|scale| self.game_calibration.scale(f64::from(scale)))
-    }
-
-    pub fn flick_axial_threshold(self) -> f64 {
-        self.flick_axial_threshold_deg
-            .unwrap_or(DEFAULT_FLICK_AXIAL_THRESHOLD_DEG)
-    }
-
-    fn flick_steering_sensitivity(self) -> f64 {
-        self.flick_steering_sensitivity
-            .unwrap_or(DEFAULT_FLICK_STEERING_SENSITIVITY)
-    }
-
-    fn flick_scale(self) -> Option<f64> {
-        self.flick_stick
-            .map(|scale| self.game_calibration.scale(scale))
-    }
-
-    fn pointer_options(self) -> PointerOptions {
-        PointerOptions {
-            mode: self.aim_mode,
-            response: self.response,
-            sensitivity: self.gyro_scale(),
-            flick: self.flick_scale().map(|scale| FlickOptions {
-                scale,
-                side: self.flick_stick_side,
-                engage_percent: self.flick_engage_percent,
-                duration_ms: self.flick_duration_ms,
-                axial_threshold_deg: self.flick_axial_threshold(),
-                steering_sensitivity: self.flick_steering_sensitivity(),
-            }),
-        }
-    }
-
-    pub fn can_reconfigure(self, next: Self) -> bool {
-        self.calibrate == next.calibrate
-            && self.calibration_hold == next.calibration_hold
-            && self.binding == next.binding
-    }
-}
-
-pub fn validate_flick_scale(scale: f64) -> Result<f64, &'static str> {
-    if !(0.01..=100.0).contains(&scale) {
-        return Err("Flick Stick sensitivity must be between 0.01 and 100 counts per degree");
-    }
-    Ok(scale)
-}
 
 pub fn open_output(name: &str) -> io::Result<VirtualDevice> {
     open_output_with_buttons(name, AttributeSet::new(), false)
@@ -315,7 +235,9 @@ fn emit_movement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use joyshockrust_core::Button;
     use joyshockrust_motion::flick_stick::FlickStick;
+    use joyshockrust_motion::game_calibration::GameCalibration;
 
     #[test]
     fn mouse_batch_requires_movement_and_successful_emission() {
@@ -341,9 +263,9 @@ mod tests {
             "version = 1\n[gyro]\nsensitivity_x = 1.0\nsensitivity_y = 0.5\nflick_stick = 1.0\nreal_world_calibration = 40.0\nin_game_sens = 2.0",
         ).unwrap();
         let options = profile.gyro.unwrap();
-        assert_eq!(options.gyro_scale(), [20.0, 10.0]);
-        assert_eq!(options.flick_scale(), Some(20.0));
-        let mut flick = FlickStick::new(options.flick_scale().unwrap());
+        assert_eq!(options.pointer_options().sensitivity, [20.0, 10.0]);
+        assert_eq!(options.pointer_options().flick.unwrap().scale, 20.0);
+        let mut flick = FlickStick::new(options.pointer_options().flick.unwrap().scale);
         let center = joyshockrust_core::Stick::default();
         let right = joyshockrust_core::Stick { x: 1.0, y: 0.0 };
         assert_eq!(flick.advance(center, 0), 0);
@@ -355,7 +277,7 @@ mod tests {
             game_calibration: GameCalibration::new(40.0, 1.0).unwrap(),
             ..options
         };
-        flick.set_counts_per_degree(updated.flick_scale().unwrap());
+        flick.set_counts_per_degree(updated.pointer_options().flick.unwrap().scale);
         assert_eq!(flick.advance(right, 360_000), 0);
         assert_eq!(flick.advance(right, 510_000), 1800);
         assert_eq!(flick.advance(center, 660_000), 1800);

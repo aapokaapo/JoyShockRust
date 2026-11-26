@@ -30,7 +30,7 @@ pub async fn status_value(
     Ok(value)
 }
 
-async fn status_values<const N: usize>(
+pub(crate) async fn status_values<const N: usize>(
     client: &gio::SocketClient,
     address: &gio::UnixSocketAddress,
     keys: [Field; N],

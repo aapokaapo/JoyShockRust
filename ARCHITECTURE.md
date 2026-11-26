@@ -56,18 +56,20 @@ Desktop refresh timers are independent of bridge report timing.
 | Crate | Responsibility |
 |---|---|
 | `joyshockrust-core` | Transport-neutral controller state, canonical input names, analog trigger gates and touch-grid geometry. |
-| `joyshockrust-config` | Raw common profile schema, profile version, trigger compatibility rules and desktop paths. |
+| `joyshockrust-config` | TOML profile compilation, legacy compatibility, Linux key names, atomic profile persistence and desktop paths. |
 | `joyshockrust-input` | USB and Bluetooth parsing, factory conversion and device timebase. |
 | `joyshockrust-ipc` | Local status fields, typed telemetry and control codecs, and a Linux command client. |
 | `joyshockrust-motion` | Deterministic calibration, gyro and fusion aim, Flick Stick composition, integer pointer motion and stick response. |
 | `joyshockrust-mapping` | Gamepad, keyboard and mouse routing, gesture deadlines, gyro activation, touch regions, layers and trigger stages. |
-| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, device-dependent profile compilation, socket servicing, evdev key resolution, uinput event encoding and feedback. |
+| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, runtime profile activation, socket servicing, uinput event encoding and feedback. |
 | `joyshockrust-tray` | StatusNotifierItem, desktop lifecycle and calibration launch. |
 | `joyshockrust-editor` | GTK 4/libadwaita profile editing with `toml_edit`, live charts and Wayland calibration windows. |
 
-Applications use shared codecs at the control boundary. The bridge
-validates profile input before installing runtime state. HID report
-processing uses resolved gates, settings and bitsets.
+Applications use shared codecs at the control boundary. The editor and
+bridge compile TOML with the same validator. The bridge checks live
+compatibility before activating the resulting settings. The editor opens
+and saves profiles on a worker and applies the exact saved snapshot over
+IPC. HID report processing uses resolved gates, settings and bitsets.
 
 ## Key invariants
 

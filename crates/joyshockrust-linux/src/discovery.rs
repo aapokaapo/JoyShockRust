@@ -34,71 +34,7 @@ pub fn transport_name(transport: Transport) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Selection {
-    #[default]
-    Usb,
-    Bluetooth,
-    Auto,
-}
-
-impl Selection {
-    pub fn parse(value: &str) -> Result<Self, &'static str> {
-        match value {
-            "usb" => Ok(Self::Usb),
-            "bluetooth" => Ok(Self::Bluetooth),
-            "auto" => Ok(Self::Auto),
-            _ => Err("expected usb, bluetooth or auto"),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Usb => "usb",
-            Self::Bluetooth => "bluetooth",
-            Self::Auto => "auto",
-        }
-    }
-
-    fn accepts(self, transport: Transport) -> bool {
-        matches!(
-            (self, transport),
-            (Self::Usb | Self::Auto, Transport::Usb)
-                | (Self::Bluetooth | Self::Auto, Transport::Bluetooth)
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ModelSelection {
-    #[default]
-    Any,
-    #[serde(rename = "dualsense")]
-    DualSense,
-    #[serde(rename = "dualsense-edge")]
-    DualSenseEdge,
-}
-
-impl ModelSelection {
-    pub fn parse(value: &str) -> Result<Self, &'static str> {
-        match value {
-            "any" => Ok(Self::Any),
-            "dualsense" => Ok(Self::DualSense),
-            "dualsense-edge" => Ok(Self::DualSenseEdge),
-            _ => Err("expected any, dualsense or dualsense-edge"),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Any => "any",
-            Self::DualSense => "dualsense",
-            Self::DualSenseEdge => "dualsense-edge",
-        }
-    }
-}
+pub use joyshockrust_config::controller::{ModelSelection, Selection};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct ControllerFilter {

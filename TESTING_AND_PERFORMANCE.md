@@ -1,5 +1,14 @@
 # Testing, instrumentation and performance
 
+## Shared profile compilation and saving
+
+2026-11-26. Profile tests cover rejected TOML and evdev key names,
+new-file collision protection, competing saves from the same original
+and RWC edits that preserve comments and inline tables. Editor tests cover
+an external change and newer draft edits made before a save completes.
+The Wayland suite exercises the profile picker, saving and stick binding
+validation without launching the bridge.
+
 ## Portable keyboard and mouse replay
 
 2026-11-26. The workspace passed 254 tests and doctests, with 16
@@ -134,9 +143,9 @@ scope. [Desktop test procedure](#desktop-tray-acceptance) · [Benchmark procedur
 ## Headless Wayland editor tests
 
 CI runs the editor's display-dependent tests using Weston and a private
-D-Bus session. The runner builds the bridge for the stick-mapping test
-and starts a fresh GTK process for each case. It uses a temporary
-runtime directory for the Wayland socket and the editor's IPC paths.
+D-Bus session. The runner starts a fresh GTK process for each case and
+uses a temporary runtime directory for the Wayland socket and the
+editor's IPC paths.
 
 With Weston and `dbus-run-session` available, run from the repository:
 
@@ -145,8 +154,7 @@ cargo fetch --locked
 scripts/test-editor-wayland.sh
 ```
 
-Set `JOYSHOCKRUST_TEST_BRIDGE` to use a bridge binary from a different
-build location. The tests cover profile draft protection, calibration
+The tests cover profile draft protection, calibration
 dialogs, key capture and cancellation, output modes, trigger mappings,
 stick zones, touchpad regions, gyro activation and sensitivity.
 
@@ -1146,12 +1154,10 @@ the center while moving, and R pulses once per continuous movement.
 Try an inner radius below the deadzone and confirm **Update Mapping**
 shows a validation error while the dialog stays open.
 
-Run the GTK dialog test with a built bridge from a Wayland session.
+Run the GTK dialog test from a Wayland session.
 
 ```sh
-cargo build --locked -p joyshockrust-linux
-JOYSHOCKRUST_TEST_BRIDGE="$PWD/target/debug/joyshockrust-linux" \
-  cargo test --locked -p joyshockrust-editor stick_keyboard_dialog_validates_and_updates_the_profile -- --ignored
+cargo test --locked -p joyshockrust-editor stick_keyboard_dialog_validates_and_updates_the_profile -- --ignored
 ```
 
 In **Touchpad**, set a grid with one row and two columns. Select the

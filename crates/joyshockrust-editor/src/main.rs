@@ -1,9 +1,7 @@
 use joyshockrust_ipc::control::ResistancePreview;
 use std::{
-    env, fs,
-    io::{self, Write},
+    env, fs, io,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use adw::{gtk, prelude::*};
@@ -27,10 +25,13 @@ mod triggers;
 mod ui;
 
 use joyshockrust_config::{
+    linux_keys::LinuxKeys,
     new_profile_text,
     paths::{
         APP_DIRECTORY, DESKTOP_APP_ID, PROFILE_FILE, PROFILES_DIRECTORY, config_home_from_env,
     },
+    profile,
+    profile_file::{self, WriteMode},
 };
 
 fn profile_filename(name: &str) -> Result<String, String> {
@@ -47,34 +48,6 @@ fn profile_filename(name: &str) -> Result<String, String> {
     } else {
         format!("{name}.toml")
     })
-}
-
-fn run_bridge(bridge: &Path, args: &[&Path]) -> Result<(), String> {
-    let output = Command::new(bridge)
-        .args(args)
-        .output()
-        .map_err(|error| format!("{}: {error}", bridge.display()))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let message = String::from_utf8_lossy(&output.stderr);
-    if message.trim().is_empty() {
-        Err(format!("JoyShockRust exited with {}.", output.status))
-    } else {
-        Err(message.trim().into())
-    }
-}
-
-fn stage(directory: Option<&Path>, text: &str) -> io::Result<tempfile::NamedTempFile> {
-    let mut file = if let Some(directory) = directory {
-        fs::create_dir_all(directory)?;
-        tempfile::NamedTempFile::new_in(directory)?
-    } else {
-        tempfile::NamedTempFile::new()?
-    };
-    file.write_all(text.as_bytes())?;
-    file.as_file().sync_all()?;
-    Ok(file)
 }
 
 /// The active representation stays available until the other is needed.
@@ -127,8 +100,9 @@ impl Draft {
 }
 
 struct Editor {
-    bridge: PathBuf,
     directory: PathBuf,
+    profiles: Vec<PathBuf>,
+    profile_busy: bool,
     path: Option<PathBuf>,
     original: String,
     draft: Draft,
@@ -141,12 +115,13 @@ struct Editor {
 }
 
 impl Editor {
-    fn open(bridge: PathBuf, directory: PathBuf, path: Option<PathBuf>) -> io::Result<Self> {
+    fn open(directory: PathBuf, path: Option<PathBuf>) -> io::Result<Self> {
         let original = path
             .as_ref()
             .map_or_else(|| Ok(new_profile_text()), fs::read_to_string)?;
         Ok(Self {
-            bridge,
+            profiles: list_profiles(&directory, path.as_deref()),
+            profile_busy: false,
             directory,
             path,
             draft: Draft::from_text(original.clone()),
@@ -164,27 +139,6 @@ impl Editor {
         self.draft.text() != self.original
             || (self.path.is_none() && !self.name.trim().is_empty())
             || self.draft_error().is_some()
-    }
-
-    fn profile_paths(&self) -> Vec<PathBuf> {
-        let startup = self.directory.parent().map(|root| root.join(PROFILE_FILE));
-        let mut paths =
-            joyshockrust_config::paths::profile_paths(&self.directory, startup.as_deref());
-        if let Some(path) = &self.path
-            && !paths.contains(path)
-        {
-            paths.insert(0, path.clone());
-        }
-        paths
-    }
-
-    fn switch_profile(&mut self, path: Option<PathBuf>) -> io::Result<()> {
-        if self.path != path || path.is_none() {
-            let next = Self::open(self.bridge.clone(), self.directory.clone(), path)?;
-            self.clear_trigger_preview();
-            *self = next;
-        }
-        Ok(())
     }
 
     fn preview_trigger(&mut self, preview: ResistancePreview) -> io::Result<()> {
@@ -211,63 +165,97 @@ impl Editor {
         })
     }
 
-    fn validate(&self) -> Result<String, String> {
+    fn checked_text(&self) -> Result<&str, String> {
         if let Some(error) = self.draft_error() {
             return Err(error.into());
         }
-        self.validate_profile_text(self.draft.text())?;
-        Ok("Profile is valid.".into())
+        Ok(self.draft.text())
     }
 
-    fn validate_profile_text(&self, text: &str) -> Result<(), String> {
-        let staged = stage(None, text).map_err(|error| error.to_string())?;
-        run_bridge(&self.bridge, &[Path::new("--check-profile"), staged.path()])
+    fn save_request(&self) -> Result<SaveRequest, String> {
+        let text = self.checked_text()?.to_owned();
+        let (path, original) = if let Some(path) = &self.path {
+            (path.clone(), Some(self.original.clone()))
+        } else {
+            (self.directory.join(profile_filename(&self.name)?), None)
+        };
+        Ok(SaveRequest {
+            path,
+            text,
+            original,
+            directory: self.directory.clone(),
+        })
     }
 
-    fn save(&mut self) -> Result<PathBuf, String> {
-        if let Some(error) = self.draft_error() {
-            return Err(error.into());
-        }
-        if let Some(path) = &self.path {
-            let current =
-                fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
-            if current != self.original {
-                return Err("The profile changed on disk. Reopen it before editing again.".into());
+    fn finish_save(&mut self, saved: SavedProfile) -> Result<String, String> {
+        self.path = Some(saved.path.clone());
+        self.original = saved.text;
+        self.profiles = saved.profiles;
+        match saved.activation {
+            None => Ok("Profile saved.".into()),
+            Some(Ok(())) => {
+                self.trigger_preview_active = false;
+                Ok("Profile saved and applied.".into())
             }
-            let staged = stage(None, self.draft.text()).map_err(|error| error.to_string())?;
-            run_bridge(
-                &self.bridge,
-                &[Path::new("--install-profile"), staged.path(), path],
-            )?;
-            self.draft.text().clone_into(&mut self.original);
-            return Ok(path.clone());
+            Some(Err(error)) => Err(format!(
+                "Saved {}. Could not activate it: {error}",
+                saved.path.display()
+            )),
         }
-        let path = self.directory.join(profile_filename(&self.name)?);
-        let staged =
-            stage(Some(&self.directory), self.draft.text()).map_err(|error| error.to_string())?;
-        run_bridge(&self.bridge, &[Path::new("--check-profile"), staged.path()])?;
-        staged
-            .persist_noclobber(&path)
-            .map_err(|error| format!("{}: {}", path.display(), error.error))?;
-        self.path = Some(path.clone());
-        self.draft.text().clone_into(&mut self.original);
-        Ok(path)
     }
+}
 
-    fn save_and_apply(&mut self, apply: bool) -> Result<String, String> {
-        let path = self.save()?;
-        if apply {
+fn list_profiles(directory: &Path, path: Option<&Path>) -> Vec<PathBuf> {
+    let startup = directory.parent().map(|root| root.join(PROFILE_FILE));
+    let mut paths = joyshockrust_config::paths::profile_paths(directory, startup.as_deref());
+    if let Some(path) = path.filter(|path| !paths.iter().any(|known| known == path)) {
+        paths.insert(0, path.to_owned());
+    }
+    paths
+}
+
+fn validate_profile_text(text: &str) -> Result<(), String> {
+    profile::parse(text, &LinuxKeys)
+        .map(drop)
+        .map_err(|error| error.to_string())
+}
+
+struct SaveRequest {
+    path: PathBuf,
+    text: String,
+    original: Option<String>,
+    directory: PathBuf,
+}
+
+struct SavedProfile {
+    path: PathBuf,
+    text: String,
+    profiles: Vec<PathBuf>,
+    activation: Option<io::Result<()>>,
+}
+
+impl SaveRequest {
+    fn execute(self, apply: bool) -> Result<SavedProfile, String> {
+        let mode = self
+            .original
+            .as_deref()
+            .map_or(WriteMode::New, WriteMode::Current);
+        profile_file::save(&self.path, &self.text, mode)
+            .map_err(|error| format!("{}: {error}", self.path.display()))?;
+        let activation = apply.then(|| {
             use joyshockrust_ipc::{RELOAD_SOCKET, unix::ControlClient};
 
             joyshockrust_config::paths::runtime_socket(RELOAD_SOCKET, false)
                 .map(ControlClient::new)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))
-                .and_then(|client| client.load_profile(&path))
-                .map_err(|error| format!("Profile saved. Could not apply it: {error}"))?;
-            self.trigger_preview_active = false;
-            return Ok("Profile saved and applied.".into());
-        }
-        Ok("Profile saved.".into())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?
+                .load_profile_contents(&self.path, self.text.as_bytes())
+        });
+        Ok(SavedProfile {
+            profiles: list_profiles(&self.directory, Some(&self.path)),
+            path: self.path,
+            text: self.text,
+            activation,
+        })
     }
 }
 
@@ -321,9 +309,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("expected an absolute XDG_CONFIG_HOME or HOME")?
         .join(APP_DIRECTORY)
         .join(PROFILES_DIRECTORY);
-    let editor = std::rc::Rc::new(std::cell::RefCell::new(Editor::open(
-        bridge, directory, path,
-    )?));
+    let editor = std::rc::Rc::new(std::cell::RefCell::new(Editor::open(directory, path)?));
     // With NON_UNIQUE, GTK uses the program name as the Wayland app ID.
     adw::glib::set_program_name(Some(DESKTOP_APP_ID));
     gtk::gdk::set_allowed_backends("wayland");
@@ -376,16 +362,33 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("game.toml");
         fs::write(&path, new_profile_text()).unwrap();
-        let mut editor = Editor::open(
-            directory.path().join("unused-bridge"),
-            directory.path().into(),
-            Some(path.clone()),
-        )
-        .unwrap();
+        let mut editor = Editor::open(directory.path().into(), Some(path.clone())).unwrap();
         editor.draft.append_text("# Editor change\n");
         let external = "version = 1\n# External change\n";
         fs::write(&path, external).unwrap();
-        assert!(editor.save().unwrap_err().contains("changed on disk"));
+        let result = editor.save_request().unwrap().execute(false);
+        assert!(matches!(result, Err(error) if error.contains("changed on disk")));
         assert_eq!(fs::read_to_string(path).unwrap(), external);
+    }
+
+    #[test]
+    fn a_saved_snapshot_keeps_newer_edits_dirty_if_activation_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut editor = Editor::open(directory.path().into(), None).unwrap();
+        editor.name = "Game".into();
+        editor.draft.append_text("# Saved edit\n");
+        let snapshot = editor.save_request().unwrap();
+        editor.draft.append_text("# Newer edit\n");
+
+        let mut saved = snapshot.execute(false).unwrap();
+        saved.activation = Some(Err(io::ErrorKind::ConnectionRefused.into()));
+        let path = directory.path().join("Game.toml");
+        let error = editor.finish_save(saved).unwrap_err();
+        assert!(error.contains(&format!("Saved {}.", path.display())));
+        assert!(error.contains("Could not activate"));
+        assert_eq!(editor.path.as_deref(), Some(path.as_path()));
+        assert_eq!(fs::read_to_string(&path).unwrap(), editor.original);
+        assert!(editor.draft.text().ends_with("# Newer edit\n"));
+        assert!(editor.has_unsaved_changes());
     }
 }

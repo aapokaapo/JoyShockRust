@@ -22,14 +22,18 @@ acceptance check. [Headless Wayland editor tests](TESTING_AND_PERFORMANCE.md#hea
 
 Pointer processing runs in `joyshockrust-motion`. The mapping crate
 handles gamepad, keyboard and mouse routing, gesture deadlines and gyro
-activation. The bridge resolves host key codes and publishes virtual events.
+activation. The bridge publishes virtual events using the resolved mappings.
 [Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
 
-The editor retains structured drafts and shares the command client and
-telemetry codecs with the bridge. The RWC sweep runs in motion. Remaining
-steps cover shared profile validation and persistence, event-driven
-inventory and subscriptions, removal of the editor's HID reader, and
-bridge-owned calibration sessions. [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16) · [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17) · [Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
+The editor and bridge share profile compilation, key names and atomic
+profile writes. The editor retains structured drafts and runs profile
+file work off the GTK main thread. It reports saving and activation
+separately. [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16)
+
+Desktop clients share the command and telemetry codecs. The RWC sweep
+runs in motion. Remaining steps cover event-driven inventory and
+subscriptions, removal of the editor's HID reader, and bridge-owned
+calibration sessions. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17) · [Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
 
 | Area | Shipped | Next acceptance step |
 |---|---|---|

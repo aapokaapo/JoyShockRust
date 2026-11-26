@@ -6,11 +6,21 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-profile = ["dep:serde"]
+profile = ["dep:joyshockrust-input", "dep:joyshockrust-mapping", "dep:joyshockrust-motion", "dep:serde", "dep:toml"]
+linux-profile = ["profile", "dep:evdev", "dep:tempfile", "dep:toml_edit"]
 
 [dependencies]
 joyshockrust-core = { path = "../joyshockrust-core" }
+joyshockrust-input = { path = "../joyshockrust-input", optional = true }
+joyshockrust-mapping = { path = "../joyshockrust-mapping", features = ["profile"], optional = true }
+joyshockrust-motion = { path = "../joyshockrust-motion", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
+toml = { version = "0.9", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = { workspace = true, optional = true }
+tempfile = { version = "3", optional = true }
+toml_edit = { workspace = true, optional = true }
 
 [lints]
 workspace = true

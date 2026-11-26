@@ -19,7 +19,6 @@ use crate::{
     profile,
 };
 
-pub use joyshockrust_motion::game_calibration::GameCalibration;
 use joyshockrust_motion::game_calibration::{Confirmation, StickSweep, calculate, positive};
 
 pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {

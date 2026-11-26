@@ -7,10 +7,7 @@ use evdev::{
 use joyshockrust_core::{Button, Controls};
 use joyshockrust_mapping::gamepad::{GamepadAxis, GamepadOutput, MAX_GAMEPAD_EVENTS};
 
-pub use joyshockrust_mapping::gamepad::{
-    AnalogTriggerRoute, ButtonRemaps, GamepadMapping, OutputKind, RemapState, TriggerStages,
-    parse_target,
-};
+pub use joyshockrust_mapping::gamepad::{ButtonRemaps, GamepadMapping, OutputKind, RemapState};
 pub use joyshockrust_motion::stick_response::StickCurve;
 
 fn key_code(button: Button) -> Key {

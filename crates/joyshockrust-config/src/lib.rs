@@ -1,8 +1,14 @@
-//! Shared profile policy and desktop paths. Applications own device resolution.
+//! Shared profile compilation, persistence and desktop paths.
 
+#[cfg(feature = "profile")]
+pub mod controller;
+#[cfg(all(feature = "linux-profile", target_os = "linux"))]
+pub mod linux_keys;
 pub mod paths;
 #[cfg(feature = "profile")]
 pub mod profile;
+#[cfg(all(feature = "linux-profile", target_os = "linux"))]
+pub mod profile_file;
 
 pub const PROFILE_VERSION: u32 = 1;
 

@@ -1,5 +1,4 @@
 use std::{
-    fmt,
     fs::File,
     io,
     os::{
@@ -102,46 +101,7 @@ pub(crate) fn open_when_ready<T>(
     }
 }
 
-/// Controller address exposed by the Linux DualSense driver as HID unique ID.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ControllerId([u8; 6]);
-
-impl ControllerId {
-    pub fn parse(value: &str) -> Option<Self> {
-        let mut address = [0; 6];
-        let mut parts = value.split(':');
-        for byte in &mut address {
-            let part = parts.next()?;
-            if part.len() != 2 || !part.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return None;
-            }
-            *byte = u8::from_str_radix(part, 16).ok()?;
-        }
-        parts.next().is_none().then_some(Self(address))
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for ControllerId {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
-        Self::parse(&value).ok_or_else(|| {
-            serde::de::Error::custom("expected a controller ID like 00:11:22:33:44:55")
-        })
-    }
-}
-
-impl serde::Serialize for ControllerId {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl fmt::Display for ControllerId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let [a, b, c, d, e, f] = self.0;
-        write!(formatter, "{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{f:02x}")
-    }
-}
+pub use joyshockrust_config::controller::ControllerId;
 
 pub fn controller_id(device: &File) -> io::Result<Option<ControllerId>> {
     let mut unique = [0; 128];

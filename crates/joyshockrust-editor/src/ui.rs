@@ -60,6 +60,21 @@ impl Context {
             }
         }
     }
+
+    fn set_profile_busy(&self, name: &gtk::Entry, busy: bool) {
+        self.editor.borrow_mut().profile_busy = busy;
+        name.set_sensitive(!busy);
+        if let Some(window) = self.window.upgrade() {
+            for name in ["open-profile", "save", "save-apply"] {
+                if let Some(action) = window
+                    .lookup_action(name)
+                    .and_downcast::<gio::SimpleAction>()
+                {
+                    action.set_enabled(!busy);
+                }
+            }
+        }
+    }
 }
 
 pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
@@ -157,15 +172,42 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
             let name = open_name.clone();
             let stack = open_stack.clone();
             move || {
-                let result = ctx.editor.borrow_mut().switch_profile(path.clone());
-                if let Err(error) = result {
-                    ctx.report(Err(format!("Could not open the profile: {error}")));
-                    return;
-                }
-                sync_profiles(&ctx, &profiles, &chooser, &name);
+                let ctx = ctx.clone();
+                let name = name.clone();
+                let profiles = profiles.clone();
+                let chooser = chooser.clone();
+                let stack = stack.clone();
+                let directory = ctx.editor.borrow().directory.clone();
+                let path = path.clone();
+                ctx.set_profile_busy(&name, true);
                 if let Some(stack) = stack.upgrade() {
-                    refresh_page(&stack, &ctx);
+                    stack.set_sensitive(false);
                 }
+                let task = gio::spawn_blocking(move || Editor::open(directory, path));
+                glib::MainContext::default().spawn_local(async move {
+                    let result = task.await.unwrap_or_else(|_| {
+                        Err(std::io::Error::other(
+                            "The profile worker stopped unexpectedly.",
+                        ))
+                    });
+                    ctx.set_profile_busy(&name, false);
+                    if let Some(stack) = stack.upgrade() {
+                        stack.set_sensitive(true);
+                    }
+                    match result {
+                        Ok(next) => {
+                            ctx.editor.borrow_mut().clear_trigger_preview();
+                            ctx.editor.replace(next);
+                            sync_profiles(&ctx, &profiles, &chooser, &name);
+                            if let Some(stack) = stack.upgrade() {
+                                refresh_page(&stack, &ctx);
+                            }
+                        }
+                        Err(error) => {
+                            ctx.report(Err(format!("Could not open the profile: {error}")))
+                        }
+                    }
+                });
             }
         };
         if unsaved {
@@ -188,9 +230,46 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
         let chooser = chooser.clone();
         let entry = profile_name.clone();
         action.connect_activate(move |_, _| {
-            let result = save_ctx.editor.borrow_mut().save_and_apply(apply);
-            sync_profiles(&save_ctx, &profiles, &chooser, &entry);
-            save_ctx.report(result);
+            let request = save_ctx.editor.borrow().save_request();
+            let request = match request {
+                Ok(request) => request,
+                Err(error) => {
+                    save_ctx.report(Err(error));
+                    return;
+                }
+            };
+            let ctx = save_ctx.clone();
+            let (profiles, chooser, entry) = (profiles.clone(), chooser.clone(), entry.clone());
+            ctx.set_profile_busy(&entry, true);
+            let task = gio::spawn_blocking(move || request.execute(apply));
+            glib::MainContext::default().spawn_local(async move {
+                let result = task
+                    .await
+                    .unwrap_or_else(|_| Err("The profile worker stopped unexpectedly.".into()));
+                let mut message = match result {
+                    Ok(saved) => {
+                        let activation_failed =
+                            saved.activation.as_ref().is_some_and(Result::is_err);
+                        let result = ctx.editor.borrow_mut().finish_save(saved);
+                        match result {
+                            Err(error) if activation_failed => {
+                                let active = active_profile_description().await;
+                                Err(format!("{error}\n\n{active}"))
+                            }
+                            result => result,
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                if ctx.editor.borrow().has_unsaved_changes()
+                    && let Ok(message) = &mut message
+                {
+                    message.push_str(" Newer edits are still unsaved.");
+                }
+                ctx.set_profile_busy(&entry, false);
+                sync_profiles(&ctx, &profiles, &chooser, &entry);
+                ctx.report(message);
+            });
         });
         window.add_action(&action);
         app.set_accels_for_action(&format!("win.{action_name}"), &[shortcut]);
@@ -198,8 +277,35 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let validate = gio::SimpleAction::new("validate", None);
     let validate_ctx = ctx.clone();
     validate.connect_activate(move |_, _| {
-        let result = validate_ctx.editor.borrow().validate();
-        validate_ctx.report(result);
+        let ctx = validate_ctx.clone();
+        let editor = ctx.editor.borrow();
+        let text = match editor.checked_text() {
+            Ok(text) => text.to_owned(),
+            Err(error) => {
+                ctx.report(Err(error));
+                return;
+            }
+        };
+        let path = editor.path.clone();
+        drop(editor);
+        let task = gio::spawn_blocking(move || {
+            let result = crate::validate_profile_text(&text);
+            (text, result)
+        });
+        glib::MainContext::default().spawn_local(async move {
+            match task.await {
+                Ok((text, result)) => {
+                    let editor = ctx.editor.borrow();
+                    if editor.path == path
+                        && editor.checked_text().is_ok_and(|current| current == text)
+                    {
+                        drop(editor);
+                        ctx.report(result.map(|()| "Profile is valid.".into()));
+                    }
+                }
+                Err(_) => ctx.report(Err("The profile worker stopped unexpectedly.".into())),
+            }
+        });
     });
     window.add_action(&validate);
 
@@ -231,6 +337,9 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     let close_ctx = ctx.clone();
     let confirmed = Rc::new(Cell::new(false));
     window.connect_close_request(move |window| {
+        if close_ctx.editor.borrow().profile_busy {
+            return glib::Propagation::Stop;
+        }
         if confirmed.get() || !close_ctx.editor.borrow().has_unsaved_changes() {
             close_ctx.editor.borrow_mut().clear_trigger_preview();
             return glib::Propagation::Proceed;
@@ -246,6 +355,34 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
         glib::Propagation::Stop
     });
     window.present();
+}
+
+async fn active_profile_description() -> String {
+    use joyshockrust_ipc::status::{Field, decode_profile_path};
+
+    let unavailable = "The active profile could not be read.";
+    let Some(address) = crate::controller_input::status_address() else {
+        return unavailable.into();
+    };
+    let client = gio::SocketClient::new();
+    client.set_timeout(1);
+    match crate::controller_input::status_values(
+        &client,
+        &address,
+        [Field::ProfilePathHex, Field::ProfileSource],
+    )
+    .await
+    {
+        Ok([Some(path), _]) => decode_profile_path(&path).map_or_else(
+            || unavailable.into(),
+            |path| format!("Active profile: {}", path.display()),
+        ),
+        Ok([None, Some(source)]) if source == "defaults" => "The bridge is using defaults.".into(),
+        Ok([None, Some(source)]) if source == "command_line" => {
+            "The bridge is using command-line settings.".into()
+        }
+        _ => unavailable.into(),
+    }
 }
 
 fn confirm_discard(window: &adw::ApplicationWindow) -> adw::AlertDialog {
@@ -268,7 +405,7 @@ fn sync_profiles(ctx: &Context, menu: &gio::Menu, chooser: &gtk::MenuButton, ent
     chooser.set_label(&text);
     let is_new = editor.path.is_none();
     let draft_name = editor.name.clone();
-    let paths = editor.profile_paths();
+    let paths = editor.profiles.clone();
     drop(editor);
 
     entry.set_visible(is_new);
@@ -419,6 +556,20 @@ pub(crate) mod tests {
         assert_eq!(button.label().as_deref(), Some("Bind key…"));
     }
 
+    fn wait_for_profile_worker(editor: &RefCell<Editor>) {
+        use std::time::{Duration, Instant};
+
+        let main = glib::MainContext::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while editor.borrow().profile_busy {
+            assert!(Instant::now() < deadline, "profile worker did not finish");
+            while main.pending() {
+                main.iteration(false);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[test]
     #[ignore = "requires a Wayland compositor"]
     fn profile_picker_switches_files_protects_drafts_and_lists_new_profiles() {
@@ -432,7 +583,7 @@ pub(crate) mod tests {
         std::fs::write(&startup, crate::new_profile_text()).unwrap();
         std::fs::write(&game, "version = 1\n# Game profile\n").unwrap();
         let editor = Rc::new(RefCell::new(
-            Editor::open("/bin/true".into(), directory.clone(), Some(startup.clone())).unwrap(),
+            Editor::open(directory.clone(), Some(startup.clone())).unwrap(),
         ));
         let app = adw::Application::builder()
             .flags(gio::ApplicationFlags::NON_UNIQUE)
@@ -457,6 +608,7 @@ pub(crate) mod tests {
         let open = window.lookup_action("open-profile").unwrap();
         let game_target = target(1);
         open.activate(Some(&game_target));
+        wait_for_profile_worker(&editor);
         assert_eq!(editor.borrow().path.as_deref(), Some(game.as_path()));
         assert!(editor.borrow().draft.text().contains("# Game profile"));
 
@@ -475,6 +627,7 @@ pub(crate) mod tests {
         choose_draft_action("Keep Editing");
         assert!(editor.borrow().draft.text().contains("# Unsaved change"));
         choose_draft_action("Discard");
+        wait_for_profile_worker(&editor);
         assert_eq!(editor.borrow().path, None);
         assert_eq!(editor.borrow().draft.text(), crate::new_profile_text());
 
@@ -484,6 +637,8 @@ pub(crate) mod tests {
             .unwrap();
         name.set_text("New Game");
         window.lookup_action("save").unwrap().activate(None);
+        assert!(editor.borrow().profile_busy);
+        wait_for_profile_worker(&editor);
         let saved = directory.join("New Game.toml");
         assert_eq!(
             std::fs::read_to_string(&saved).unwrap(),
@@ -502,7 +657,7 @@ pub(crate) mod tests {
     fn touchpad_widgets_edit_the_selected_cell() {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();
-        let editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        let editor = Editor::open(PathBuf::new(), None).unwrap();
         let ctx = Context {
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
@@ -601,15 +756,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "requires a Wayland compositor and the built bridge"]
+    #[ignore = "requires a Wayland compositor"]
     fn stick_keyboard_dialog_validates_and_updates_the_profile() {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();
-        let bridge = PathBuf::from(
-            std::env::var_os("JOYSHOCKRUST_TEST_BRIDGE")
-                .expect("set JOYSHOCKRUST_TEST_BRIDGE to the built joyshockrust-linux binary"),
-        );
-        let editor = Editor::open(bridge, PathBuf::new(), None).unwrap();
+        let editor = Editor::open(PathBuf::new(), None).unwrap();
         let app = adw::Application::builder()
             .flags(gio::ApplicationFlags::NON_UNIQUE)
             .build();
@@ -699,7 +850,7 @@ pub(crate) mod tests {
     fn gyro_calibration_shortcut_can_be_set_and_removed() {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();
-        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        let mut editor = Editor::open(PathBuf::new(), None).unwrap();
         editor
             .draft
             .append_text("[gyro.calibration_hold]\nbutton = 'l3'\nhold_ms = 2500\n");
@@ -742,7 +893,7 @@ pub(crate) mod tests {
     fn gyro_activation_edits_buttons_touch_chords_and_triggers() {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();
-        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        let mut editor = Editor::open(PathBuf::new(), None).unwrap();
         editor.draft.append_text("[gyro]\nsensitivity_x = 4.0 # retain\nbinding = { mode = 'disable-while-held', input = 'l2' }\n");
         let ctx = Context {
             editor: Rc::new(RefCell::new(editor)),
@@ -824,7 +975,7 @@ pub(crate) mod tests {
     fn gyro_sliders_and_typed_values_use_independent_ranges() {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();
-        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        let mut editor = Editor::open(PathBuf::new(), None).unwrap();
         editor.draft.append_text(
             "[gyro]\nsensitivity_x = 42.125 # existing profile\nsensitivity_y = 4.0\n",
         );
@@ -864,7 +1015,7 @@ pub(crate) mod tests {
 
         entry.set_text("100.1");
         assert_eq!(
-            ctx.editor.borrow().validate().unwrap_err(),
+            ctx.editor.borrow().checked_text().unwrap_err(),
             sensitivity::GYRO_SENSITIVITY_ERROR
         );
         assert_eq!(
@@ -1075,7 +1226,7 @@ pub(crate) mod tests {
     fn virtual_gamepad_type_and_trigger_stages_write_separate_bindings() {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();
-        let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
+        let mut editor = Editor::open(PathBuf::new(), None).unwrap();
         editor.draft.append_text("[bridge]\nrumble = true\n");
         let ctx = Context {
             editor: Rc::new(RefCell::new(editor)),

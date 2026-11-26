@@ -7,17 +7,6 @@ weston=${WESTON:-weston}
 command -v "$weston" >/dev/null
 command -v dbus-run-session >/dev/null
 
-if [[ -z ${JOYSHOCKRUST_TEST_BRIDGE:-} ]]; then
-    cargo build --locked --offline -p joyshockrust-linux
-    JOYSHOCKRUST_TEST_BRIDGE="${CARGO_TARGET_DIR:-target}/debug/joyshockrust-linux"
-fi
-if [[ ! -x $JOYSHOCKRUST_TEST_BRIDGE ]]; then
-    printf 'Bridge executable unavailable at %s\n' "$JOYSHOCKRUST_TEST_BRIDGE" >&2
-    exit 1
-fi
-export JOYSHOCKRUST_TEST_BRIDGE
-JOYSHOCKRUST_TEST_BRIDGE="$(realpath -- "$JOYSHOCKRUST_TEST_BRIDGE")"
-
 # GTK must initialize on the same thread that runs each test. Use a fresh
 # test process per case, including when libtest is set to one thread.
 test_list="$(cargo test --locked --offline -p joyshockrust-editor -- --ignored --list)"

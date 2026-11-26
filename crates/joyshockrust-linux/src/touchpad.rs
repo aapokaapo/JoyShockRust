@@ -1,4 +1,3 @@
-use joyshockrust_core::touch_region::GridSize;
 use std::{
     fs::{File, OpenOptions},
     io,
@@ -6,8 +5,7 @@ use std::{
 };
 
 use evdev::{AbsoluteAxisCode, AttributeSetRef, PropType, raw_stream::RawDevice};
-use joyshockrust_config::profile::Touchpad;
-pub use joyshockrust_mapping::touchpad::{ClickState, Grid};
+pub use joyshockrust_mapping::touchpad::ClickState;
 
 use crate::hidraw;
 
@@ -88,22 +86,6 @@ fn matches_touchpad(
             axes.contains(AbsoluteAxisCode::ABS_MT_POSITION_X)
                 && axes.contains(AbsoluteAxisCode::ABS_MT_POSITION_Y)
         })
-}
-
-pub fn resolve(settings: Touchpad) -> Result<Grid, &'static str> {
-    let size = GridSize::new(settings.rows, settings.columns)
-        .ok_or("touchpad grid must have between 1 and 25 cells")?;
-    joyshockrust_mapping::touchpad::resolve(
-        size,
-        settings.regions.iter().map(|region| {
-            (
-                region.row,
-                region.column,
-                region.touch.as_deref(),
-                region.click.as_deref(),
-            )
-        }),
-    )
 }
 
 #[cfg(test)]

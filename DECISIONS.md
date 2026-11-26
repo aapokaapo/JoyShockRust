@@ -42,6 +42,23 @@ It commits held keys after the sink accepts the batch. Per-session bitsets
 and reusable event buffers keep report processing allocation-free.
 [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
 
+## Shared profile compilation and persistence
+
+2026-11-26. Compile profiles in `joyshockrust-config` using the existing
+motion and mapping rules and an injected key resolver. Linux builds
+share an evdev key-name resolver. The bridge still decides whether a
+profile's settings can be applied to its running session.
+
+Stage writes beside the destination and use an exclusive directory
+lock during the final comparison and publish for JoyShockRust writers.
+New profiles use a no-clobber operation. Editor and game calibration
+updates compare the original bytes under that lock. External applications
+can write without acquiring the lock, so edits that race after the
+comparison can still be replaced. Profile saving retains the TOML text
+and uses a separate result for activation. The editor runs file operations
+and control requests on a worker and leaves newer draft edits unsaved.
+[Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16)
+
 ## Typed desktop controls and editor drafts
 
 2026-11-26. The editor keeps the parsed TOML document between structured
