@@ -12,9 +12,10 @@ use joyshockrust_input::{FactoryCalibration, InputReport, Transport};
 use joyshockrust_motion::{Calibration, StationaryCalibration, pointer::PointerMotion};
 
 use super::{
-    gyro_calibration::BiasWriter,
+    gyro_calibration::{self, BiasWriter},
     gyro_gate::GyroGate,
     haptics::{Cue, Haptics},
+    hidraw::ControllerId,
 };
 
 pub struct GyroMouse {
@@ -25,6 +26,7 @@ pub struct GyroMouse {
     shortcut: Option<ShortcutCalibration>,
     haptics: Option<Haptics>,
     bias_writer: Option<BiasWriter>,
+    controller: Option<ControllerId>,
 }
 
 struct HoldDetector {
@@ -101,7 +103,7 @@ impl GyroMouse {
         let factory = super::hidraw::read_factory_calibration(input, transport).map_err(|err| {
             io::Error::other(format!("could not read factory calibration: {err}"))
         })?;
-        let stored = super::gyro_calibration::load(input);
+        let stored = gyro_calibration::load(input);
         let output = open_output("JoyShockRust Gyro Mouse")?;
         let bias_writer = if options.calibration_hold.is_some() {
             BiasWriter::open(input).unwrap_or_else(|error| {
@@ -112,7 +114,7 @@ impl GyroMouse {
             None
         };
         if stored.is_some() {
-            eprintln!("Applied saved controller gyro calibration");
+            eprintln!("Applied controller gyro calibration");
         }
         Ok(Self {
             pointer: PointerMotion::new(
@@ -126,8 +128,13 @@ impl GyroMouse {
             shortcut: None,
             haptics: Haptics::open_controller(input, transport),
             bias_writer,
+            controller: super::hidraw::controller_id(input).ok().flatten(),
             gate: GyroGate::new(options.binding),
         })
+    }
+
+    pub fn is_calibrating(&self) -> bool {
+        self.pointer.is_calibrating()
     }
 
     pub fn signal_outputs_ready(&self) {
@@ -200,6 +207,9 @@ impl GyroMouse {
             .pointer
             .advance(report.imu, &report.controls, enabled, !suppress_flick);
         if let Some(bias) = self.pointer.take_completed_bias() {
+            if let Some(id) = self.controller {
+                gyro_calibration::remember(id, bias);
+            }
             if self.shortcut.take().is_some()
                 && let Some(writer) = &self.bias_writer
             {

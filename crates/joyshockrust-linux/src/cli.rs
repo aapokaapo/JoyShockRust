@@ -591,6 +591,7 @@ pub(super) fn run() -> Result<std::process::ExitCode, Box<dyn std::error::Error>
             bridge_at_startup,
             path.is_none() && benchmark_target.is_none(),
             selection_path,
+            active_profile,
         )?)
     } else {
         None

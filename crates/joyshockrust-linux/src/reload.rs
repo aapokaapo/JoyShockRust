@@ -19,7 +19,7 @@ use joyshockrust_ipc::{
 };
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     fmt::Display,
     io::{self, Read, Write},
     os::{
@@ -61,6 +61,8 @@ pub struct Reload {
     worker: Worker,
     calibration: Option<calibration::Server>,
     lease: Cell<Option<Lease>>,
+    /// The file behind the running profile, if it came from one.
+    active: RefCell<Option<PathBuf>>,
 }
 
 /// Outputs held paused by a calibration session.
@@ -85,6 +87,7 @@ impl Reload {
         bridge_at_startup: BridgeOptions,
         allow_controller_switch: bool,
         selection_path: Option<PathBuf>,
+        active_profile: Option<PathBuf>,
     ) -> io::Result<Self> {
         let listener = socket
             .map(|path| {
@@ -150,6 +153,7 @@ impl Reload {
             worker,
             calibration,
             lease: Cell::new(None),
+            active: RefCell::new(active_profile),
         })
     }
 
@@ -302,6 +306,7 @@ impl Request<'_> {
                 (ProfileSource::Startup, path.and_then(Path::file_name), path)
             }
         };
+        self.reload.active.replace(path.map(Path::to_path_buf));
         if let Some(status) = status {
             status.set_profile(source, name, path);
         }
@@ -381,6 +386,27 @@ impl Reload {
             eprintln!("Profile reload rejected ({}): {err}", path.display());
         }
         self.respond(reply, Reply::Rejected);
+    }
+
+    /// Reload the running profile after a calibration session wrote to its
+    /// file, so the new values apply without a manual reload.
+    fn reload_calibrated(&self, saved: &Path) -> io::Result<()> {
+        let Some(active) = self.active.borrow().clone() else {
+            return Ok(());
+        };
+        if !same_file(&active, saved) {
+            return Ok(());
+        }
+        eprintln!(
+            "Reloading {} after calibration was saved to it",
+            active.display()
+        );
+        let input = if self.path.as_deref() == Some(active.as_path()) {
+            ProfileInput::Startup
+        } else {
+            ProfileInput::File(active)
+        };
+        self.queue_profile(input, None)
     }
 
     fn queue_profile(&self, input: ProfileInput, mut reply: Option<ReplyTo>) -> io::Result<()> {
@@ -467,6 +493,13 @@ impl Reload {
                 Ok(None)
             }
         }
+    }
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
 }
 
@@ -681,6 +714,9 @@ pub fn wait<'a>(
         let flags = descriptors[9].revents().unwrap_or_else(PollFlags::empty);
         if flags.contains(PollFlags::POLLIN) {
             if let Some(lease) = server.receive()? {
+                if let Some(saved) = &lease.saved_profile {
+                    reload.reload_calibrated(saved)?;
+                }
                 let request = Request {
                     reload,
                     reply: Some(ReplyTo::Lease(lease.reply)),
@@ -837,6 +873,7 @@ mod tests {
             outcome: Cell::new(Outcome::NotAttempted),
             calibration: None,
             lease: Cell::new(None),
+            active: RefCell::new(None),
             worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let current = ControllerFilter {
@@ -898,6 +935,7 @@ mod tests {
             outcome: Cell::new(Outcome::NotAttempted),
             calibration: None,
             lease: Cell::new(None),
+            active: RefCell::new(None),
             worker: Worker::new(
                 None,
                 BridgeOptions {
@@ -966,6 +1004,7 @@ mod tests {
             worker: Worker::new(None, BridgeOptions::default()).unwrap(),
             calibration: None,
             lease: Cell::new(None),
+            active: RefCell::new(None),
         };
         let client = UnixDatagram::unbound().unwrap();
         let (_sender, input) = UnixStream::pair().unwrap();
@@ -1041,6 +1080,7 @@ mod tests {
             outcome: Cell::new(Outcome::NotAttempted),
             calibration: None,
             lease: Cell::new(None),
+            active: RefCell::new(None),
             worker: Worker::new(Some(startup), BridgeOptions::default()).unwrap(),
         };
         let (_sender, input) = UnixStream::pair().unwrap();
@@ -1086,6 +1126,7 @@ mod tests {
             outcome: Cell::new(Outcome::NotAttempted),
             calibration: None,
             lease: Cell::new(None),
+            active: RefCell::new(None),
             worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let client = UnixDatagram::bind_addr(
@@ -1257,6 +1298,7 @@ esac
                     worker: Worker::new(None, BridgeOptions::default()).unwrap(),
                     calibration: Some(server),
                     lease: Cell::new(None),
+                    active: RefCell::new(None),
                 };
                 Self {
                     directory,
@@ -1447,6 +1489,86 @@ esac
             assert_eq!(
                 *fixture.record.0.lock().unwrap(),
                 ["game /profiles/game.toml 28800 2.5 2"]
+            );
+        }
+
+        /// Measure and save an RWC result to `profile` in one session.
+        fn save_game(socket: &Path, profile: PathBuf) {
+            let mut client = Client::begin(socket, SessionKind::Game, "game");
+            client.send(ClientMessage::MeasureGame { sensitivity: 2.5 });
+            let measurement = loop {
+                match client.receive() {
+                    BridgeMessage::Progress(_) => {}
+                    BridgeMessage::GameMeasured { measurement, .. } => break measurement,
+                    other => panic!("unexpected reply {other:?}"),
+                }
+            };
+            client.send(ClientMessage::SaveGame {
+                measurement,
+                turns: 2,
+                profile,
+            });
+            assert_eq!(
+                client.receive(),
+                BridgeMessage::GameSaved { calibration: 40.0 }
+            );
+        }
+
+        impl Fixture {
+            /// The next profile update the main loop receives within `limit`.
+            fn next_profile(&self, limit: Duration) -> Option<Box<RuntimeOptions>> {
+                let (_sender, idle) = UnixStream::pair().unwrap();
+                let deadline = Instant::now() + limit;
+                while Instant::now() < deadline {
+                    let (_, request, _) =
+                        wait(idle.as_fd(), Some(&self.reload), None, None, Some(deadline)).unwrap();
+                    if let Some(request) = request {
+                        let Some(Update::Profile(options)) =
+                            request.resolve(ControllerFilter::default())
+                        else {
+                            panic!("unexpected update");
+                        };
+                        request.applied(None).unwrap();
+                        return Some(options);
+                    }
+                }
+                None
+            }
+        }
+
+        #[test]
+        fn saving_rwc_to_the_active_profile_reloads_it() {
+            let fixture = Fixture::new("reload-rwc", Timeouts::default());
+            let active = fixture.directory.join("active.toml");
+            fs::write(
+                &active,
+                "version = 1\n[gyro]\nreal_world_calibration = 40.0\nin_game_sens = 2.5\n",
+            )
+            .unwrap();
+            let other = fixture.directory.join("other.toml");
+            fs::write(&other, "version = 1\n").unwrap();
+
+            // A profile that is not running stays as it is.
+            fixture.reload.active.replace(Some(active.clone()));
+            fixture.run({
+                let other = other.clone();
+                move |socket| save_game(&socket, other)
+            });
+            assert!(fixture.next_profile(Duration::from_millis(200)).is_none());
+
+            // The running profile is read again after the session releases
+            // the controller, also when the session names it through a link.
+            let alias = fixture.directory.join("alias.toml");
+            std::os::unix::fs::symlink(&active, &alias).unwrap();
+            fixture.run(move |socket| save_game(&socket, alias));
+            assert!(!fixture.paused.get());
+            let options = fixture
+                .next_profile(Duration::from_secs(5))
+                .expect("the active profile was reloaded");
+            assert!(options.gyro.is_some());
+            assert_eq!(
+                fixture.reload.active.borrow().as_deref(),
+                Some(active.as_path())
             );
         }
 

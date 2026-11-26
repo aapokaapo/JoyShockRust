@@ -44,6 +44,9 @@ pub enum LeaseAction {
 pub(super) struct LeaseRequest {
     pub(super) action: LeaseAction,
     pub(super) reply: SyncSender<bool>,
+    /// A profile the session wrote a calibration to. The main loop reloads
+    /// it when it is the active profile.
+    pub(super) saved_profile: Option<PathBuf>,
 }
 
 /// The main loop's side of the session thread.
@@ -150,10 +153,18 @@ struct Leases {
 }
 
 impl Leases {
-    fn request(&self, action: LeaseAction) -> Result<bool, &'static str> {
+    fn request(
+        &self,
+        action: LeaseAction,
+        saved_profile: Option<PathBuf>,
+    ) -> Result<bool, &'static str> {
         let (reply, response) = sync_channel(1);
         self.sender
-            .send(LeaseRequest { action, reply })
+            .send(LeaseRequest {
+                action,
+                reply,
+                saved_profile,
+            })
             .map_err(|_| "the bridge main loop stopped")?;
         (&self.notify)
             .write_all(&[1])
@@ -422,6 +433,8 @@ struct Session<'a> {
     worker: Option<Worker>,
     measured: Option<Measured>,
     next_measurement: u64,
+    /// The profile that received the latest saved RWC result.
+    saved_profile: Option<PathBuf>,
 }
 
 enum Flow {
@@ -462,7 +475,7 @@ fn run_session(
         )?;
         return Ok(());
     };
-    match leases.request(LeaseAction::Acquire(id)) {
+    match leases.request(LeaseAction::Acquire(id), None) {
         Ok(true) => {}
         Ok(false) => {
             send(
@@ -473,7 +486,7 @@ fn run_session(
         }
         Err(reason) => {
             // A late grant must not leave outputs paused without a session.
-            let _ = leases.request(LeaseAction::Release(id));
+            let _ = leases.request(LeaseAction::Release(id), None);
             send(&client, &BridgeMessage::Rejected(reason.into()))?;
             return Ok(());
         }
@@ -488,11 +501,12 @@ fn run_session(
         worker: None,
         measured: None,
         next_measurement: 1,
+        saved_profile: None,
     };
     let result = session.run(listener, lines);
     // Stop measurement before handing the controller back.
     session.worker.take();
-    match leases.request(LeaseAction::Release(id)) {
+    match leases.request(LeaseAction::Release(id), session.saved_profile.take()) {
         Ok(true) => eprintln!("Calibration session {id} ended; outputs restored"),
         Ok(false) => eprintln!("Calibration session {id} ended; the lease was already released"),
         Err(reason) => {
@@ -662,7 +676,10 @@ impl Session<'_> {
                             .store
                             .save_game(&profile, *counts, *sensitivity, turns)
                         {
-                            Ok(calibration) => BridgeMessage::GameSaved { calibration },
+                            Ok(calibration) => {
+                                self.saved_profile = Some(profile);
+                                BridgeMessage::GameSaved { calibration }
+                            }
                             Err(reason) => BridgeMessage::Failed(reason),
                         }
                     }
