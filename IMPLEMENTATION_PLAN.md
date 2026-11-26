@@ -20,9 +20,9 @@ CI also runs the display-dependent editor suite in a headless Wayland
 session. The physical editor sequence remains the next device
 acceptance check. [Headless Wayland editor tests](TESTING_AND_PERFORMANCE.md#headless-wayland-editor-tests)
 
-The pointer and virtual gamepad portions of the architecture migration
-run in `joyshockrust-motion` and `joyshockrust-mapping`. Move activation
-and keyboard/mouse gesture state in a later mapping increment.
+Pointer processing runs in `joyshockrust-motion`. The mapping crate
+handles gamepad, keyboard and mouse routing, gesture deadlines and gyro
+activation. The bridge resolves host key codes and publishes virtual events.
 [Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
 
 The editor retains structured drafts and shares the command client and

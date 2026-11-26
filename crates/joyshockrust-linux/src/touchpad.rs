@@ -7,7 +7,7 @@ use std::{
 
 use evdev::{AbsoluteAxisCode, AttributeSetRef, PropType, raw_stream::RawDevice};
 use joyshockrust_config::profile::Touchpad;
-pub use joyshockrust_mapping::touchpad::{ClickState, Grid, TouchRegion};
+pub use joyshockrust_mapping::touchpad::{ClickState, Grid};
 
 use crate::hidraw;
 

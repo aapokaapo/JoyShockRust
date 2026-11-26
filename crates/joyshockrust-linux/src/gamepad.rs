@@ -9,7 +9,7 @@ use joyshockrust_mapping::gamepad::{GamepadAxis, GamepadOutput, MAX_GAMEPAD_EVEN
 
 pub use joyshockrust_mapping::gamepad::{
     AnalogTriggerRoute, ButtonRemaps, GamepadMapping, OutputKind, RemapState, TriggerStages,
-    dpad_button_by_name, parse_target,
+    parse_target,
 };
 pub use joyshockrust_motion::stick_response::StickCurve;
 

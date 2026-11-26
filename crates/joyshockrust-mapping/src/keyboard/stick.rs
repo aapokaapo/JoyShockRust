@@ -1,23 +1,22 @@
 use std::time::Instant;
 
-use evdev::{AttributeSet, KeyCode};
 use joyshockrust_core::{Controls, Stick};
-use serde::Deserialize;
 
-use super::{TAP_KEY_TIME, parse_key};
+use super::{Key, KeyResolver, KeySet, TAP_KEY_TIME};
 
 const DIAGONAL_RATIO: f32 = 0.414_213_56; // tan(22.5°)
 const DIRECTION_BOUNDARY_DEG: f32 = 22.5;
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "profile", derive(serde::Deserialize))]
+#[cfg_attr(feature = "profile", serde(rename_all = "lowercase"))]
 enum Side {
     Left,
     Right,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "profile", derive(serde::Deserialize))]
+#[cfg_attr(feature = "profile", serde(deny_unknown_fields))]
 pub(super) struct Settings {
     side: Side,
     deadzone: Option<f32>,
@@ -31,18 +30,19 @@ pub(super) struct Settings {
     inner: Option<ZoneSettings>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "profile", derive(serde::Deserialize))]
+#[cfg_attr(feature = "profile", serde(deny_unknown_fields))]
 struct ZoneSettings {
     key: String,
     threshold: f32,
     release: Option<f32>,
-    #[serde(default)]
+    #[cfg_attr(feature = "profile", serde(default))]
     mode: ZoneMode,
 }
 
-#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "profile", derive(serde::Deserialize))]
+#[cfg_attr(feature = "profile", serde(rename_all = "snake_case"))]
 enum ZoneMode {
     #[default]
     Hold,
@@ -57,14 +57,14 @@ pub(super) struct Binding {
     deadzone_release_squared: f32,
     direction_enter_ratio: f32,
     direction_release_ratio: f32,
-    directions: [Option<KeyCode>; 4],
+    directions: [Option<Key>; 4],
     zones: [Option<Zone>; 2],
 }
 
 #[derive(Clone, Copy, PartialEq)]
 struct Zone {
     kind: ZoneKind,
-    key: KeyCode,
+    key: Key,
     mode: ZoneMode,
     threshold_squared: f32,
     release_squared: f32,
@@ -77,7 +77,12 @@ enum ZoneKind {
 }
 
 impl ZoneSettings {
-    fn resolve(self, kind: ZoneKind, deadzone: f32) -> Result<Zone, String> {
+    fn resolve(
+        self,
+        kind: ZoneKind,
+        deadzone: f32,
+        keys: &impl KeyResolver,
+    ) -> Result<Zone, String> {
         let threshold = self.threshold;
         let release = match kind {
             ZoneKind::Outer => {
@@ -105,7 +110,7 @@ impl ZoneSettings {
         };
         Ok(Zone {
             kind,
-            key: super::keyboard_key(&self.key)?,
+            key: keys.keyboard(&self.key)?,
             mode: self.mode,
             threshold_squared: threshold * threshold,
             release_squared: release * release,
@@ -114,7 +119,10 @@ impl ZoneSettings {
 }
 
 impl Settings {
-    pub(super) fn resolve_all(settings: Vec<Self>) -> Result<Vec<Binding>, String> {
+    pub(super) fn resolve_all(
+        settings: Vec<Self>,
+        keys: &impl KeyResolver,
+    ) -> Result<Vec<Binding>, String> {
         let mut bindings = Vec::<Binding>::new();
         for settings in settings {
             if bindings.iter().any(|binding| binding.side == settings.side) {
@@ -123,12 +131,12 @@ impl Settings {
                     settings.side
                 ));
             }
-            bindings.push(settings.resolve()?);
+            bindings.push(settings.resolve(keys)?);
         }
         Ok(bindings)
     }
 
-    fn resolve(self) -> Result<Binding, String> {
+    fn resolve(self, keys: &impl KeyResolver) -> Result<Binding, String> {
         let deadzone = self.deadzone.unwrap_or(0.2);
         if !(0.0..1.0).contains(&deadzone) {
             return Err("keyboard stick deadzone must be in [0, 1)".into());
@@ -149,6 +157,8 @@ impl Settings {
                 (DIRECTION_BOUNDARY_DEG - margin).to_radians().tan(),
             )
         };
+        let parse_key =
+            |name: Option<String>| name.as_deref().map(|name| keys.keyboard(name)).transpose();
         let directions = [
             parse_key(self.up)?,
             parse_key(self.right)?,
@@ -157,10 +167,10 @@ impl Settings {
         ];
         let zones = [
             self.outer
-                .map(|settings| settings.resolve(ZoneKind::Outer, deadzone))
+                .map(|settings| settings.resolve(ZoneKind::Outer, deadzone, keys))
                 .transpose()?,
             self.inner
-                .map(|settings| settings.resolve(ZoneKind::Inner, deadzone))
+                .map(|settings| settings.resolve(ZoneKind::Inner, deadzone, keys))
                 .transpose()?,
         ];
         if directions.iter().all(Option::is_none) && zones.iter().all(Option::is_none) {
@@ -187,14 +197,14 @@ impl Settings {
 }
 
 impl Binding {
-    pub(super) fn keys(self) -> impl Iterator<Item = KeyCode> {
+    pub(super) fn keys(self) -> impl Iterator<Item = Key> {
         self.directions
             .into_iter()
             .flatten()
             .chain(self.zones.into_iter().flatten().map(|zone| zone.key))
     }
 
-    pub(super) fn held_zone_keys(self) -> impl Iterator<Item = KeyCode> {
+    pub(super) fn held_zone_keys(self) -> impl Iterator<Item = Key> {
         self.zones
             .into_iter()
             .flatten()
@@ -202,7 +212,7 @@ impl Binding {
             .map(|zone| zone.key)
     }
 
-    pub(super) fn pulsed_zone_keys(self) -> impl Iterator<Item = KeyCode> {
+    pub(super) fn pulsed_zone_keys(self) -> impl Iterator<Item = Key> {
         self.zones
             .into_iter()
             .flatten()
@@ -247,7 +257,7 @@ impl State {
         &mut self,
         controls: Controls,
         now: Instant,
-        held: &mut AttributeSet<KeyCode>,
+        held: &mut KeySet,
     ) -> Option<Instant> {
         let Stick { x, y } = match self.binding.side {
             Side::Left => controls.left_stick,
@@ -275,7 +285,7 @@ impl State {
                 };
                 *active = component > 0.0 && component >= perpendicular * ratio;
                 if *active && let Some(key) = key {
-                    held.insert(key);
+                    held.insert(key.id);
                     moving = true;
                 }
             }
@@ -298,7 +308,7 @@ impl State {
             };
             let (pressed, next_deadline) = state.update(zone.mode, active, moving, now);
             if pressed {
-                held.insert(zone.key);
+                held.insert(zone.key.id);
             }
             deadline = deadline.into_iter().chain(next_deadline).min();
         }

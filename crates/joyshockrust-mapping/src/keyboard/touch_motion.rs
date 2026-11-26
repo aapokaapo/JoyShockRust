@@ -3,26 +3,25 @@ use std::{
     time::{Duration, Instant},
 };
 
-use evdev::KeyCode;
 use joyshockrust_input::{DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH, TouchContact};
-use serde::{Deserialize, Deserializer, de};
 
-use super::{HOLD_TIME, is_mouse_button};
+use super::{HOLD_TIME, Key, KeyResolver};
 
 const DEFAULT_TAP_MAX_TRAVEL: u16 = 40;
 
-#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "profile", derive(serde::Deserialize))]
+#[cfg_attr(feature = "profile", serde(deny_unknown_fields))]
 pub(super) struct ScrollSettings {
     vertical_step: Option<NonZeroU16>,
     horizontal_step: Option<NonZeroU16>,
-    #[serde(default)]
+    #[cfg_attr(feature = "profile", serde(default))]
     invert_vertical: bool,
-    #[serde(default)]
+    #[cfg_attr(feature = "profile", serde(default))]
     invert_horizontal: bool,
-    #[serde(default)]
+    #[cfg_attr(feature = "profile", serde(default))]
     axis_lock: bool,
-    #[serde(default = "default_fingers")]
+    #[cfg_attr(feature = "profile", serde(default = "default_fingers"))]
     fingers: u8,
 }
 
@@ -109,48 +108,66 @@ impl ScrollState {
     }
 }
 
-#[derive(Clone, Copy, Default, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct PointerSettings {
+#[derive(Clone, Copy, Default, PartialEq)]
+#[cfg_attr(feature = "profile", derive(serde::Deserialize))]
+#[cfg_attr(feature = "profile", serde(deny_unknown_fields))]
+pub(super) struct PointerSettings<K = String> {
     sensitivity_x: Option<f64>,
     sensitivity_y: Option<f64>,
-    #[serde(default)]
+    #[cfg_attr(feature = "profile", serde(default))]
     invert_x: bool,
-    #[serde(default)]
+    #[cfg_attr(feature = "profile", serde(default))]
     invert_y: bool,
-    #[serde(default)]
+    #[cfg_attr(feature = "profile", serde(default))]
     motion_threshold: u16,
-    #[serde(default)]
+    #[cfg_attr(feature = "profile", serde(default))]
     tap_to_click: bool,
-    #[serde(default)]
+    #[cfg_attr(feature = "profile", serde(default))]
     two_finger_tap_to_click: bool,
-    #[serde(default, deserialize_with = "deserialize_tap_button")]
-    tap_button: Option<KeyCode>,
-    #[serde(default, deserialize_with = "deserialize_tap_button")]
-    two_finger_tap_button: Option<KeyCode>,
+    #[cfg_attr(feature = "profile", serde(default))]
+    tap_button: Option<K>,
+    #[cfg_attr(feature = "profile", serde(default))]
+    two_finger_tap_button: Option<K>,
     tap_window_ms: Option<NonZeroU32>,
     tap_max_travel: Option<u16>,
 }
 
-fn deserialize_tap_button<'de, D>(deserializer: D) -> Result<Option<KeyCode>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let name = String::deserialize(deserializer)?;
-    name.parse::<KeyCode>()
-        .ok()
-        .filter(|&key| is_mouse_button(key))
-        .map(Some)
-        .ok_or_else(|| de::Error::custom(format!("expected a mouse button, got {name}")))
+impl PointerSettings<String> {
+    pub(super) fn resolve(self, keys: &impl KeyResolver) -> Result<PointerSettings<Key>, String> {
+        let tap_button = self
+            .tap_button
+            .as_deref()
+            .map(|name| keys.mouse_button(name))
+            .transpose()?;
+        let two_finger_tap_button = self
+            .two_finger_tap_button
+            .as_deref()
+            .map(|name| keys.mouse_button(name))
+            .transpose()?;
+        let settings = PointerSettings {
+            sensitivity_x: self.sensitivity_x,
+            sensitivity_y: self.sensitivity_y,
+            invert_x: self.invert_x,
+            invert_y: self.invert_y,
+            motion_threshold: self.motion_threshold,
+            tap_to_click: self.tap_to_click,
+            two_finger_tap_to_click: self.two_finger_tap_to_click,
+            tap_button,
+            two_finger_tap_button,
+            tap_window_ms: self.tap_window_ms,
+            tap_max_travel: self.tap_max_travel,
+        };
+        settings.validate()?;
+        Ok(settings)
+    }
 }
 
-impl PointerSettings {
-    pub(super) fn tap_buttons(self) -> [Option<KeyCode>; 2] {
+impl PointerSettings<Key> {
+    pub(super) fn tap_buttons(self, [one, two]: [Key; 2]) -> [Option<Key>; 2] {
         [
-            self.tap_to_click
-                .then_some(self.tap_button.unwrap_or(KeyCode::BTN_LEFT)),
+            self.tap_to_click.then_some(self.tap_button.unwrap_or(one)),
             self.two_finger_tap_to_click
-                .then_some(self.two_finger_tap_button.unwrap_or(KeyCode::BTN_RIGHT)),
+                .then_some(self.two_finger_tap_button.unwrap_or(two)),
         ]
     }
 
@@ -211,7 +228,7 @@ pub(super) enum TapCount {
 }
 
 impl TapState {
-    pub(super) fn new(settings: PointerSettings) -> Self {
+    pub(super) fn new(settings: PointerSettings<Key>) -> Self {
         let travel = i64::from(settings.tap_max_travel.unwrap_or(DEFAULT_TAP_MAX_TRAVEL));
         Self {
             phase: TapPhase::Idle,
@@ -307,7 +324,7 @@ impl TapContacts {
 }
 
 impl PointerState {
-    pub(super) fn new(settings: PointerSettings) -> Self {
+    pub(super) fn new(settings: PointerSettings<Key>) -> Self {
         let threshold = i64::from(settings.motion_threshold);
         let [x, y] = settings.sensitivity();
         Self {

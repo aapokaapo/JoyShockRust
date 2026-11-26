@@ -1,179 +1,54 @@
-use std::{
-    io,
-    num::NonZeroU32,
-    time::{Duration, Instant},
-};
+use std::{io, time::Instant};
 
 use evdev::{
     AttributeSet, EventType, InputEvent, KeyCode, RelativeAxisCode, uinput::VirtualDevice,
 };
-use joyshockrust_core::{Button, Buttons, Controls};
-use joyshockrust_input::{InputReport, TouchContact};
-use serde::Deserialize;
+use joyshockrust_input::InputReport;
+use joyshockrust_mapping::keyboard::{Event, Input, Key, KeyKind, KeyResolver, RelativeAxis};
 
-use crate::gyro_gate::{self, DOUBLE_TAP_WINDOW, HOLD_TIME, TriggerGate, TriggerSide};
+pub use joyshockrust_mapping::keyboard::{Config, Settings};
+
 use crate::status::StatusSocket;
-use crate::touchpad::{Grid, TouchRegion};
 
-mod stick;
-mod touch_motion;
+pub(crate) struct LinuxKeys;
 
-const TAP_KEY_TIME: Duration = Duration::from_millis(30);
-const SCROLL_REPEAT_TIME: Duration = Duration::from_millis(100);
-const WHEEL_AXES: [RelativeAxisCode; 2] =
-    [RelativeAxisCode::REL_WHEEL, RelativeAxisCode::REL_HWHEEL];
-const POINTER_AXES: [RelativeAxisCode; 2] = [RelativeAxisCode::REL_X, RelativeAxisCode::REL_Y];
+impl KeyResolver for LinuxKeys {
+    fn keyboard(&self, name: &str) -> Result<Key, String> {
+        keyboard_key(name).map(resolved_key)
+    }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Settings {
-    #[serde(default)]
-    pub grab_touchpad: bool,
-    #[serde(default)]
-    bindings: Vec<RawBinding>,
-    #[serde(default)]
-    keep_partial: KeepPartial,
-    #[serde(default)]
-    button_output: std::collections::BTreeMap<String, ButtonOutput>,
-    #[serde(default)]
-    sticks: Vec<stick::Settings>,
-    touch_scroll: Option<touch_motion::ScrollSettings>,
-    touch_pointer: Option<touch_motion::PointerSettings>,
-}
+    fn mouse_button(&self, name: &str) -> Result<Key, String> {
+        name.parse::<KeyCode>()
+            .ok()
+            .filter(|&key| is_mouse_button(key))
+            .map(resolved_key)
+            .ok_or_else(|| format!("expected a mouse button, got {name}"))
+    }
 
-#[derive(Clone, Copy, PartialEq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum ButtonOutput {
-    Keyboard,
-    Mouse,
-}
+    fn gesture(&self, name: &str) -> Result<Key, String> {
+        gesture_key(name).map(resolved_key)
+    }
 
-#[derive(Default, PartialEq)]
-pub struct GamepadMask {
-    pub buttons: Buttons,
-}
+    fn default_tap_buttons(&self) -> [Key; 2] {
+        [KeyCode::BTN_LEFT, KeyCode::BTN_RIGHT].map(resolved_key)
+    }
 
-#[derive(Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct KeepPartial {
-    l2: bool,
-    r2: bool,
-}
-
-impl KeepPartial {
-    fn for_side(&self, side: TriggerSide) -> bool {
-        match side {
-            TriggerSide::Left => self.l2,
-            TriggerSide::Right => self.r2,
-        }
+    fn describe(&self, key: Key) -> String {
+        format!("{:?}", KeyCode(key.id))
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawBinding {
-    button: Option<String>,
-    trigger: Option<String>,
-    chord: Option<Vec<String>>,
-    tap: Option<RawOutput>,
-    hold: Option<RawOutput>,
-    double_tap: Option<RawOutput>,
-    hold_ms: Option<NonZeroU32>,
-    double_tap_ms: Option<NonZeroU32>,
-    scroll_repeat_ms: Option<NonZeroU32>,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum RawOutput {
-    Single(String),
-    Combination(Vec<String>),
-    Scroll(ScrollOutput),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ScrollOutput {
-    scroll: ScrollDirection,
-}
-
-#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum ScrollDirection {
-    Up,
-    Down,
-    Left,
-    Right,
-}
-
-impl ScrollDirection {
-    fn accumulate(self, scroll: &mut [i32; WHEEL_AXES.len()]) {
-        let (axis, step) = match self {
-            Self::Up => (0, 1),
-            Self::Down => (0, -1),
-            Self::Left => (1, -1),
-            Self::Right => (1, 1),
-        };
-        scroll[axis] = scroll[axis].saturating_add(step);
+fn resolved_key(key: KeyCode) -> Key {
+    Key {
+        id: key.0,
+        kind: if is_mouse_button(key) {
+            KeyKind::MouseButton
+        } else if is_modifier(key) {
+            KeyKind::Modifier
+        } else {
+            KeyKind::Key
+        },
     }
-}
-
-#[derive(Clone, PartialEq)]
-enum Action {
-    Keys(Box<[KeyCode]>),
-    Scroll(ScrollDirection),
-}
-
-impl Action {
-    fn keys(&self) -> &[KeyCode] {
-        match self {
-            Self::Keys(keys) => keys,
-            Self::Scroll(_) => &[],
-        }
-    }
-}
-
-#[derive(PartialEq)]
-pub struct Config {
-    pub gamepad_mask: GamepadMask,
-    buttons: Vec<Binding>,
-    sticks: Vec<stick::Binding>,
-    touch_scroll: Option<touch_motion::ScrollSettings>,
-    touch_pointer: Option<touch_motion::PointerSettings>,
-}
-
-impl Config {
-    fn keys(&self) -> impl Iterator<Item = KeyCode> {
-        self.buttons
-            .iter()
-            .flat_map(Binding::actions)
-            .flat_map(|action| action.keys().iter().copied())
-            .chain(self.sticks.iter().flat_map(|binding| binding.keys()))
-            .chain(self.touch_tap_buttons().into_iter().flatten())
-    }
-
-    fn touch_tap_buttons(&self) -> [Option<KeyCode>; 2] {
-        self.touch_pointer
-            .map_or([None; 2], touch_motion::PointerSettings::tap_buttons)
-    }
-
-    fn has_scroll(&self) -> bool {
-        self.touch_scroll.is_some()
-            || self
-                .buttons
-                .iter()
-                .flat_map(Binding::actions)
-                .any(|action| matches!(action, Action::Scroll(_)))
-    }
-
-    fn relative_event_capacity(&self) -> usize {
-        usize::from(self.has_scroll()) * WHEEL_AXES.len()
-            + usize::from(self.touch_pointer.is_some()) * POINTER_AXES.len()
-    }
-}
-
-fn parse_key(name: Option<String>) -> Result<Option<KeyCode>, String> {
-    name.as_deref().map(keyboard_key).transpose()
 }
 
 fn keyboard_key(name: &str) -> Result<KeyCode, String> {
@@ -216,509 +91,17 @@ fn is_modifier(key: KeyCode) -> bool {
     )
 }
 
-impl RawOutput {
-    fn resolve(self) -> Result<Action, String> {
-        match self {
-            Self::Single(name) => Ok(Action::Keys(Box::new([gesture_key(&name)?]))),
-            Self::Scroll(output) => Ok(Action::Scroll(output.scroll)),
-            Self::Combination(names) => {
-                if names.is_empty() {
-                    return Err("gesture combination needs at least one output".into());
-                }
-                let mut keys = names
-                    .iter()
-                    .map(|name| gesture_key(name))
-                    .collect::<Result<Vec<_>, _>>()?;
-                keys.sort_unstable_by_key(|key| key.0);
-                if keys.windows(2).any(|pair| pair[0] == pair[1]) {
-                    return Err("gesture combination outputs must be distinct".into());
-                }
-                Ok(Action::Keys(keys.into_boxed_slice()))
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Source {
-    Button(Button),
-    Direction(Button),
-    Trigger(TriggerGate),
-    Touch(TouchRegion),
-    TouchClick(TouchRegion),
-}
-
-#[derive(Clone, PartialEq)]
-struct Binding {
-    source: BindingSource,
-    tap: Option<Action>,
-    hold: Option<Action>,
-    double_tap: Option<Action>,
-    hold_time: Duration,
-    double_tap_window: Duration,
-    scroll_repeat_time: Duration,
-}
-
-impl Binding {
-    fn actions(&self) -> impl Iterator<Item = &Action> {
-        [&self.tap, &self.hold, &self.double_tap]
-            .into_iter()
-            .flatten()
-    }
-}
-
-#[derive(Clone, Copy)]
-enum BindingSource {
-    Single(Source),
-    Chord(Source, Source),
-    PartialTrigger {
-        lower: TriggerGate,
-        upper: TriggerGate,
-        keep_partial: bool,
-    },
-}
-
-impl PartialEq for BindingSource {
-    fn eq(&self, other: &Self) -> bool {
-        match (*self, *other) {
-            (Self::Single(a), Self::Single(b)) => a == b,
-            (
-                Self::PartialTrigger {
-                    lower: a,
-                    upper: b,
-                    keep_partial: keep_a,
-                },
-                Self::PartialTrigger {
-                    lower: c,
-                    upper: d,
-                    keep_partial: keep_b,
-                },
-            ) => a == c && b == d && keep_a == keep_b,
-            (Self::Chord(a, b), Self::Chord(c, d)) => (a == c && b == d) || (a == d && b == c),
-            _ => false,
-        }
-    }
-}
-
-impl Source {
-    fn trigger(spec: &str) -> Result<Self, String> {
-        TriggerGate::parse(spec)
-            .map(Self::Trigger)
-            .map_err(|error| format!("invalid keyboard binding trigger {spec}: {error}"))
-    }
-
-    fn chord_member(name: &str, grid: Option<&Grid>) -> Result<Self, String> {
-        if let Some(spec) = name.strip_prefix("trigger:") {
-            Self::trigger(spec)
-        } else {
-            Self::parse(name, grid)
-        }
-    }
-
-    fn parse(name: &str, grid: Option<&Grid>) -> Result<Self, String> {
-        if let Some((kind, spec)) = name.split_once(':') {
-            let source = match kind {
-                "touch" => Self::Touch,
-                "click" => Self::TouchClick,
-                _ => return Err(format!("unknown keyboard binding button {name}")),
-            };
-            let region = grid
-                .ok_or("keyboard touchpad binding requires a [touchpad] grid")?
-                .parse_region(spec)?;
-            return Ok(source(region));
-        }
-        if let Some(direction) = crate::gamepad::dpad_button_by_name(name) {
-            return Ok(Self::Direction(direction));
-        }
-        gyro_gate::button_by_name(name)
-            .map(Self::Button)
-            .ok_or_else(|| format!("unknown keyboard binding button {name}"))
-    }
-
-    fn pressed(self, input: &Input, click: Option<TouchContact>, was_pressed: bool) -> bool {
-        let controls = &input.controls;
-        match self {
-            Self::Button(button) => controls.buttons.contains(button),
-            Self::Trigger(trigger) => trigger.pressed(controls, was_pressed),
-            Self::Touch(region) => region.pressed(&input.contacts),
-            Self::TouchClick(region) => click.is_some_and(|contact| region.contains(contact)),
-            Self::Direction(direction) => controls.dpad.buttons().contains(direction),
-        }
-    }
-}
-
-impl Settings {
-    pub fn resolve(
-        self,
-        grid: Option<&Grid>,
-        triggers: [crate::gamepad::TriggerStages; 2],
-    ) -> Result<Config, String> {
-        let scaled = |gate: TriggerGate| {
-            let index = usize::from(gate.side() == super::gyro_gate::TriggerSide::Right);
-            gate.within_travel(triggers[index].travel_percent)
-        };
-        let mut gamepad_mask = GamepadMask::default();
-        for name in self.button_output.keys() {
-            match Source::parse(name, grid)? {
-                Source::Button(button) | Source::Direction(button) => {
-                    gamepad_mask.buttons.insert(button)
-                }
-                _ => return Err(format!("button_output requires a physical button: {name}")),
-            }
-        }
-        let mut bindings = Vec::<Binding>::new();
-        for raw in self.bindings {
-            let (source, name) = match (raw.button, raw.trigger, raw.chord) {
-                (Some(name), None, None) => {
-                    (BindingSource::Single(Source::parse(&name, grid)?), name)
-                }
-                (None, Some(spec), None) => {
-                    let named = spec.split_once(':').and_then(|(side, stage)| {
-                        let settings = match side {
-                            "l2" => triggers[0],
-                            "r2" => triggers[1],
-                            _ => return None,
-                        };
-                        match stage {
-                            "partial" => Some(BindingSource::PartialTrigger {
-                                lower: settings.lower,
-                                upper: settings.upper,
-                                keep_partial: settings.keep_partial,
-                            }),
-                            "full" => Some(BindingSource::Single(Source::Trigger(settings.upper))),
-                            _ => None,
-                        }
-                    });
-                    let source = if let Some(source) = named {
-                        source
-                    } else if let Some((lower, upper)) = TriggerGate::partial(&spec)? {
-                        BindingSource::PartialTrigger {
-                            lower: scaled(lower),
-                            upper: scaled(upper),
-                            keep_partial: self.keep_partial.for_side(lower.side()),
-                        }
-                    } else {
-                        BindingSource::Single(Source::Trigger(scaled(TriggerGate::parse(&spec)?)))
-                    };
-                    (source, spec)
-                }
-                (None, None, Some(members)) => {
-                    let [first, second] = members.as_slice() else {
-                        return Err("keyboard chord requires exactly two inputs".into());
-                    };
-                    let a = Source::chord_member(first, grid)?;
-                    let b = Source::chord_member(second, grid)?;
-                    if a == b {
-                        return Err("keyboard chord requires two distinct inputs".into());
-                    }
-                    (
-                        BindingSource::Chord(a, b),
-                        format!("chord [{first}, {second}]"),
-                    )
-                }
-                _ => {
-                    return Err(
-                        "keyboard binding requires exactly one of button, trigger or chord".into(),
-                    );
-                }
-            };
-            if bindings.iter().any(|binding| binding.source == source) {
-                return Err(format!("duplicate keyboard binding for {name}"));
-            }
-            let binding = Binding {
-                source,
-                tap: raw.tap.map(RawOutput::resolve).transpose()?,
-                hold: raw.hold.map(RawOutput::resolve).transpose()?,
-                double_tap: raw.double_tap.map(RawOutput::resolve).transpose()?,
-                hold_time: raw
-                    .hold_ms
-                    .map_or(HOLD_TIME, |ms| Duration::from_millis(ms.get().into())),
-                double_tap_window: raw.double_tap_ms.map_or(DOUBLE_TAP_WINDOW, |ms| {
-                    Duration::from_millis(ms.get().into())
-                }),
-                scroll_repeat_time: raw.scroll_repeat_ms.map_or(SCROLL_REPEAT_TIME, |ms| {
-                    Duration::from_millis(ms.get().into())
-                }),
-            };
-            if binding.actions().next().is_none() {
-                return Err(format!(
-                    "keyboard binding for {name} needs at least one output"
-                ));
-            }
-            let physical = name.split(':').next().unwrap_or(&name);
-            if matches!(
-                source,
-                BindingSource::Single(
-                    Source::Button(_) | Source::Direction(_) | Source::Trigger(_)
-                ) | BindingSource::PartialTrigger { .. }
-            ) && let Some(output) = self.button_output.get(physical)
-                && binding.actions().any(|action| match action {
-                    Action::Keys(keys) => keys
-                        .iter()
-                        .any(|&key| is_mouse_button(key) != (*output == ButtonOutput::Mouse)),
-                    Action::Scroll(_) => *output != ButtonOutput::Mouse,
-                })
-            {
-                return Err(format!(
-                    "keyboard binding for {name} conflicts with button_output for {physical}"
-                ));
-            }
-            if raw.scroll_repeat_ms.is_some() && !matches!(binding.hold, Some(Action::Scroll(_))) {
-                return Err(format!(
-                    "keyboard binding for {name}: scroll_repeat_ms requires a scroll hold action"
-                ));
-            }
-            bindings.push(binding);
-        }
-        let config = Config {
-            gamepad_mask,
-            buttons: bindings,
-            sticks: stick::Settings::resolve_all(self.sticks)?,
-            touch_scroll: self
-                .touch_scroll
-                .map(touch_motion::ScrollSettings::validate)
-                .transpose()?,
-            touch_pointer: self
-                .touch_pointer
-                .map(touch_motion::PointerSettings::validate)
-                .transpose()?,
-        };
-        for key in config
-            .sticks
-            .iter()
-            .flat_map(|stick| stick.pulsed_zone_keys())
-        {
-            if config
-                .keys()
-                .filter(|&mapped| mapped == key)
-                .nth(1)
-                .is_some()
-            {
-                return Err(format!(
-                    "keyboard stick pulse key {key:?} must have a single binding"
-                ));
-            }
-        }
-        Ok(config)
-    }
-}
-
-#[derive(Default)]
-enum Press {
-    #[default]
-    Up,
-    Down(Instant),
-    Held,
-}
-
-struct Gesture {
-    binding: Binding,
-    source_pressed: [bool; 2],
-    reached_full_trigger: bool,
-    press: Press,
-    pending_tap: Option<Instant>,
-    next_scroll: Option<Instant>,
-}
-
-impl Gesture {
-    fn update(
-        &mut self,
-        input: &Input,
-        click: Option<TouchContact>,
-        now: Instant,
-    ) -> Option<&Action> {
-        let mut suppress_tap = false;
-        let pressed = match self.binding.source {
-            BindingSource::Single(source) => {
-                self.source_pressed[0] = source.pressed(input, click, self.source_pressed[0]);
-                self.source_pressed[0]
-            }
-            BindingSource::PartialTrigger {
-                lower,
-                keep_partial: true,
-                ..
-            } => {
-                self.source_pressed[0] = lower.pressed(&input.controls, self.source_pressed[0]);
-                self.source_pressed[0]
-            }
-            BindingSource::PartialTrigger {
-                lower,
-                upper,
-                keep_partial: false,
-            } => {
-                self.source_pressed[0] = lower.pressed(&input.controls, self.source_pressed[0]);
-                self.source_pressed[1] = upper.pressed(&input.controls, self.source_pressed[1]);
-                if self.source_pressed[1] {
-                    // A full pull cancels the partial gesture instead of completing a tap.
-                    self.reached_full_trigger = true;
-                    self.press = Press::Up;
-                    self.next_scroll = None;
-                }
-                suppress_tap = self.reached_full_trigger;
-                if !self.source_pressed[0] {
-                    self.reached_full_trigger = false;
-                }
-                self.source_pressed[0] && !self.source_pressed[1]
-            }
-            BindingSource::Chord(first, second) => {
-                // Update both inputs even while the chord is inactive. A trigger
-                // may have crossed its engagement threshold before the other input.
-                self.source_pressed = [
-                    first.pressed(input, click, self.source_pressed[0]),
-                    second.pressed(input, click, self.source_pressed[1]),
-                ];
-                self.source_pressed[0] && self.source_pressed[1]
-            }
-        };
-        let mut pulse = None;
-        if self.pending_tap.is_some_and(|deadline| deadline <= now) {
-            self.pending_tap = None;
-            pulse = self.binding.tap.as_ref();
-        }
-        match self.press {
-            Press::Up
-                if pressed && self.binding.tap.is_none() && self.binding.double_tap.is_none() =>
-            {
-                self.press = Press::Held;
-            }
-            Press::Up if pressed => self.press = Press::Down(now),
-            Press::Down(start) if !pressed => {
-                self.press = Press::Up;
-                if !suppress_tap && now.duration_since(start) < self.binding.hold_time {
-                    if let Some(double_tap) = &self.binding.double_tap {
-                        if self.pending_tap.take().is_some() {
-                            pulse = Some(double_tap);
-                        } else {
-                            self.pending_tap = Some(now + self.binding.double_tap_window);
-                        }
-                    } else {
-                        pulse = self.binding.tap.as_ref();
-                    }
-                }
-            }
-            Press::Down(start)
-                if self.binding.hold.is_some() && now >= start + self.binding.hold_time =>
-            {
-                self.press = Press::Held;
-            }
-            Press::Held if !pressed => self.press = Press::Up,
-            _ => {}
-        }
-        pulse
-    }
-
-    fn deadline(&self) -> Option<Instant> {
-        let hold = match self.press {
-            Press::Down(start) if self.binding.hold.is_some() => {
-                Some(start + self.binding.hold_time)
-            }
-            _ => None,
-        };
-        hold.into_iter()
-            .chain(self.pending_tap)
-            .chain(self.next_scroll)
-            .min()
-    }
-
-    fn held_action(&mut self, now: Instant) -> Option<&Action> {
-        if !matches!(self.press, Press::Held) {
-            self.next_scroll = None;
-            return None;
-        }
-        let action = self.binding.hold.as_ref()?;
-        if matches!(action, Action::Scroll(_)) {
-            if self.next_scroll.is_some_and(|deadline| deadline > now) {
-                return None;
-            }
-            // Resume from the actual wake time after a late poll, without a burst of old steps.
-            self.next_scroll = Some(now + self.binding.scroll_repeat_time);
-        }
-        Some(action)
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-struct Input {
-    controls: Controls,
-    contacts: [Option<TouchContact>; 2],
-}
-
-impl From<InputReport> for Input {
-    fn from(report: InputReport) -> Self {
-        Self {
-            controls: report.controls,
-            contacts: report.touch_contacts,
-        }
-    }
-}
-
 struct State {
-    gestures: Vec<Gesture>,
-    sticks: Vec<stick::State>,
-    touch_scroll: Option<touch_motion::ScrollState>,
-    touch_pointer: Option<touch_motion::PointerState>,
-    touch_tap: Option<(touch_motion::TapState, [Option<KeyCode>; 2])>,
-    pulses: Vec<(KeyCode, Instant)>,
-    mapped_keys: AttributeSet<KeyCode>,
-    held_zone_keys: AttributeSet<KeyCode>,
-    pulsed_zone_keys: AttributeSet<KeyCode>,
-    held: AttributeSet<KeyCode>,
-    next_held: AttributeSet<KeyCode>,
-    events: Vec<InputEvent>,
-    input: Input,
-    click: Option<TouchContact>,
+    engine: joyshockrust_mapping::keyboard::State,
+    encoded: Vec<InputEvent>,
 }
 
 impl State {
     fn new(config: &Config) -> Self {
-        let gestures = config
-            .buttons
-            .iter()
-            .cloned()
-            .map(|binding| Gesture {
-                binding,
-                source_pressed: [false; 2],
-                reached_full_trigger: false,
-                press: Press::Up,
-                pending_tap: None,
-                next_scroll: None,
-            })
-            .collect();
-        let mapped_keys: AttributeSet<KeyCode> = config.keys().collect();
-        let key_count = mapped_keys.iter().count();
-        let tap_buttons = config.touch_tap_buttons();
+        let engine = joyshockrust_mapping::keyboard::State::new(config);
         Self {
-            gestures,
-            sticks: config
-                .sticks
-                .iter()
-                .copied()
-                .map(stick::State::new)
-                .collect(),
-            touch_scroll: config.touch_scroll.map(touch_motion::ScrollState::new),
-            touch_pointer: config.touch_pointer.map(touch_motion::PointerState::new),
-            touch_tap: config
-                .touch_pointer
-                .filter(|_| tap_buttons.iter().any(Option::is_some))
-                .map(|settings| (touch_motion::TapState::new(settings), tap_buttons)),
-            // At most one pulse deadline per mapped key.
-            pulses: Vec::with_capacity(key_count),
-            mapped_keys,
-            held_zone_keys: config
-                .sticks
-                .iter()
-                .flat_map(|binding| binding.held_zone_keys())
-                .collect(),
-            pulsed_zone_keys: config
-                .sticks
-                .iter()
-                .flat_map(|binding| binding.pulsed_zone_keys())
-                .collect(),
-            held: AttributeSet::new(),
-            next_held: AttributeSet::new(),
-            events: Vec::with_capacity(key_count + config.relative_event_capacity()),
-            input: Input::default(),
-            click: None,
+            encoded: Vec::with_capacity(engine.event_capacity()),
+            engine,
         }
     }
 
@@ -728,139 +111,44 @@ impl State {
         now: Instant,
         mut emit: impl FnMut(&[InputEvent]) -> io::Result<()>,
     ) -> io::Result<Option<Instant>> {
-        if !input.controls.buttons.contains(Button::TouchpadClick) {
-            self.click = None;
-        } else if !self.input.controls.buttons.contains(Button::TouchpadClick) {
-            // Match gamepad mapping: latch the first active contact at the click edge.
-            self.click = input.contacts.into_iter().flatten().next();
-        }
-        self.input = input;
-        // Reuse the bitsets. evdev's key bitset allocates on construction.
-        let held = &mut self.next_held;
-        for key in self.mapped_keys.iter() {
-            held.remove(key);
-        }
-        let mut deadline = None;
-        let mut scroll = self
-            .touch_scroll
-            .as_mut()
-            .map_or([0; WHEEL_AXES.len()], |scroll| {
-                scroll.advance(input.contacts)
-            });
-        self.pulses.retain(|&(_, until)| until > now);
-        if let Some((tap, [one_finger, two_fingers])) = &mut self.touch_tap {
-            let cancelled = scroll != [0; WHEEL_AXES.len()]
-                || input.controls.buttons.contains(Button::TouchpadClick);
-            let button = match tap.advance(input.contacts, cancelled, now) {
-                Some(touch_motion::TapCount::One) => *one_finger,
-                Some(touch_motion::TapCount::Two) => *two_fingers,
-                None => None,
-            };
-            if let Some(button) = button {
-                schedule_pulse(&mut self.pulses, button, now + TAP_KEY_TIME);
-            }
-        }
-        for gesture in &mut self.gestures {
-            match gesture.update(&input, self.click, now) {
-                Some(Action::Keys(keys)) => {
-                    let until = now + TAP_KEY_TIME;
-                    for &key in keys {
-                        schedule_pulse(&mut self.pulses, key, until);
-                    }
-                }
-                Some(Action::Scroll(direction)) => direction.accumulate(&mut scroll),
-                None => {}
-            }
-            match gesture.held_action(now) {
-                Some(Action::Keys(keys)) => {
-                    for &key in keys {
-                        held.insert(key);
-                    }
-                }
-                Some(Action::Scroll(direction)) => direction.accumulate(&mut scroll),
-                None => {}
-            }
-            deadline = deadline.into_iter().chain(gesture.deadline()).min();
-        }
-        for &(key, until) in &self.pulses {
-            held.insert(key);
-            deadline = deadline.into_iter().chain(Some(until)).min();
-        }
-        for stick in &mut self.sticks {
-            deadline = deadline
-                .into_iter()
-                .chain(stick.update(input.controls, now, held))
-                .min();
-        }
-        self.events.clear();
-        self.events.extend(
-            self.held
-                .iter()
-                .filter(|&key| !held.contains(key))
-                .map(|key| key_event(key, 0)),
-        );
-        sort_releases(&mut self.events, &self.held_zone_keys);
-        let releases = self.events.len();
-        self.events.extend(
-            held.iter()
-                .filter(|&key| !self.held.contains(key))
-                .map(|key| key_event(key, 1)),
-        );
-        // Shortcut modifiers precede other keys. Sprint pulses follow movement.
-        self.events[releases..].sort_unstable_by_key(|event| {
-            let key = KeyCode(event.code());
-            let order = if self.held_zone_keys.contains(key) {
-                0
-            } else if self.pulsed_zone_keys.contains(key) {
-                3
-            } else if is_modifier(key) {
-                1
-            } else {
-                2
-            };
-            (order, key.0)
-        });
-        let movement = self
-            .touch_pointer
-            .as_mut()
-            .map_or([0; POINTER_AXES.len()], |pointer| {
-                pointer.advance(input.contacts)
-            });
-        for (axis, delta) in WHEEL_AXES
-            .into_iter()
-            .zip(scroll)
-            .chain(POINTER_AXES.into_iter().zip(movement))
-        {
-            if delta != 0 {
-                self.events
-                    .push(InputEvent::new(EventType::RELATIVE.0, axis.0, delta));
-            }
-        }
-        if !self.events.is_empty() {
-            emit(&self.events)?;
-        }
-        std::mem::swap(&mut self.held, &mut self.next_held);
-        Ok(deadline)
+        self.engine.update(input, now, |events| {
+            encode_batch(&mut self.encoded, events);
+            emit(&self.encoded)
+        })
+    }
+
+    fn release(&mut self, mut emit: impl FnMut(&[InputEvent]) -> io::Result<()>) -> io::Result<()> {
+        self.engine.release(|events| {
+            encode_batch(&mut self.encoded, events);
+            emit(&self.encoded)
+        })
+    }
+
+    #[cfg(test)]
+    fn held_keys(&self) -> impl Iterator<Item = KeyCode> + '_ {
+        self.engine.held_keys().map(KeyCode)
+    }
+
+    #[cfg(test)]
+    fn is_held(&self, key: KeyCode) -> bool {
+        self.held_keys().any(|held| held == key)
     }
 }
 
-fn key_event(key: KeyCode, value: i32) -> InputEvent {
-    InputEvent::new(EventType::KEY.0, key.0, value)
-}
-
-fn schedule_pulse(pulses: &mut Vec<(KeyCode, Instant)>, key: KeyCode, until: Instant) {
-    if let Some(pulse) = pulses.iter_mut().find(|pulse| pulse.0 == key) {
-        pulse.1 = until;
-    } else {
-        pulses.push((key, until));
-    }
-}
-
-fn sort_releases(events: &mut [InputEvent], held_zone_keys: &AttributeSet<KeyCode>) {
-    events.sort_unstable_by_key(|event| {
-        let key = KeyCode(event.code());
-        (held_zone_keys.contains(key), is_modifier(key), key.0)
-    });
+fn encode_batch(batch: &mut Vec<InputEvent>, events: &[Event]) {
+    batch.clear();
+    batch.extend(events.iter().copied().map(|event| match event {
+        Event::Key { id, pressed } => InputEvent::new(EventType::KEY.0, id, i32::from(pressed)),
+        Event::Relative { axis, delta } => {
+            let code = match axis {
+                RelativeAxis::X => RelativeAxisCode::REL_X,
+                RelativeAxis::Y => RelativeAxisCode::REL_Y,
+                RelativeAxis::Wheel => RelativeAxisCode::REL_WHEEL,
+                RelativeAxis::HorizontalWheel => RelativeAxisCode::REL_HWHEEL,
+            };
+            InputEvent::new(EventType::RELATIVE.0, code.0, delta)
+        }
+    }));
 }
 
 pub struct Keyboard<'a> {
@@ -945,21 +233,16 @@ impl<'a> Keyboard<'a> {
         config: Option<&Config>,
         status: Option<&'a StatusSocket>,
     ) -> io::Result<Option<Self>> {
-        let Some(config) = config.filter(|config| {
-            !config.buttons.is_empty()
-                || !config.sticks.is_empty()
-                || config.touch_scroll.is_some()
-                || config.touch_pointer.is_some()
-        }) else {
+        let Some(config) = config.filter(|config| !config.is_empty()) else {
             return Ok(None);
         };
         let mut keys = AttributeSet::<KeyCode>::new();
         let mut buttons = AttributeSet::<KeyCode>::new();
         for key in config.keys() {
-            if is_mouse_button(key) {
-                buttons.insert(key);
+            if key.kind == KeyKind::MouseButton {
+                buttons.insert(KeyCode(key.id));
             } else {
-                keys.insert(key);
+                keys.insert(KeyCode(key.id));
             }
         }
         let key_count = keys.iter().count();
@@ -979,7 +262,7 @@ impl<'a> Keyboard<'a> {
         } else {
             None
         };
-        let mouse = (button_count > 0 || scroll || config.touch_pointer.is_some())
+        let mouse = (button_count > 0 || scroll || config.has_pointer())
             .then(|| {
                 crate::gyro_mouse::open_output_with_buttons(
                     "JoyShockRust Button Mouse",
@@ -1007,30 +290,26 @@ impl<'a> Keyboard<'a> {
 
     pub fn tick(&mut self, now: Instant) -> io::Result<Option<Instant>> {
         self.state
-            .update(self.state.input, now, |events| self.outputs.emit(events))
+            .update(self.state.engine.last_input(), now, |events| {
+                self.outputs.emit(events)
+            })
     }
 
     pub fn release(&mut self) -> io::Result<()> {
-        let events = &mut self.state.events;
-        events.clear();
-        events.extend(self.state.held.iter().map(|key| key_event(key, 0)));
-        sort_releases(events, &self.state.held_zone_keys);
-        if !events.is_empty() {
-            self.outputs.emit(events)?;
-        }
-        self.state.held = AttributeSet::new();
-        Ok(())
+        self.state.release(|events| self.outputs.emit(events))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use joyshockrust_core::DPad;
+    use joyshockrust_core::{Button, Controls, DPad};
     use std::time::Duration;
 
-    use joyshockrust_input::{DeviceModel, Transport, parse_report};
+    use joyshockrust_input::{DeviceModel, TouchContact, Transport, parse_report};
 
     use super::*;
+
+    const TAP_KEY_TIME: Duration = Duration::from_millis(30);
 
     fn config(bindings: &str) -> Config {
         crate::profile::parse(&format!("version = 1\n{bindings}"))
@@ -1092,7 +371,7 @@ mod tests {
         let now = Instant::now();
         for (report, expected) in keyboard_walk_reports() {
             assert_eq!(state.update(report.into(), now, |_| Ok(())).unwrap(), None);
-            assert_eq!(WALK_KEYS.map(|key| state.held.contains(key)), expected);
+            assert_eq!(WALK_KEYS.map(|key| state.is_held(key)), expected);
         }
     }
 
@@ -1352,7 +631,7 @@ mod tests {
                 let mut state = State::new(&config);
                 let mut events = Vec::with_capacity(TOUCHPAD_REPLAY_EVENTS.len());
                 replay_touchpad(model, transport, |report, now| {
-                    let input = report.map_or(state.input, Input::from);
+                    let input = report.map_or(state.engine.last_input(), Input::from);
                     state
                         .update(input, now, |batch| {
                             events.extend(
@@ -1599,8 +878,8 @@ mod tests {
                 ..Controls::default()
             };
             state.update(input(controls), now, |_| Ok(())).unwrap();
-            assert_eq!(directions.map(|key| state.held.contains(key)), expected);
-            assert_eq!(state.held.contains(KeyCode::KEY_LEFTSHIFT), running);
+            assert_eq!(directions.map(|key| state.is_held(key)), expected);
+            assert_eq!(state.is_held(KeyCode::KEY_LEFTSHIFT), running);
         }
     }
 
@@ -1647,7 +926,7 @@ mod tests {
                 None
             );
             assert!(
-                state.held.iter().eq(expected.iter().copied()),
+                state.held_keys().eq(expected.iter().copied()),
                 "({x}, {y}): expected {expected:?}"
             );
         }
@@ -1938,7 +1217,12 @@ mod tests {
     fn keyboard_sticks_validate_zone_limits_and_duplicate_sides() {
         let binding = "[[keyboard.sticks]]\nside = 'right'\nup = 'KEY_W'\nouter = { key = 'KEY_LEFTSHIFT', threshold = 0.8, release = 0.7 }\n";
         let valid = config(binding);
-        assert_eq!(valid.sticks.len(), 1);
+        assert!(
+            valid
+                .keys()
+                .map(|key| KeyCode(key.id))
+                .eq([KeyCode::KEY_W, KeyCode::KEY_LEFTSHIFT])
+        );
         for invalid in [
             binding.replace("'right'", "'middle'"),
             binding.replace("threshold = 0.8", "threshold = 1.1"),
@@ -2017,7 +1301,7 @@ mod tests {
                 .update(input(controls), Instant::now(), |_| Ok(()))
                 .unwrap();
             assert_eq!(
-                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
+                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.is_held(key)),
                 expected,
                 "{travel}"
             );
@@ -2054,7 +1338,7 @@ mod tests {
                 .update(input(controls), Instant::now(), |_| Ok(()))
                 .unwrap();
             assert_eq!(
-                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
+                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.is_held(key)),
                 expected,
             );
         }
@@ -2095,7 +1379,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                [KeyCode::KEY_Q, KeyCode::BTN_LEFT].map(|key| state.held.contains(key)),
+                [KeyCode::KEY_Q, KeyCode::BTN_LEFT].map(|key| state.is_held(key)),
                 expected
             );
         }
@@ -2147,11 +1431,7 @@ mod tests {
                 KeyCode::KEY_A,
                 KeyCode::KEY_D,
             ];
-            assert_eq!(
-                keys.map(|key| state.held.contains(key)),
-                expected,
-                "{travel}"
-            );
+            assert_eq!(keys.map(|key| state.is_held(key)), expected, "{travel}");
         }
     }
 
@@ -2192,7 +1472,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
+                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.is_held(key)),
                 taps,
                 "{step}"
             );
@@ -2236,10 +1516,10 @@ mod tests {
                 None
             );
             assert_eq!(
-                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.held.contains(key)),
+                [KeyCode::KEY_Q, KeyCode::KEY_E].map(|key| state.is_held(key)),
                 expected
             );
-            assert!(state.held.contains(KeyCode::KEY_F));
+            assert!(state.is_held(KeyCode::KEY_F));
         }
     }
 
@@ -2353,8 +1633,7 @@ mod tests {
                 parse_report(DeviceModel::DualSenseEdge, Transport::Usb, &frame, None).unwrap();
             state.update(report.into(), now, |_| Ok(())).unwrap();
             assert_eq!(
-                [KeyCode::KEY_Q, KeyCode::KEY_E, KeyCode::BTN_LEFT]
-                    .map(|key| state.held.contains(key)),
+                [KeyCode::KEY_Q, KeyCode::KEY_E, KeyCode::BTN_LEFT].map(|key| state.is_held(key)),
                 expected
             );
         }
@@ -2410,8 +1689,8 @@ mod tests {
                 state.update(input(controls), now, |_| Ok(())).unwrap(),
                 None
             );
-            assert_eq!(state.held.contains(KeyCode::KEY_Q), l1);
-            assert_eq!(state.held.contains(KeyCode::BTN_RIGHT), right_mouse);
+            assert_eq!(state.is_held(KeyCode::KEY_Q), l1);
+            assert_eq!(state.is_held(KeyCode::BTN_RIGHT), right_mouse);
         }
     }
 
@@ -3123,7 +2402,7 @@ mod tests {
             "#,
         );
         assert_eq!(
-            config.keys().collect::<Vec<_>>(),
+            config.keys().map(|key| KeyCode(key.id)).collect::<Vec<_>>(),
             [KeyCode::BTN_MIDDLE, KeyCode::BTN_SIDE]
         );
         let mut state = State::new(&config);
@@ -3179,7 +2458,11 @@ mod tests {
             tap_to_click = true
         "#,
         );
-        assert!(config.keys().any(|key| key == KeyCode::BTN_LEFT));
+        assert!(
+            config
+                .keys()
+                .any(|key| KeyCode(key.id) == KeyCode::BTN_LEFT)
+        );
         let mut state = State::new(&config);
         let start = Instant::now();
         let contact = |id, x, y| Some(TouchContact { id, x, y });
@@ -3250,7 +2533,10 @@ mod tests {
             vertical_step = 5
         "#,
         );
-        assert_eq!(config.keys().collect::<Vec<_>>(), [KeyCode::BTN_RIGHT]);
+        assert_eq!(
+            config.keys().map(|key| KeyCode(key.id)).collect::<Vec<_>>(),
+            [KeyCode::BTN_RIGHT]
+        );
         let mut state = State::new(&config);
         let start = Instant::now();
         let contact = |id, y| Some(TouchContact { id, x: 100, y });

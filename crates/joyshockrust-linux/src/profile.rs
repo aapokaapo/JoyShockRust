@@ -398,7 +398,7 @@ pub(crate) fn parse(source: &str) -> Result<RuntimeOptions, Box<dyn Error>> {
     ];
     let keyboard = profile
         .keyboard
-        .map(|keyboard| keyboard.resolve(touchpad.as_ref(), trigger_stages))
+        .map(|keyboard| keyboard.resolve(touchpad.as_ref(), trigger_stages, &keyboard::LinuxKeys))
         .transpose()?;
     Ok(RuntimeOptions {
         bridge: profile.bridge.and_then(BridgeFile::outputs),

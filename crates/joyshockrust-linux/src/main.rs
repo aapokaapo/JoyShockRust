@@ -15,8 +15,6 @@ mod gamepad;
 #[cfg(target_os = "linux")]
 mod gyro_calibration;
 #[cfg(target_os = "linux")]
-mod gyro_gate;
-#[cfg(target_os = "linux")]
 mod gyro_mouse;
 #[cfg(target_os = "linux")]
 mod haptics;
@@ -48,6 +46,8 @@ mod trigger_travel;
 use hidraw::Identity;
 #[cfg(target_os = "linux")]
 use joyshockrust_input::Transport;
+#[cfg(target_os = "linux")]
+use joyshockrust_mapping::gyro_gate;
 #[cfg(target_os = "linux")]
 use std::ops::ControlFlow;
 

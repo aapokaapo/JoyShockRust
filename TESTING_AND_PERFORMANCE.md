@@ -1,5 +1,31 @@
 # Testing, instrumentation and performance
 
+## Portable keyboard and mouse replay
+
+2026-11-26. The workspace passed 254 tests and doctests, with 16
+ignored by default. Eight ignored editor tests passed on headless
+Wayland. The mapping tests also passed without the profile feature.
+The Linux allocation checks cover steady-state keyboard and mouse
+processing. A portable test verifies shared-key release and retry
+after an output failure.
+
+A release-mode harness compared this extraction with `a0b3eeb` on one
+CPU. The synthetic trace combined tap, hold and double-tap, overlapping
+key bindings, a modified mouse click, trigger scrolling, stick movement
+and touch contacts. The checksum of ordered evdev events and gesture
+deadlines matched in all 12 paired runs. Each run retained 10,000 blocks
+of 64 reports after 300 warm-up blocks. The table gives median run
+percentiles for block averages in nanoseconds per report.
+
+| Revision | p50 | p95 | p99 | p99.9 |
+|---|---:|---:|---:|---:|
+| `a0b3eeb` | 385 | 450 | 1,322 | 3,731 |
+| Portable keyboard and mouse routing | 110 | 125 | 438 | 1,738 |
+
+The p99 ranges overlapped across runs. This measures in-process mapping
+and evdev event encoding. It does not include kernel delivery or a
+physical controller.
+
 ## Portable pointer and gamepad replay
 
 2026-11-26. The combined gyro and Flick Stick replay matches every

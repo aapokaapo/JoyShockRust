@@ -32,6 +32,16 @@ change detection. It commits published state after the output adapter
 accepts the event batch. Linux owns the devices, physical activation
 checks and calibration persistence. [Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
 
+## Portable keyboard and mouse routing
+
+2026-11-26. Keep gesture state, deadlines, shared-key ownership, stick
+zones and touchpad pointer actions in the mapping crate. The bridge
+supplies timestamps and resolves host key names when it loads a profile.
+Mapping returns key changes and relative motion through an output sink.
+It commits held keys after the sink accepts the batch. Per-session bitsets
+and reusable event buffers keep report processing allocation-free.
+[Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
+
 ## Typed desktop controls and editor drafts
 
 2026-11-26. The editor keeps the parsed TOML document between structured
