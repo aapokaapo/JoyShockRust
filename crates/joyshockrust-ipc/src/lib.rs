@@ -1,5 +1,6 @@
 //! JoyShockRust's local wire formats and Unix transport.
 
+pub mod calibration;
 pub mod control;
 pub mod inventory;
 pub mod status;

@@ -432,18 +432,10 @@ impl Desktop {
         } else {
             dialog.args(["--calibrate-controller-gyro", node]);
         }
-        self.set_outputs_paused(true)?;
-        match dialog.spawn() {
-            Ok(child) => Ok(child),
-            Err(error) => {
-                if let Err(resume) = self.set_outputs_paused(false) {
-                    return Err(io::Error::other(format!(
-                        "{error}; could not resume outputs: {resume}"
-                    )));
-                }
-                Err(error)
-            }
-        }
+        // The window opens a bridge calibration session. The bridge pauses
+        // outputs for it and restores the previous state when it ends, even
+        // if the window or the tray exits unexpectedly.
+        dialog.spawn()
     }
 
     fn run(&self, action: &Action) -> io::Result<()> {
@@ -599,10 +591,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(outcome) = finished {
             calibration = None;
             state.calibrating = false;
-            state.error = match desktop.set_outputs_paused(false) {
-                Ok(()) => outcome,
-                Err(error) => Some(format!("Could not resume virtual outputs: {error}")),
-            };
+            state.error = outcome;
         }
         state.status = status.latest();
         state.inventory = inventory.latest();

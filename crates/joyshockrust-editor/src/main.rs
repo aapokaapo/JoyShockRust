@@ -261,13 +261,20 @@ impl SaveRequest {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1).peekable();
-    let bridge = env::current_exe()?.with_file_name("joyshockrust-linux");
+    let session = || -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let reload =
+            joyshockrust_config::paths::runtime_socket(joyshockrust_ipc::RELOAD_SOCKET, true)
+                .ok_or("expected an absolute XDG_RUNTIME_DIR for the bridge session")?;
+        Ok(joyshockrust_ipc::calibration::calibration_socket_path(
+            &reload,
+        ))
+    };
     if args.next_if(|arg| arg == "--calibrate-game").is_some() {
         let [Some(profile), Some(node), None] = [args.next(), args.next(), args.next()] else {
             return Err("usage: joyshockrust-editor --calibrate-game PROFILE HIDRAW".into());
         };
         return calibration::run(
-            bridge,
+            session()?,
             Some(calibration::GameProfiles {
                 active: Some(profile.into()),
                 available: Vec::new(),
@@ -287,7 +294,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let available = args.map(PathBuf::from).collect();
         return calibration::run(
-            bridge,
+            session()?,
             Some(calibration::GameProfiles { active, available }),
             node.into(),
         );
@@ -299,7 +306,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let [Some(node), None] = [args.next(), args.next()] else {
             return Err("usage: joyshockrust-editor --calibrate-controller-gyro HIDRAW".into());
         };
-        return calibration::run(bridge, None, node.into());
+        return calibration::run(session()?, None, node.into());
     }
     let path = args.next().map(std::path::absolute).transpose()?;
     if args.next().is_some() {
