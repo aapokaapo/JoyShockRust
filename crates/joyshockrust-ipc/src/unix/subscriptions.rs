@@ -1,3 +1,5 @@
+//! Unix desktop subscription client and optional bridge transport.
+
 use std::{
     io::{self, Write},
     net::Shutdown,
@@ -8,7 +10,15 @@ use std::{
     time::Duration,
 };
 
-use joyshockrust_ipc::stream::{Stamp, Topic};
+use crate::{
+    inventory::{Controller, Snapshot},
+    stream::{Stamp, Topic},
+};
+
+#[cfg(feature = "server")]
+pub mod publisher;
+#[cfg(feature = "server")]
+pub mod server;
 
 const RETRY: Duration = Duration::from_secs(1);
 const REQUEST_ID: u32 = 1;
@@ -23,6 +33,18 @@ struct State<T> {
 pub struct Subscription<T>(Arc<Mutex<State<T>>>);
 
 type Decoder<T> = fn(&mut UnixStream, u32) -> io::Result<(Stamp, Option<T>)>;
+
+pub fn read_inventory(
+    stream: &mut UnixStream,
+    id: u32,
+) -> io::Result<(Stamp, Option<Vec<Controller>>)> {
+    let Snapshot {
+        instance,
+        revision,
+        controllers,
+    } = Snapshot::read(stream, id)?;
+    Ok((Stamp { instance, revision }, controllers))
+}
 
 impl<T: Clone + PartialEq + Send + 'static> Subscription<T> {
     pub fn start(
@@ -40,7 +62,7 @@ impl<T: Clone + PartialEq + Send + 'static> Subscription<T> {
         let worker = Arc::clone(&state);
         let path = topic.socket_path(status_socket);
         thread::Builder::new()
-            .name("jsr-tray-subscription".into())
+            .name("jsr-subscription".into())
             .spawn(move || watch(worker, path, topic, read, notify))?;
         Ok(Self(state))
     }
@@ -131,31 +153,24 @@ fn publish<T: PartialEq>(state: &Mutex<State<T>>, latest: Option<T>, notify: &im
 mod tests {
     use std::{os::unix::net::UnixListener, sync::mpsc, time::Instant};
 
+    use crate::{inventory::Access, stream::HEADER_LEN};
     use joyshockrust_config::controller::{ModelSelection, Selection};
-    use joyshockrust_ipc::{
-        inventory::{Access, Controller, Snapshot},
-        stream::HEADER_LEN,
-    };
 
     use super::*;
     use std::io::Read;
 
     #[test]
-    fn tray_clears_stale_inventory_and_subscribes_to_a_restarted_bridge() {
+    fn client_clears_stale_inventory_and_subscribes_to_a_restarted_bridge() {
         let directory = tempfile::tempdir().unwrap();
         let status = directory.path().join("status.sock");
         let path = Topic::Inventory.socket_path(&status);
         let listener = UnixListener::bind(&path).unwrap();
         let (updated, messages) = mpsc::channel();
-        let subscription = Subscription::start(
-            &status,
-            Topic::Inventory,
-            super::super::read_inventory,
-            move || {
+        let subscription =
+            Subscription::start(&status, Topic::Inventory, read_inventory, move || {
                 let _ = updated.send(());
-            },
-        )
-        .unwrap();
+            })
+            .unwrap();
 
         let controller = Controller {
             hidraw: 6,
@@ -170,7 +185,7 @@ mod tests {
                 match listener.accept() {
                     Ok(client) => break client,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        assert!(Instant::now() < deadline, "tray did not subscribe");
+                        assert!(Instant::now() < deadline, "client did not subscribe");
                         thread::sleep(Duration::from_millis(5));
                     }
                     Err(error) => panic!("{error}"),

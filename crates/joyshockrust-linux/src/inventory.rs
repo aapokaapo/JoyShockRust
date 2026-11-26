@@ -1,15 +1,15 @@
-//! The inventory worker owns udev enumeration and subscriber I/O.
+//! The bridge supplies controller inventory from its udev monitor.
 
 use crate::{
     discovery::{self, ControllerFilter, ModelSelection, Selection},
     hidraw,
-    subscriptions::{self, Worker},
 };
 use joyshockrust_input::{DeviceModel, Transport};
 use joyshockrust_ipc::{
-    inventory::{self, Access, Controller, MAX_CONTROLLERS},
+    inventory::{Access, Controller, MAX_CONTROLLERS},
     status::hidraw_device_name,
-    stream::{Stamp, Topic},
+    stream::Topic,
+    unix::subscriptions::server::{self, Worker},
 };
 use std::{
     io,
@@ -34,25 +34,12 @@ pub fn start(status_path: &Path) -> io::Result<Worker> {
     )
 }
 
-impl subscriptions::Snapshot for Option<Vec<Controller>> {
-    const TOPIC: Topic = Topic::Inventory;
-
-    fn frame(&self, request: u32, stamp: Stamp) -> io::Result<Vec<u8>> {
-        inventory::Snapshot {
-            instance: stamp.instance,
-            revision: stamp.revision,
-            controllers: self.clone(),
-        }
-        .encode(request)
-    }
-}
-
 fn watch(listener: &UnixListener, shutdown: BorrowedFd<'_>) -> io::Result<()> {
     // Listen before scanning so hotplug during the first scan is observed.
     let monitor = udev::MonitorBuilder::new()?
         .match_subsystem("hidraw")?
         .listen()?;
-    subscriptions::serve(
+    server::serve(
         listener,
         shutdown,
         monitor.as_fd(),
@@ -106,6 +93,7 @@ fn scan() -> Option<Vec<Controller>> {
 
 #[cfg(test)]
 mod tests {
+    use joyshockrust_ipc::inventory;
     use std::{
         io::{Read, Write},
         os::{
@@ -115,6 +103,7 @@ mod tests {
         thread,
         time::Duration,
     };
+
     const CLIENT_TIMEOUT: Duration = Duration::from_secs(2);
 
     use super::*;
@@ -150,7 +139,7 @@ mod tests {
             access: Access::Unreadable,
         };
         let worker = thread::spawn(move || {
-            subscriptions::serve(
+            server::serve(
                 &listener,
                 shutdown.as_fd(),
                 changes.as_fd(),

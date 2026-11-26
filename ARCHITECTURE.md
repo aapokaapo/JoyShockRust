@@ -34,8 +34,8 @@ same wait. Status requests can be served between full batches. This keeps
 device reads, configuration changes and output state on one owner.
 [CLI](crates/joyshockrust-linux/src/cli.rs) · [Report loop](crates/joyshockrust-linux/src/main.rs) · [Wait and reload](crates/joyshockrust-linux/src/reload.rs)
 
-The logical control plane uses local Unix sockets. There is no separate
-IPC thread for the bridge's command and status loop. Controller selection,
+The logical control plane uses local Unix sockets. The bridge handles
+commands and one-shot status queries on its readiness loop. Controller selection,
 mapping profile and calibration are stored separately. Session setup can
 open device handles and read settings. Force feedback and touchpad grabs
 share the evdev node lookup under the physical controller. Calibration
@@ -52,8 +52,9 @@ marks the list unavailable until a fresh snapshot arrives.
 The tray also subscribes to status over a separate private stream. The
 bridge captures status between report batches for subscribed clients on
 state changes. The legacy status socket and the stream use the same
-snapshot renderer. A worker sends framed updates and handles slow readers.
-[Publisher](crates/joyshockrust-linux/src/status_updates.rs) · [Stream codec](crates/joyshockrust-ipc/src/stream.rs)
+snapshot renderer. The IPC crate manages the Unix connections, framed
+updates, backpressure and client reconnection.
+[Bridge scheduling](crates/joyshockrust-linux/src/status_updates.rs) · [Unix subscriptions](crates/joyshockrust-ipc/src/unix/subscriptions.rs) · [Stream codec](crates/joyshockrust-ipc/src/stream.rs)
 
 The tray starts and stops the user service and uses XDG autostart for its
 login preference. The editor retains its TOML draft and validates it with
@@ -72,10 +73,10 @@ Desktop refresh timers are independent of bridge report timing.
 | `joyshockrust-core` | Transport-neutral controller state, canonical input names, analog trigger gates and touch-grid geometry. |
 | `joyshockrust-config` | TOML profile compilation, legacy compatibility, Linux key names, atomic profile persistence and desktop paths. |
 | `joyshockrust-input` | USB and Bluetooth parsing, factory conversion and device timebase. |
-| `joyshockrust-ipc` | Local status fields, typed telemetry, control and controller inventory codecs, and a Linux command client. |
+| `joyshockrust-ipc` | Local status fields, typed telemetry, control and controller inventory codecs, Unix clients and subscription transport. |
 | `joyshockrust-motion` | Deterministic calibration, gyro and fusion aim, Flick Stick composition, integer pointer motion and stick response. |
 | `joyshockrust-mapping` | Gamepad, keyboard and mouse routing, gesture deadlines, gyro activation, touch regions, layers and trigger stages. |
-| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, runtime profile activation, socket servicing, uinput event encoding and feedback. |
+| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, runtime profile activation, IPC dispatch at report boundaries, uinput event encoding and feedback. |
 | `joyshockrust-tray` | StatusNotifierItem, desktop lifecycle and calibration launch. |
 | `joyshockrust-editor` | GTK 4/libadwaita profile editing with `toml_edit`, live charts and Wayland calibration windows. |
 

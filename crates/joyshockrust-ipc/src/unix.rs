@@ -1,5 +1,7 @@
 //! Linux transport for the bridge's request/reply datagrams.
 
+pub mod subscriptions;
+
 use std::{
     fs::OpenOptions,
     io::{self, Read},

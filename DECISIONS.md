@@ -93,6 +93,11 @@ clients stays on the worker. The tray clears stale status on disconnect
 and subscribes again after a restart. The editor still uses the
 one-shot socket for its live previews. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
 
+The IPC crate owns the shared Unix subscription client and server,
+including connection limits and partial I/O. The bridge supplies udev
+inventory and schedules status snapshots at report boundaries. Only
+bridge builds enable the server feature. [Transport](crates/joyshockrust-ipc/src/unix/subscriptions.rs)
+
 ## Typed desktop controls and editor drafts
 
 2026-11-26. The editor keeps the parsed TOML document between structured

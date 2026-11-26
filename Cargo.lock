@@ -797,6 +797,8 @@ dependencies = [
  "joyshockrust-config",
  "joyshockrust-core",
  "libc",
+ "nix",
+ "tempfile",
 ]
 
 [[package]]
@@ -843,7 +845,6 @@ dependencies = [
  "joyshockrust-config",
  "joyshockrust-ipc",
  "ksni",
- "tempfile",
 ]
 
 [[package]]

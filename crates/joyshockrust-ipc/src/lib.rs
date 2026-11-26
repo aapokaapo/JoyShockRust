@@ -1,4 +1,4 @@
-//! JoyShockRust's local wire formats. The applications own I/O and scheduling.
+//! JoyShockRust's local wire formats and Unix transport.
 
 pub mod control;
 pub mod inventory;

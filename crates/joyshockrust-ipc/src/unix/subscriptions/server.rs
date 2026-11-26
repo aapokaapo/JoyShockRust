@@ -1,6 +1,9 @@
 //! Bounded, nonblocking transport for private desktop streams.
 
-use joyshockrust_ipc::stream::{HEADER_LEN, Stamp, Topic};
+use crate::{
+    inventory::{Controller, Snapshot as InventorySnapshot},
+    stream::{HEADER_LEN, Stamp, Topic, encode_status},
+};
 use nix::{
     errno::Errno,
     poll::{PollFd, PollFlags, PollTimeout, poll},
@@ -33,6 +36,28 @@ pub trait Snapshot: PartialEq {
     const TOPIC: Topic;
     const ON_DEMAND: bool = false;
     fn frame(&self, request: u32, stamp: Stamp) -> io::Result<Vec<u8>>;
+}
+
+impl Snapshot for Option<Vec<Controller>> {
+    const TOPIC: Topic = Topic::Inventory;
+
+    fn frame(&self, request: u32, stamp: Stamp) -> io::Result<Vec<u8>> {
+        InventorySnapshot {
+            instance: stamp.instance,
+            revision: stamp.revision,
+            controllers: self.clone(),
+        }
+        .encode(request)
+    }
+}
+
+impl Snapshot for String {
+    const TOPIC: Topic = Topic::Status;
+    const ON_DEMAND: bool = true;
+
+    fn frame(&self, request: u32, stamp: Stamp) -> io::Result<Vec<u8>> {
+        encode_status(request, stamp, self)
+    }
 }
 
 pub struct Worker {
@@ -130,7 +155,7 @@ impl Subscriber {
     fn queue(&mut self, snapshot: &impl Snapshot, stamp: Stamp, now: Instant) -> io::Result<()> {
         if let Some(id) = self.id {
             if !self.reply.is_empty() && self.sent != 0 {
-                return Err(io::Error::other("inventory subscriber fell behind"));
+                return Err(io::Error::other("subscription client fell behind"));
             }
             if self.reply.is_empty() {
                 self.deadline = Some(now + CLIENT_TIMEOUT);
@@ -312,7 +337,7 @@ fn retry(error: &io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use joyshockrust_ipc::stream::read_status;
+    use crate::stream::read_status;
 
     use super::*;
 

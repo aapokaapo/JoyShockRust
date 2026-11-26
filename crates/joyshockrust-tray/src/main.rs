@@ -5,10 +5,13 @@ use joyshockrust_config::{
 use joyshockrust_ipc::{
     RELOAD_SOCKET, STATUS_SOCKET,
     control::{ControlCommand, OutputTarget},
-    inventory::{self, Access, Controller},
+    inventory::{Access, Controller},
     status::{Field, STATUS_VERSION, decode_profile_path, hidraw_device_name},
     stream::{self, Stamp, Topic},
-    unix::ControlClient,
+    unix::{
+        ControlClient,
+        subscriptions::{Subscription, read_inventory},
+    },
 };
 
 use std::{
@@ -25,8 +28,6 @@ use ksni::{
     blocking::TrayMethods,
     menu::{CheckmarkItem, StandardItem, SubMenu},
 };
-
-mod subscriptions;
 
 const BRIDGE_SERVICE: &str = "joyshockrust.service";
 const DESKTOP_ID: &str = "io.github.aapokaapo.JoyShockRust.desktop";
@@ -525,18 +526,6 @@ fn bridge_service(action: &str) -> io::Result<()> {
     output(Command::new("systemctl").args(["--user", action, BRIDGE_SERVICE])).map(|_| ())
 }
 
-fn read_inventory(
-    stream: &mut UnixStream,
-    id: u32,
-) -> io::Result<(Stamp, Option<Vec<Controller>>)> {
-    let inventory::Snapshot {
-        instance,
-        revision,
-        controllers,
-    } = inventory::Snapshot::read(stream, id)?;
-    Ok((Stamp { instance, revision }, controllers))
-}
-
 fn read_status(socket: &mut UnixStream, id: u32) -> io::Result<(Stamp, Option<Status>)> {
     let (stamp, body) = stream::read_status(socket, id)?;
     let status = Status::parse(&body)
@@ -560,18 +549,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = updates.send(Action::DesktopChanged);
         }
     };
-    let inventory = subscriptions::Subscription::start(
+    let inventory = Subscription::start(
         &desktop.status_socket,
         Topic::Inventory,
         read_inventory,
         notify(),
     )?;
-    let status = subscriptions::Subscription::start(
-        &desktop.status_socket,
-        Topic::Status,
-        read_status,
-        notify(),
-    )?;
+    let status = Subscription::start(&desktop.status_socket, Topic::Status, read_status, notify())?;
     let tray = Tray {
         actions: sender,
         state: TrayState::default(),
