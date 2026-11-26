@@ -40,16 +40,11 @@ impl Rumble {
     }
 
     fn probe(hid: &udev::Device) -> io::Result<(Device, PathBuf)> {
-        let mut devices = hidraw::input_enumerator(hid)?;
         let mut open_error = None;
         let mut has_candidate = false;
-        for device in devices.scan_devices()? {
-            // Inspect the input parent before opening any sibling event nodes.
-            let Some((path, input)) = hidraw::input_event_candidate(&device)? else {
-                continue;
-            };
+        let found = hidraw::find_input_event(hid, |path, input| {
             if !has_force_feedback(input.attribute_value("capabilities/ff")) {
-                continue;
+                return None;
             }
             has_candidate = true;
             let physical = OpenOptions::new()
@@ -64,7 +59,7 @@ impl Rumble {
                         .supported_ff()
                         .is_some_and(|effects| effects.contains(FFEffectCode::FF_RUMBLE)) =>
                 {
-                    return Ok((physical, path.to_path_buf()));
+                    return Some((physical, path.to_path_buf()));
                 }
                 Ok(_) => {}
                 Err(err) => {
@@ -76,20 +71,23 @@ impl Rumble {
                     open_error = Some(io::Error::new(kind, format!("{}: {err}", path.display())));
                 }
             }
-        }
-        Err(open_error.unwrap_or_else(|| {
-            if has_candidate {
-                io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "no physical evdev node advertises FF_RUMBLE",
-                )
-            } else {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "no physical force feedback evdev node found",
-                )
-            }
-        }))
+            None
+        })?;
+        found.ok_or_else(|| {
+            open_error.unwrap_or_else(|| {
+                if has_candidate {
+                    io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "no physical evdev node advertises FF_RUMBLE",
+                    )
+                } else {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "no physical force feedback evdev node found",
+                    )
+                }
+            })
+        })
     }
 
     pub fn service(&mut self, virtual_device: &mut VirtualDevice) -> io::Result<()> {

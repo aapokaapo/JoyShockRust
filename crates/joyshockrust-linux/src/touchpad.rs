@@ -22,21 +22,17 @@ pub fn try_grab_native(hidraw: &File) -> Option<RawDevice> {
 }
 
 fn probe_native(hid: &udev::Device) -> io::Result<RawDevice> {
-    let mut devices = hidraw::input_enumerator(hid)?;
     let mut last_error = None;
-    for node in devices.scan_devices()? {
-        let Some((path, parent)) = hidraw::input_event_candidate(&node)? else {
-            continue;
-        };
+    let found = hidraw::find_input_event(hid, |path, parent| {
         if !parent
             .attribute_value("name")
             .and_then(std::ffi::OsStr::to_str)
             .is_some_and(|name| name.ends_with(" Touchpad"))
         {
-            continue;
+            return None;
         }
         match open_native(path, hid) {
-            Ok(Some(device)) => return Ok(device),
+            Ok(Some(device)) => return Some(device),
             Ok(None) => {}
             Err(err) => {
                 last_error = Some(io::Error::new(
@@ -45,13 +41,16 @@ fn probe_native(hid: &udev::Device) -> io::Result<RawDevice> {
                 ))
             }
         }
-    }
-    Err(last_error.unwrap_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "no matching native touchpad evdev node",
-        )
-    }))
+        None
+    })?;
+    found.ok_or_else(|| {
+        last_error.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "no matching native touchpad evdev node",
+            )
+        })
+    })
 }
 
 fn open_native(path: &std::path::Path, hid: &udev::Device) -> io::Result<Option<RawDevice>> {

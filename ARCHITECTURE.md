@@ -25,26 +25,28 @@ flowchart LR
 
 ## Runtime and scheduling
 
-The bridge waits with `poll` on hidraw, IPC and optional force-feedback
-descriptors. Udev discovery waits for hotplug when no eligible controller
+The CLI parses commands and startup options before entering the bridge's
+report loop. The bridge waits with `poll` on hidraw, IPC and optional
+force-feedback descriptors. Udev discovery waits for hotplug when no eligible controller
 is open. Readable hidraw reports are decoded in order in bounded
 nonblocking batches. The next keyboard gesture deadline is part of the
 same wait. Status requests can be served between full batches. This keeps
 device reads, configuration changes and output state on one owner.
-[Report loop](crates/joyshockrust-linux/src/main.rs) · [Wait and reload](crates/joyshockrust-linux/src/reload.rs)
+[CLI](crates/joyshockrust-linux/src/cli.rs) · [Report loop](crates/joyshockrust-linux/src/main.rs) · [Wait and reload](crates/joyshockrust-linux/src/reload.rs)
 
 The logical control plane uses local Unix sockets. There is no separate
 IPC thread for the bridge's command and status loop. Controller selection,
 mapping profile and calibration are stored separately. Session setup can
-open device handles and read settings. Calibration persistence and PCM
-haptics use worker paths when needed. The steady-state report path avoids
+open device handles and read settings. Force feedback and touchpad grabs
+share the evdev node lookup under the physical controller. Calibration
+persistence and PCM haptics use worker paths when needed. The steady-state report path avoids
 filesystem work, blocking IPC and shared configuration locks.
 [Discovery](crates/joyshockrust-linux/src/discovery.rs) · [Calibration storage](crates/joyshockrust-linux/src/gyro_calibration.rs) · [Haptics](crates/joyshockrust-linux/src/haptics.rs)
 
 The tray starts and stops the user service and uses XDG autostart for its
-login preference. The editor retains its TOML draft and uses the bridge
-CLI for full validation. Desktop control commands and CLI commands use the
-same Unix-socket client for profile activation and emulation changes.
+login preference. The editor retains its TOML draft and validates it with
+the shared profile compiler. Desktop control commands and CLI commands
+use the same Unix-socket client for profile activation and emulation changes.
 The bridge exposes calibrated IMU and preview readings through its status
 socket. The Gyro tab reads both gyro fields from the same reply. The
 Flick Stick preview reads the selected hidraw node while visible.

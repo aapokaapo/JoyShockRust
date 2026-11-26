@@ -5,6 +5,7 @@ use std::{
         fd::{AsFd, AsRawFd},
         unix::fs::MetadataExt,
     },
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -36,25 +37,23 @@ pub(crate) fn hid_parent(node: &File) -> io::Result<udev::Device> {
         })
 }
 
-pub(crate) fn input_enumerator(hid: &udev::Device) -> io::Result<udev::Enumerator> {
+pub(crate) fn find_input_event<T>(
+    hid: &udev::Device,
+    mut probe: impl FnMut(&Path, &udev::Device) -> Option<T>,
+) -> io::Result<Option<T>> {
     let mut devices = udev::Enumerator::new()?;
     devices.match_parent(hid)?;
     devices.match_subsystem("input")?;
-    Ok(devices)
-}
-
-pub(crate) fn input_event_candidate(
-    node: &udev::Device,
-) -> io::Result<Option<(&std::path::Path, udev::Device)>> {
-    if !node.sysname().as_encoded_bytes().starts_with(b"event") {
-        return Ok(None);
+    for node in devices.scan_devices()? {
+        if node.sysname().as_encoded_bytes().starts_with(b"event")
+            && let Some(path) = node.devnode()
+            && let Some(parent) = node.parent_with_subsystem("input")?
+            && let Some(found) = probe(path, &parent)
+        {
+            return Ok(Some(found));
+        }
     }
-    let Some(path) = node.devnode() else {
-        return Ok(None);
-    };
-    Ok(node
-        .parent_with_subsystem("input")?
-        .map(|parent| (path, parent)))
+    Ok(None)
 }
 
 pub(crate) fn wait_for_evdev<T>(
