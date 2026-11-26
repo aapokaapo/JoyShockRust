@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
+    ffi::OsString,
     io::{self, Read, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
@@ -8,9 +9,7 @@ use std::{
     thread,
 };
 
-use super::{
-    BridgeOptions, Client, InlineProfile, MAX_PROFILE_BYTES, RuntimeOptions, inline_profile,
-};
+use super::{BridgeOptions, ReplyTo, RuntimeOptions};
 use crate::profile;
 
 const QUEUED_PROFILES: usize = 4;
@@ -19,14 +18,44 @@ pub(super) struct Worker {
     pub(super) wake: UnixStream,
     jobs: SyncSender<Job>,
     completed: Receiver<Completion>,
-    queued: RefCell<VecDeque<Option<Client>>>,
+    queued: RefCell<VecDeque<PendingProfile>>,
     busy: Cell<bool>,
 }
 
+pub(super) enum ProfileInput {
+    Startup,
+    Defaults,
+    Invalid(&'static str),
+    Inline {
+        name: Option<OsString>,
+        path: Option<PathBuf>,
+        contents: Vec<u8>,
+    },
+}
+
+pub(super) enum ProfileOrigin {
+    Startup,
+    Defaults,
+    Inline {
+        name: Option<OsString>,
+        path: Option<PathBuf>,
+    },
+}
+
+pub(super) struct PreparedProfile {
+    pub(super) origin: ProfileOrigin,
+    pub(super) options: Box<RuntimeOptions>,
+}
+
+struct PendingProfile {
+    reply: Option<ReplyTo>,
+    input: ProfileInput,
+}
+
 enum Job {
-    Prepare(Option<Client>),
+    Prepare(PendingProfile),
     Remember {
-        client: Option<Client>,
+        reply: Option<ReplyTo>,
         selection: PathBuf,
         selected: Option<PathBuf>,
         defaults: bool,
@@ -34,8 +63,8 @@ enum Job {
 }
 
 pub(super) enum Completion {
-    Prepared(Option<Client>, Result<Box<RuntimeOptions>, PrepareError>),
-    Remembered(Option<Client>),
+    Prepared(Option<ReplyTo>, Result<PreparedProfile, PrepareError>),
+    Remembered(Option<ReplyTo>),
 }
 
 #[derive(Debug)]
@@ -55,12 +84,11 @@ impl Worker {
             .spawn(move || {
                 while let Ok(job) = work.recv() {
                     let completion = match job {
-                        Job::Prepare(client) => {
-                            let prepared = prepare(client.as_ref(), startup.as_deref(), bridge);
-                            Completion::Prepared(client, prepared)
+                        Job::Prepare(PendingProfile { reply, input }) => {
+                            Completion::Prepared(reply, prepare(input, startup.as_deref(), bridge))
                         }
                         Job::Remember {
-                            client,
+                            reply,
                             selection,
                             selected,
                             defaults,
@@ -75,7 +103,7 @@ impl Worker {
                                     selection.display()
                                 );
                             }
-                            Completion::Remembered(client)
+                            Completion::Remembered(reply)
                         }
                     };
                     if done.send(completion).is_err() || notify.write_all(&[1]).is_err() {
@@ -92,20 +120,23 @@ impl Worker {
         })
     }
 
-    pub(super) fn try_queue(&self, client: &mut Option<Client>) -> bool {
+    pub(super) fn try_queue(&self, input: ProfileInput, reply: &mut Option<ReplyTo>) -> bool {
         let mut queued = self.queued.borrow_mut();
         if queued.len() == QUEUED_PROFILES {
             return false;
         }
-        queued.push_back(client.take());
+        queued.push_back(PendingProfile {
+            reply: reply.take(),
+            input,
+        });
         true
     }
 
     pub(super) fn start_next(&self) -> io::Result<()> {
         if !self.busy.get()
-            && let Some(client) = self.queued.borrow_mut().pop_front()
+            && let Some(job) = self.queued.borrow_mut().pop_front()
         {
-            self.submit(Job::Prepare(client))?;
+            self.submit(Job::Prepare(job))?;
             self.busy.set(true);
         }
         Ok(())
@@ -117,13 +148,13 @@ impl Worker {
 
     pub(super) fn remember(
         &self,
-        client: Option<Client>,
+        reply: Option<ReplyTo>,
         selection: PathBuf,
         selected: Option<PathBuf>,
         defaults: bool,
     ) -> io::Result<()> {
         self.submit(Job::Remember {
-            client,
+            reply,
             selection,
             selected,
             defaults,
@@ -145,26 +176,32 @@ impl Worker {
 }
 
 pub(super) fn prepare(
-    client: Option<&Client>,
+    input: ProfileInput,
     startup: Option<&Path>,
     bridge: BridgeOptions,
-) -> Result<Box<RuntimeOptions>, PrepareError> {
-    if super::is_unload(client) {
-        return Ok(Box::default());
-    }
-    let profile = if let Some(InlineProfile { contents, .. }) =
-        inline_profile(client).map_err(|err| PrepareError::Rejected(err.to_owned()))?
-    {
-        if contents.len() > MAX_PROFILE_BYTES {
-            return Err(PrepareError::Rejected("profile exceeds 64 KiB".to_owned()));
+) -> Result<PreparedProfile, PrepareError> {
+    let (origin, profile) = match input {
+        ProfileInput::Defaults => {
+            return Ok(PreparedProfile {
+                origin: ProfileOrigin::Defaults,
+                options: Box::default(),
+            });
         }
-        std::str::from_utf8(contents)
-            .map_err(|err| err.into())
-            .and_then(profile::parse)
-    } else if let Some(path) = startup {
-        profile::load(path)
-    } else {
-        return Err(PrepareError::Unavailable);
+        ProfileInput::Invalid(error) => return Err(PrepareError::Rejected(error.to_owned())),
+        ProfileInput::Startup => {
+            let path = startup.ok_or(PrepareError::Unavailable)?;
+            (ProfileOrigin::Startup, profile::load(path))
+        }
+        ProfileInput::Inline {
+            name,
+            path,
+            contents,
+        } => (
+            ProfileOrigin::Inline { name, path },
+            std::str::from_utf8(&contents)
+                .map_err(|err| err.into())
+                .and_then(profile::parse),
+        ),
     };
     let profile = profile.map_err(|err| PrepareError::Rejected(err.to_string()))?;
     let next = profile.bridge.unwrap_or_default();
@@ -178,5 +215,8 @@ pub(super) fn prepare(
                 .to_owned(),
         ));
     }
-    Ok(Box::new(profile))
+    Ok(PreparedProfile {
+        origin,
+        options: Box::new(profile),
+    })
 }

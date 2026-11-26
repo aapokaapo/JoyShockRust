@@ -7,7 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use joyshockrust_core::trigger::TriggerSide;
 use joyshockrust_input::{DeviceModel, Transport};
+use joyshockrust_ipc::control::ResistancePreview;
 use nix::{
     poll::{PollFd, PollFlags, poll},
     sys::{
@@ -42,12 +44,10 @@ pub enum Preview {
     Reset,
 }
 
-impl Preview {
-    pub fn parse(payload: &[u8]) -> Result<Self, &'static str> {
-        use joyshockrust_core::trigger::TriggerSide;
-        use joyshockrust_ipc::control::ResistancePreview;
-        match ResistancePreview::parse(payload)? {
-            ResistancePreview::Reset => Ok(Self::Reset),
+impl From<ResistancePreview> for Preview {
+    fn from(preview: ResistancePreview) -> Self {
+        match preview {
+            ResistancePreview::Reset => Self::Reset,
             ResistancePreview::Set {
                 side,
                 start,
@@ -58,10 +58,10 @@ impl Preview {
                 } else {
                     Effect::Resistance { start, strength }
                 };
-                Ok(Self::Set {
+                Self::Set {
                     side: usize::from(side == TriggerSide::Right),
                     effect,
-                })
+                }
             }
         }
     }

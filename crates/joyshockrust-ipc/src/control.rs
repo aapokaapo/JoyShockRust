@@ -24,6 +24,10 @@ pub const SET_OUTPUTS_PREFIX: &[u8] = b"\0set-outputs\n";
 pub const TRIGGER_PREVIEW_PREFIX: &[u8] = b"\0preview-trigger\n";
 pub const TRIGGER_TRAVEL_PREFIX: &[u8] = b"\0preview-trigger-travel\n";
 
+pub const MAX_DATAGRAM_BYTES: usize =
+    LOAD_PROFILE_PATH_PREFIX.len() + MAX_PROFILE_NAME_BYTES + 1 + MAX_PROFILE_BYTES;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InlineProfile<'a> {
     pub name: Option<&'a OsStr>,
     pub path: Option<&'a Path>,
@@ -243,6 +247,8 @@ pub enum OutputTarget {
 }
 
 impl OutputTarget {
+    const ALL: [Self; 4] = [Self::Gamepad, Self::GyroMouse, Self::Both, Self::Master];
+
     pub fn from_flag(flag: &str) -> Option<Self> {
         match flag {
             "--set-gamepad" => Some(Self::Gamepad),
@@ -264,7 +270,7 @@ impl OutputTarget {
 }
 
 /// Commands that expect a reply from the running bridge.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlCommand<'a> {
     UnloadProfile,
     Emulation {
@@ -321,6 +327,93 @@ impl ControlCommand<'_> {
     }
 }
 
+/// Datagrams from a client with a reply address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddressedCommand<'a> {
+    Control(ControlCommand<'a>),
+    LoadProfile(InlineProfile<'a>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeError {
+    Profile(&'static str),
+    Command(&'static str),
+}
+
+impl<'a> AddressedCommand<'a> {
+    pub fn decode(data: &'a [u8]) -> Result<Self, DecodeError> {
+        let command = if data == UNLOAD_PROFILE_REQUEST {
+            ControlCommand::UnloadProfile
+        } else if let Some((target, value)) = OutputTarget::ALL.into_iter().find_map(|target| {
+            data.strip_prefix(target.prefix())
+                .map(|value| (target, value))
+        }) {
+            let enabled = match value {
+                b"on" => true,
+                b"off" => false,
+                _ => return Err(DecodeError::Command("expected on or off")),
+            };
+            ControlCommand::Emulation { target, enabled }
+        } else if let Some(value) = data.strip_prefix(SET_OUTPUTS_PREFIX) {
+            ControlCommand::OutputsPaused(match value {
+                b"pause" => true,
+                b"resume" => false,
+                _ => return Err(DecodeError::Command("expected pause or resume")),
+            })
+        } else if let Some(value) = data.strip_prefix(SELECT_CONTROLLER_PREFIX) {
+            let value = std::str::from_utf8(value)
+                .map_err(|_| DecodeError::Command("invalid controller selection"))?;
+            let mut fields = value.split('\n');
+            let id = fields.next().unwrap_or_default();
+            let model = fields.next().filter(|value| !value.is_empty());
+            let transport = fields.next().filter(|value| !value.is_empty());
+            if fields.next().is_some() {
+                return Err(DecodeError::Command(
+                    "unexpected controller selection fields",
+                ));
+            }
+            ControlCommand::SelectController {
+                id,
+                model,
+                transport,
+            }
+        } else if data.starts_with(LOAD_PROFILE_PATH_PREFIX)
+            || data.starts_with(LOAD_PROFILE_PREFIX)
+            || !data.starts_with(b"\0")
+        {
+            let profile = InlineProfile::decode(data).map_err(DecodeError::Profile)?;
+            if profile.contents.len() > MAX_PROFILE_BYTES {
+                return Err(DecodeError::Profile("profile exceeds 64 KiB"));
+            }
+            return Ok(Self::LoadProfile(profile));
+        } else {
+            return Err(DecodeError::Command("unknown control command"));
+        };
+        Ok(Self::Control(command))
+    }
+}
+
+/// Fire-and-forget datagrams sent by the editor from an unnamed socket.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PreviewCommand {
+    Resistance(ResistancePreview),
+    Travel(Option<TravelPreview>),
+}
+
+impl PreviewCommand {
+    pub fn decode(data: &[u8]) -> Result<Self, &'static str> {
+        if let Some(payload) = data.strip_prefix(TRIGGER_PREVIEW_PREFIX) {
+            return ResistancePreview::parse(payload).map(Self::Resistance);
+        }
+        if let Some(payload) = data.strip_prefix(TRIGGER_TRAVEL_PREFIX) {
+            return TravelPreview::parse(payload)
+                .map(Self::Travel)
+                .ok_or("invalid trigger travel preview");
+        }
+        Err("unknown preview command")
+    }
+}
+
 impl Reply {
     pub fn check(response: &[u8], operation: &str) -> io::Result<()> {
         match Self::parse(response) {
@@ -343,6 +436,122 @@ impl Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn addressed_controls_round_trip_with_existing_wire_values() {
+        use ControlCommand::*;
+        for (command, wire) in [
+            (UnloadProfile, &b"\0unload-profile\n"[..]),
+            (OutputsPaused(true), b"\0set-outputs\npause"),
+            (OutputsPaused(false), b"\0set-outputs\nresume"),
+            (
+                SelectController {
+                    id: "any",
+                    model: None,
+                    transport: None,
+                },
+                b"\0select-controller\nany",
+            ),
+            (
+                SelectController {
+                    id: "00:11:22:33:44:55",
+                    model: None,
+                    transport: Some("usb"),
+                },
+                b"\0select-controller\n00:11:22:33:44:55\n\nusb",
+            ),
+        ] {
+            assert_eq!(command.encode(), wire);
+            assert_eq!(
+                AddressedCommand::decode(wire),
+                Ok(AddressedCommand::Control(command))
+            );
+        }
+        for target in OutputTarget::ALL {
+            for enabled in [true, false] {
+                let command = Emulation { target, enabled };
+                assert_eq!(
+                    AddressedCommand::decode(&command.encode()),
+                    Ok(AddressedCommand::Control(command))
+                );
+            }
+        }
+        assert_eq!(
+            AddressedCommand::decode(b"\0select-controller\nany\ndualsense\n"),
+            Ok(AddressedCommand::Control(SelectController {
+                id: "any",
+                model: Some("dualsense"),
+                transport: None,
+            }))
+        );
+    }
+
+    #[test]
+    fn datagram_decoders_separate_profiles_controls_and_previews() {
+        for malformed in [
+            &b"\0unknown\n"[..],
+            b"\0set-emulation-master\nmaybe",
+            b"\0set-outputs\npause\n",
+            b"\0select-controller\n\xff",
+            b"\0select-controller\nany\n\nusb\nextra",
+            b"\0unload-profile\nextra",
+            b"\0preview-trigger\n",
+            b"\0preview-trigger-travel\n",
+        ] {
+            assert!(matches!(
+                AddressedCommand::decode(malformed),
+                Err(DecodeError::Command(_))
+            ));
+        }
+        for malformed in [
+            &b"\0load-profile-path\nrelative\0version = 1"[..],
+            b"\0load-profile\nmissing separator",
+        ] {
+            assert!(matches!(
+                AddressedCommand::decode(malformed),
+                Err(DecodeError::Profile(_))
+            ));
+        }
+
+        let raw = b"version = 1\n";
+        assert!(
+            matches!(AddressedCommand::decode(raw), Ok(AddressedCommand::LoadProfile(profile))
+            if profile.name.is_none() && profile.path.is_none() && profile.contents == raw)
+        );
+        let named = b"\0load-profile\nlegacy \xff.toml\0version = 1\n";
+        assert!(
+            matches!(AddressedCommand::decode(named), Ok(AddressedCommand::LoadProfile(profile))
+            if profile.name == Some(OsStr::from_bytes(b"legacy \xff.toml"))
+                && profile.path.is_none() && profile.contents == raw)
+        );
+
+        let path = PathBuf::from(format!("/{}", "x".repeat(MAX_PROFILE_NAME_BYTES - 1)));
+        let max_profile = vec![b' '; MAX_PROFILE_BYTES];
+        let mut max_frame = profile_path_payload(&path, &max_profile).unwrap();
+        assert_eq!(max_frame.len(), MAX_DATAGRAM_BYTES);
+        assert!(
+            matches!(AddressedCommand::decode(&max_frame), Ok(AddressedCommand::LoadProfile(profile))
+            if profile.path == Some(path.as_path()) && profile.contents == max_profile)
+        );
+        max_frame.push(b' ');
+        assert_eq!(
+            AddressedCommand::decode(&max_frame),
+            Err(DecodeError::Profile("profile exceeds 64 KiB"))
+        );
+
+        assert!(PreviewCommand::decode(raw).is_err());
+        assert!(PreviewCommand::decode(&ControlCommand::UnloadProfile.encode()).is_err());
+        assert_eq!(
+            PreviewCommand::decode(b"\0preview-trigger\n"),
+            Ok(PreviewCommand::Resistance(ResistancePreview::Reset))
+        );
+        assert_eq!(
+            PreviewCommand::decode(b"\0preview-trigger-travel\n"),
+            Ok(PreviewCommand::Travel(None))
+        );
+        assert!(PreviewCommand::decode(b"\0preview-trigger\n\x02\x03\x07").is_err());
+        assert!(PreviewCommand::decode(b"\0preview-trigger-travel\n\x02").is_err());
+    }
 
     #[test]
     fn travel_codec_accepts_the_existing_layouts() {

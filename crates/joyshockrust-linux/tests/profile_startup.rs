@@ -225,12 +225,20 @@ fn profile_persistence_does_not_block_status_or_control_and_preserves_request_or
             .encode(),
         )
         .unwrap();
-    let assert_applied = |client: &UnixDatagram| {
+    let assert_reply = |client: &UnixDatagram, expected: Reply| {
         let mut reply = [0; 32];
         let len = client.recv(&mut reply).unwrap();
-        assert_eq!(&reply[..len], Reply::Applied.bytes());
+        assert_eq!(&reply[..len], expected.bytes());
     };
-    assert_applied(&control);
+    assert_reply(&control, Reply::Applied);
+    for invalid in [
+        &b"\0set-outputs\nmaybe"[..],
+        b"\0preview-trigger\n",
+        b"\0unknown\n",
+    ] {
+        control.send(invalid).unwrap();
+        assert_reply(&control, Reply::Rejected);
+    }
     let mut stream = UnixStream::connect(&status).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(1)))
@@ -249,9 +257,13 @@ fn profile_persistence_does_not_block_status_or_control_and_preserves_request_or
     );
     assert!(!remembered.exists());
 
+    profiles
+        .send(b"\0load-profile-path\nmissing separator")
+        .unwrap();
     lock.unlock().unwrap();
-    assert_applied(&profiles);
-    assert_applied(&profiles);
+    assert_reply(&profiles, Reply::Applied);
+    assert_reply(&profiles, Reply::Applied);
+    assert_reply(&profiles, Reply::Rejected);
     assert_eq!(fs::read_to_string(remembered).unwrap(), "defaults\n");
 }
 

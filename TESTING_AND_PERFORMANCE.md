@@ -628,6 +628,42 @@ confirmed successful reloads and rejection of profile version 2 with the
 same bridge process running. The user's Fedora run of `4800d3b` also
 confirmed the systemd reload command reports success, failure and recovery.
 
+## Desktop control command verification
+
+Codec tests cover the established control datagrams, controller filter
+fields, legacy profile envelopes, the message size limit and trigger
+preview layouts. The bridge integration test holds a profile write
+lock, sends malformed and valid controls and verifies that profile
+activation and rejection results remain ordered. Trigger preview tests
+check that the sender's socket address determines which messages are
+accepted.
+
+```sh
+cargo test --locked -p joyshockrust-ipc control::tests
+cargo test --locked -p joyshockrust-linux --test profile_startup profile_persistence
+cargo test --locked -p joyshockrust-linux trigger_preview_is_received_without_a_profile_reload
+```
+
+2026-11-26. A release-mode harness compared typed dispatch with
+`2e2be8a` on one pinned CPU in six alternating pairs. Each run warmed up
+with 1,000 reports and measured 12,000 synthetic USB button transitions
+per condition. The measured interval ran from Unix datagram injection
+to the bridge's encoded gamepad event batch. In the command condition
+the injector also sent an output-resume command before every 32nd
+report and verified the reply. Values below are medians of run
+percentiles, in microseconds.
+
+| Condition | Previous p50 | Typed dispatch p50 | Previous p99 | Typed dispatch p99 |
+|---|---:|---:|---:|---:|
+| Reports alone | 2.21 | 2.37 | 6.79 | 6.39 |
+| Reports with control commands | 2.40 | 2.43 | 8.77 | 8.36 |
+
+Run-level p99 ranges overlapped in both conditions. The median idle CPU
+time was zero for both versions in 1.5-second windows at 10 ms
+accounting resolution. The harness measured a synthetic input socket
+and gamepad encoding. Physical HID and kernel uinput latency remain
+unmeasured for this revision.
+
 ## Profile installation acceptance
 
 The user verified valid and invalid installs on Fedora with `c703382`.

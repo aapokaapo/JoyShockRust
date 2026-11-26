@@ -35,13 +35,15 @@ device reads, configuration changes and output state on one owner.
 [CLI](crates/joyshockrust-linux/src/cli.rs) · [Report loop](crates/joyshockrust-linux/src/main.rs) · [Wait and reload](crates/joyshockrust-linux/src/reload.rs)
 
 The logical control plane uses local Unix sockets. The bridge handles
-commands and one-shot status queries on its readiness loop. Controller selection,
+commands and one-shot status queries on its readiness loop. The shared
+IPC codec decodes request datagrams into typed commands. The bridge
+checks discovery policy and owns device actions. Controller selection,
 mapping profile and calibration are stored separately. Session setup can
 open device handles and read settings. Force feedback and touchpad grabs
 share the evdev node lookup under the physical controller. Calibration
 persistence and PCM haptics use worker paths when needed. The steady-state report path avoids
 filesystem work, blocking IPC and shared configuration locks.
-[Discovery](crates/joyshockrust-linux/src/discovery.rs) · [Calibration storage](crates/joyshockrust-linux/src/gyro_calibration.rs) · [Haptics](crates/joyshockrust-linux/src/haptics.rs)
+[Command codec](crates/joyshockrust-ipc/src/control.rs) · [Discovery](crates/joyshockrust-linux/src/discovery.rs) · [Calibration storage](crates/joyshockrust-linux/src/gyro_calibration.rs) · [Haptics](crates/joyshockrust-linux/src/haptics.rs)
 
 The profile worker reads and compiles live profiles and persists the
 selected profile. The bridge applies a prepared profile between report

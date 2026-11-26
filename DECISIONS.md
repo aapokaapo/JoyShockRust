@@ -107,6 +107,15 @@ read both live fields from one reply, and IPC defines the value formats
 for the status telemetry. The deterministic RWC sweep and detents are in
 motion. [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16) · [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
 
+2026-11-26. Decode addressed requests and unnamed trigger previews in
+`joyshockrust-ipc`. The bridge retains socket addressing, validates
+controller filters and dispatches typed commands at report boundaries.
+The codec accepts existing raw, named and path-bearing profile packets.
+Malformed addressed control messages receive the existing rejection reply
+without changing the last profile result. Profile errors are reported
+in profile queue order. Preview senders continue to receive no reply.
+[Command codec](crates/joyshockrust-ipc/src/control.rs) · [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
+
 ## ADR-001 — Linux-first Rust 2024
 **Accepted.** New implementation, not direct C++ port. Keep safe Rust and clear module boundaries.
 
