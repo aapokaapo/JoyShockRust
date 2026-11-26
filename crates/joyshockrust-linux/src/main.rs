@@ -831,7 +831,12 @@ impl Emulation {
         if !self.master && target != OutputTarget::Master {
             return None;
         }
-        let (gamepad, gyro_override) = target.settings(enabled, gamepad, self.gyro_override);
+        let (gamepad, gyro_override) = match target {
+            OutputTarget::Gamepad => (enabled, self.gyro_override),
+            OutputTarget::GyroMouse => (gamepad, Some(enabled)),
+            OutputTarget::Both => (enabled, Some(enabled)),
+            OutputTarget::Master => (gamepad, self.gyro_override),
+        };
         let master = if target == OutputTarget::Master {
             enabled
         } else {

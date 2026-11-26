@@ -261,7 +261,7 @@ pub(super) fn mapping_dialog(
             let text = doc.to_string();
             let mut editor = ctx.editor.borrow_mut();
             editor.validate_profile_text(&text)?;
-            editor.text = text;
+            editor.draft = crate::Draft::from_document(doc);
             Ok(())
         })();
         match result {

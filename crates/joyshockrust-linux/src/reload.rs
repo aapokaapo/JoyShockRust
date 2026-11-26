@@ -1,29 +1,25 @@
+pub use joyshockrust_ipc::control::OutputTarget;
+
 use joyshockrust_ipc::{
     RELOAD_SOCKET,
     control::{
-        InlineProfile, LOAD_PROFILE_PATH_PREFIX, MAX_PROFILE_BYTES, MAX_PROFILE_NAME_BYTES, Reply,
-        SELECT_CONTROLLER_PREFIX, SET_EMULATION_MASTER_PREFIX, SET_EMULATION_PREFIX,
-        SET_GAMEPAD_PREFIX, SET_GYRO_MOUSE_PREFIX, SET_OUTPUTS_PREFIX, TRIGGER_PREVIEW_PREFIX,
-        TRIGGER_TRAVEL_PREFIX, UNLOAD_PROFILE_REQUEST, load_socket_path, profile_path_payload,
+        ControlCommand, InlineProfile, LOAD_PROFILE_PATH_PREFIX, MAX_PROFILE_BYTES,
+        MAX_PROFILE_NAME_BYTES, Reply, SELECT_CONTROLLER_PREFIX, SET_OUTPUTS_PREFIX,
+        TRIGGER_PREVIEW_PREFIX, TRIGGER_TRAVEL_PREFIX, UNLOAD_PROFILE_REQUEST, load_socket_path,
     },
+    unix::ControlClient,
 };
 
 use std::{
     cell::Cell,
     fmt::Display,
-    fs::OpenOptions,
     io::{self, Read, Write},
     os::{
         fd::{AsFd, BorrowedFd},
-        linux::net::SocketAddrExt,
-        unix::{
-            fs::OpenOptionsExt,
-            net::{SocketAddr, UnixDatagram, UnixListener, UnixStream},
-        },
+        unix::net::{SocketAddr, UnixDatagram, UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    process,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Instant,
 };
 
 use nix::{
@@ -152,49 +148,6 @@ pub enum Update {
     OutputsPaused(bool),
     TriggerPreview(Preview),
     TriggerTravel(Option<trigger_travel::Settings>),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutputTarget {
-    Gamepad,
-    GyroMouse,
-    Both,
-    Master,
-}
-
-impl OutputTarget {
-    pub fn from_flag(flag: &str) -> Option<Self> {
-        match flag {
-            "--set-gamepad" => Some(Self::Gamepad),
-            "--set-gyro-mouse" => Some(Self::GyroMouse),
-            "--set-emulation" => Some(Self::Both),
-            "--set-emulation-master" => Some(Self::Master),
-            _ => None,
-        }
-    }
-
-    fn prefix(self) -> &'static [u8] {
-        match self {
-            Self::Gamepad => SET_GAMEPAD_PREFIX,
-            Self::GyroMouse => SET_GYRO_MOUSE_PREFIX,
-            Self::Both => SET_EMULATION_PREFIX,
-            Self::Master => SET_EMULATION_MASTER_PREFIX,
-        }
-    }
-
-    pub fn settings(
-        self,
-        enabled: bool,
-        gamepad: bool,
-        gyro: Option<bool>,
-    ) -> (bool, Option<bool>) {
-        match self {
-            Self::Gamepad => (enabled, gyro),
-            Self::GyroMouse => (gamepad, Some(enabled)),
-            Self::Both => (enabled, Some(enabled)),
-            Self::Master => (gamepad, gyro),
-        }
-    }
 }
 
 impl Request<'_> {
@@ -429,54 +382,15 @@ pub fn request(path: Option<&Path>) -> io::Result<()> {
     let stream = status::connect(path, RELOAD_SOCKET)?;
     let mut response = Vec::new();
     stream.take(32).read_to_end(&mut response)?;
-    check_reply(&response, "profile reload")
-}
-
-fn check_reply(response: &[u8], operation: &str) -> io::Result<()> {
-    match Reply::parse(response) {
-        Some(Reply::Applied) => Ok(()),
-        Some(Reply::Unavailable) => Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "no startup profile configured; use --load-profile PATH",
-        )),
-        Some(Reply::Rejected) => Err(io::Error::other(format!(
-            "{operation} rejected; see the bridge log for details"
-        ))),
-        None => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{operation} returned no valid result"),
-        )),
-    }
+    Reply::check(&response, "profile reload")
 }
 
 pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<()> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NONBLOCK)
-        .open(source)
-        .map_err(|err| io::Error::new(err.kind(), format!("{}: {err}", source.display())))?;
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "expected a regular profile file",
-        ));
-    }
-    let mut profile = Vec::new();
-    file.take(MAX_PROFILE_BYTES as u64 + 1)
-        .read_to_end(&mut profile)?;
-    if profile.len() > MAX_PROFILE_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "profile exceeds 64 KiB",
-        ));
-    }
-
-    let payload = profile_path_payload(&std::path::absolute(source)?, &profile)?;
-    send_update(&payload, reload_socket, "profile reload")
+    control_client(reload_socket)?.load_profile(source)
 }
 
 pub fn unload_profile(reload_socket: Option<&Path>) -> io::Result<()> {
-    send_update(UNLOAD_PROFILE_REQUEST, reload_socket, "profile unload")
+    control_client(reload_socket)?.send(ControlCommand::UnloadProfile)
 }
 
 pub fn set_emulation(
@@ -484,15 +398,11 @@ pub fn set_emulation(
     enabled: bool,
     reload_socket: Option<&Path>,
 ) -> io::Result<()> {
-    let mut payload = target.prefix().to_vec();
-    payload.extend_from_slice(if enabled { b"on" } else { b"off" });
-    send_update(&payload, reload_socket, "emulation update")
+    control_client(reload_socket)?.send(ControlCommand::Emulation { target, enabled })
 }
 
 pub fn set_outputs_paused(paused: bool, reload_socket: Option<&Path>) -> io::Result<()> {
-    let mut payload = SET_OUTPUTS_PREFIX.to_vec();
-    payload.extend_from_slice(if paused { b"pause" } else { b"resume" });
-    send_update(&payload, reload_socket, "virtual output update")
+    control_client(reload_socket)?.send(ControlCommand::OutputsPaused(paused))
 }
 
 pub fn parse_controller_selection(value: &str) -> Result<Option<ControllerId>, &'static str> {
@@ -538,44 +448,16 @@ pub fn select_controller(
     transport: Option<Selection>,
     reload_socket: Option<&Path>,
 ) -> io::Result<()> {
-    let mut payload = SELECT_CONTROLLER_PREFIX.to_vec();
-    if let Some(id) = id {
-        write!(payload, "{id}")?;
-    } else {
-        payload.extend_from_slice(b"any");
-    }
-    if model.is_some() || transport.is_some() {
-        write!(
-            payload,
-            "\n{}\n{}",
-            model.map_or("", ModelSelection::as_str),
-            transport.map_or("", Selection::as_str)
-        )?;
-    }
-    send_update(&payload, reload_socket, "controller selection")
+    let id = id.map(|id| id.to_string());
+    control_client(reload_socket)?.send(ControlCommand::SelectController {
+        id: id.as_deref().unwrap_or("any"),
+        model: model.map(ModelSelection::as_str),
+        transport: transport.map(Selection::as_str),
+    })
 }
 
-fn send_update(payload: &[u8], reload_socket: Option<&Path>, operation: &str) -> io::Result<()> {
-    let path = load_socket_path(&status::socket_path(reload_socket, RELOAD_SOCKET)?);
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let id = format!("joyshockrust-profile-{}-{nonce}", process::id());
-    let socket = UnixDatagram::bind_addr(&SocketAddr::from_abstract_name(id.as_bytes())?)?;
-    socket.connect(&path).map_err(|err| {
-        io::Error::new(
-            err.kind(),
-            format!("could not connect to {}: {err}", path.display()),
-        )
-    })?;
-    let timeout = Some(Duration::from_secs(2));
-    socket.set_write_timeout(timeout)?;
-    socket.set_read_timeout(timeout)?;
-    socket.send(payload)?;
-    let mut response = [0; 32];
-    let len = socket.recv(&mut response)?;
-    check_reply(&response[..len], operation)
+fn control_client(reload_socket: Option<&Path>) -> io::Result<ControlClient> {
+    status::socket_path(reload_socket, RELOAD_SOCKET).map(ControlClient::new)
 }
 
 pub fn wait<'a>(
@@ -727,11 +609,11 @@ pub fn wait<'a>(
 mod tests {
     use std::{
         os::{linux::net::SocketAddrExt, unix::net::SocketAddr},
-        process,
         time::Duration,
     };
 
     use super::*;
+    use std::process;
 
     #[test]
     fn reload_rejects_changes_to_bridge_settings() {
@@ -1045,7 +927,7 @@ mod tests {
         )
         .unwrap();
         client.connect_addr(&address).unwrap();
-        client.send(&[SET_GAMEPAD_PREFIX, b"on"].concat()).unwrap();
+        client.send(b"\0set-gamepad\non").unwrap();
 
         let (old_peer, old_feedback) = UnixStream::pair().unwrap();
         let feedback = RefCell::new(Some(OwnedFd::from(old_feedback)));

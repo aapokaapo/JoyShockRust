@@ -32,6 +32,15 @@ change detection. It commits published state after the output adapter
 accepts the event batch. Linux owns the devices, physical activation
 checks and calibration persistence. [Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
 
+## Typed desktop controls and editor drafts
+
+2026-11-26. The editor keeps the parsed TOML document between structured
+edits and preserves invalid raw drafts. The tray and editor send their
+control commands through the existing IPC wire format. The gyro widgets
+read both live fields from one reply, and IPC defines the value formats
+for the status telemetry. The deterministic RWC sweep and detents are in
+motion. [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16) · [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
+
 ## ADR-001 — Linux-first Rust 2024
 **Accepted.** New implementation, not direct C++ port. Keep safe Rust and clear module boundaries.
 

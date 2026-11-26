@@ -1,13 +1,13 @@
-use joyshockrust_ipc::status::Field;
-use std::time::Duration;
+use joyshockrust_ipc::telemetry::ImuReading;
 
 use adw::{gtk, prelude::*};
 
-use crate::controller_input;
-
 const VELOCITY_DISPLAY_LIMIT: f64 = 180.0;
 
-pub fn group() -> adw::PreferencesGroup {
+pub fn group() -> (
+    adw::PreferencesGroup,
+    impl Fn(Result<Option<ImuReading>, ()>),
+) {
     let group = adw::PreferencesGroup::builder()
         .title("Live calibrated IMU")
         .description("Controller axes with factory calibration and any measured gyro bias applied.")
@@ -48,60 +48,27 @@ pub fn group() -> adw::PreferencesGroup {
         .build();
     group.add(&status);
 
-    controller_input::watch_status(
-        &group,
-        Field::Imu,
-        Duration::from_millis(33),
-        move |result| {
-            let (sample, message) = match result {
-                Ok(value) => match value.as_deref().and_then(parse_sample) {
-                    Some(sample) => (Some(sample), ""),
-                    None => (None, "Waiting for calibrated reports…"),
-                },
-                Err(()) => (None, "Bridge status is unavailable."),
-            };
-            status.set_text(message);
-            status.set_visible(!message.is_empty());
-            for (index, (row, scale)) in velocity.iter().enumerate() {
-                let value = sample.map(|sample| sample[0][index]);
-                scale.set_value(f64::from(value.unwrap_or_default()));
-                scale.set_opacity(if value.is_some() { 1.0 } else { 0.45 });
-                row.set_subtitle(&value.map_or_else(|| "—".into(), |value| format!("{value:+.3}")));
-            }
-            acceleration.set_subtitle(&sample.map_or_else(
-                || "—".into(),
-                |[_, [x, y, z]]| format!("X {x:+.3}    Y {y:+.3}    Z {z:+.3}"),
-            ));
-        },
-    );
-    group
-}
-
-fn parse_sample(value: &str) -> Option<[[f32; 3]; 2]> {
-    let mut fields = value.split(',');
-    let mut sample = [[0.0; 3]; 2];
-    for axis in sample.iter_mut().flatten() {
-        *axis = fields
-            .next()?
-            .parse::<f32>()
-            .ok()
-            .filter(|x| x.is_finite())?;
-    }
-    fields.next().is_none().then_some(sample)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn imu_requires_six_finite_values_in_device_axis_order() {
-        assert_eq!(
-            parse_sample("1,-2,3,0,1.01,-0.5"),
-            Some([[1.0, -2.0, 3.0], [0.0, 1.01, -0.5]])
-        );
-        for invalid in ["1,2,3", "1,2,3,4,5,6,7", "NaN,2,3,4,5,6"] {
-            assert!(parse_sample(invalid).is_none());
+    let update = move |result: Result<Option<ImuReading>, ()>| {
+        let (sample, message) = match result {
+            Ok(Some(sample)) => (Some(sample), ""),
+            Ok(None) => (None, "Waiting for calibrated reports…"),
+            Err(()) => (None, "Bridge status is unavailable."),
+        };
+        status.set_text(message);
+        status.set_visible(!message.is_empty());
+        for (index, (row, scale)) in velocity.iter().enumerate() {
+            let value = sample.map(|sample| sample.gyro_dps[index]);
+            scale.set_value(f64::from(value.unwrap_or_default()));
+            scale.set_opacity(if value.is_some() { 1.0 } else { 0.45 });
+            row.set_subtitle(&value.map_or_else(|| "—".into(), |value| format!("{value:+.3}")));
         }
-    }
+        acceleration.set_subtitle(&sample.map_or_else(
+            || "—".into(),
+            |sample| {
+                let [x, y, z] = sample.accel_g;
+                format!("X {x:+.3}    Y {y:+.3}    Z {z:+.3}")
+            },
+        ));
+    };
+    (group, update)
 }

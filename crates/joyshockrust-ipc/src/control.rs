@@ -234,6 +234,112 @@ fn decode_side(side: u8) -> TriggerSide {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputTarget {
+    Gamepad,
+    GyroMouse,
+    Both,
+    Master,
+}
+
+impl OutputTarget {
+    pub fn from_flag(flag: &str) -> Option<Self> {
+        match flag {
+            "--set-gamepad" => Some(Self::Gamepad),
+            "--set-gyro-mouse" => Some(Self::GyroMouse),
+            "--set-emulation" => Some(Self::Both),
+            "--set-emulation-master" => Some(Self::Master),
+            _ => None,
+        }
+    }
+
+    pub fn prefix(self) -> &'static [u8] {
+        match self {
+            Self::Gamepad => SET_GAMEPAD_PREFIX,
+            Self::GyroMouse => SET_GYRO_MOUSE_PREFIX,
+            Self::Both => SET_EMULATION_PREFIX,
+            Self::Master => SET_EMULATION_MASTER_PREFIX,
+        }
+    }
+}
+
+/// Commands that expect a reply from the running bridge.
+#[derive(Clone, Copy, Debug)]
+pub enum ControlCommand<'a> {
+    UnloadProfile,
+    Emulation {
+        target: OutputTarget,
+        enabled: bool,
+    },
+    OutputsPaused(bool),
+    SelectController {
+        id: &'a str,
+        model: Option<&'a str>,
+        transport: Option<&'a str>,
+    },
+}
+
+impl ControlCommand<'_> {
+    pub fn encode(self) -> Vec<u8> {
+        match self {
+            Self::UnloadProfile => UNLOAD_PROFILE_REQUEST.to_vec(),
+            Self::Emulation { target, enabled } => {
+                let mut payload = target.prefix().to_vec();
+                payload.extend_from_slice(if enabled { b"on" } else { b"off" });
+                payload
+            }
+            Self::OutputsPaused(paused) => {
+                let mut payload = SET_OUTPUTS_PREFIX.to_vec();
+                payload.extend_from_slice(if paused { b"pause" } else { b"resume" });
+                payload
+            }
+            Self::SelectController {
+                id,
+                model,
+                transport,
+            } => {
+                let mut payload = SELECT_CONTROLLER_PREFIX.to_vec();
+                payload.extend_from_slice(id.as_bytes());
+                if model.is_some() || transport.is_some() {
+                    payload.push(b'\n');
+                    payload.extend_from_slice(model.unwrap_or_default().as_bytes());
+                    payload.push(b'\n');
+                    payload.extend_from_slice(transport.unwrap_or_default().as_bytes());
+                }
+                payload
+            }
+        }
+    }
+
+    pub fn operation(self) -> &'static str {
+        match self {
+            Self::UnloadProfile => "profile unload",
+            Self::Emulation { .. } => "emulation update",
+            Self::OutputsPaused(_) => "virtual output update",
+            Self::SelectController { .. } => "controller selection",
+        }
+    }
+}
+
+impl Reply {
+    pub fn check(response: &[u8], operation: &str) -> io::Result<()> {
+        match Self::parse(response) {
+            Some(Self::Applied) => Ok(()),
+            Some(Self::Unavailable) => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no startup profile configured; use --load-profile PATH",
+            )),
+            Some(Self::Rejected) => Err(io::Error::other(format!(
+                "{operation} rejected; see the bridge log for details"
+            ))),
+            None => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{operation} returned no valid result"),
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

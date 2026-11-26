@@ -77,12 +77,61 @@ fn stage(directory: Option<&Path>, text: &str) -> io::Result<tempfile::NamedTemp
     Ok(file)
 }
 
+/// The active representation stays available until the other is needed.
+struct Draft {
+    text: std::cell::OnceCell<String>,
+    document: std::cell::OnceCell<Result<toml_edit::DocumentMut, String>>,
+}
+
+impl Draft {
+    fn from_text(text: String) -> Self {
+        Self {
+            text: std::cell::OnceCell::from(text),
+            document: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn from_document(document: toml_edit::DocumentMut) -> Self {
+        Self {
+            text: std::cell::OnceCell::new(),
+            document: std::cell::OnceCell::from(Ok(document)),
+        }
+    }
+
+    fn text(&self) -> &str {
+        self.text.get_or_init(|| {
+            self.document
+                .get()
+                .and_then(|document| document.as_ref().ok())
+                .expect("a draft always has text or a parsed document")
+                .to_string()
+        })
+    }
+
+    fn document(&self) -> Result<toml_edit::DocumentMut, String> {
+        self.document
+            .get_or_init(|| {
+                self.text()
+                    .parse()
+                    .map_err(|error: toml_edit::TomlError| error.to_string())
+            })
+            .clone()
+    }
+
+    #[cfg(test)]
+    fn append_text(&mut self, text: &str) {
+        let mut edited = self.text().to_owned();
+        edited.push_str(text);
+        *self = Self::from_text(edited);
+    }
+}
+
 struct Editor {
     bridge: PathBuf,
     directory: PathBuf,
     path: Option<PathBuf>,
     original: String,
-    text: String,
+    draft: Draft,
     name: String,
     selected: &'static str,
     calibration: sensitivity::CalibrationDraft,
@@ -100,7 +149,7 @@ impl Editor {
             bridge,
             directory,
             path,
-            text: original.clone(),
+            draft: Draft::from_text(original.clone()),
             original,
             name: String::new(),
             selected: "cross",
@@ -112,7 +161,7 @@ impl Editor {
     }
 
     fn has_unsaved_changes(&self) -> bool {
-        self.text != self.original
+        self.draft.text() != self.original
             || (self.path.is_none() && !self.name.trim().is_empty())
             || self.draft_error().is_some()
     }
@@ -166,7 +215,7 @@ impl Editor {
         if let Some(error) = self.draft_error() {
             return Err(error.into());
         }
-        self.validate_profile_text(&self.text)?;
+        self.validate_profile_text(self.draft.text())?;
         Ok("Profile is valid.".into())
     }
 
@@ -185,29 +234,35 @@ impl Editor {
             if current != self.original {
                 return Err("The profile changed on disk. Reopen it before editing again.".into());
             }
-            let staged = stage(None, &self.text).map_err(|error| error.to_string())?;
+            let staged = stage(None, self.draft.text()).map_err(|error| error.to_string())?;
             run_bridge(
                 &self.bridge,
                 &[Path::new("--install-profile"), staged.path(), path],
             )?;
-            self.original.clone_from(&self.text);
+            self.draft.text().clone_into(&mut self.original);
             return Ok(path.clone());
         }
         let path = self.directory.join(profile_filename(&self.name)?);
-        let staged = stage(Some(&self.directory), &self.text).map_err(|error| error.to_string())?;
+        let staged =
+            stage(Some(&self.directory), self.draft.text()).map_err(|error| error.to_string())?;
         run_bridge(&self.bridge, &[Path::new("--check-profile"), staged.path()])?;
         staged
             .persist_noclobber(&path)
             .map_err(|error| format!("{}: {}", path.display(), error.error))?;
         self.path = Some(path.clone());
-        self.original.clone_from(&self.text);
+        self.draft.text().clone_into(&mut self.original);
         Ok(path)
     }
 
     fn save_and_apply(&mut self, apply: bool) -> Result<String, String> {
         let path = self.save()?;
         if apply {
-            run_bridge(&self.bridge, &[Path::new("--load-profile"), &path])
+            use joyshockrust_ipc::{RELOAD_SOCKET, unix::ControlClient};
+
+            joyshockrust_config::paths::runtime_socket(RELOAD_SOCKET, false)
+                .map(ControlClient::new)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))
+                .and_then(|client| client.load_profile(&path))
                 .map_err(|error| format!("Profile saved. Could not apply it: {error}"))?;
             self.trigger_preview_active = false;
             return Ok("Profile saved and applied.".into());
@@ -297,6 +352,26 @@ mod tests {
     }
 
     #[test]
+    fn draft_keeps_raw_errors_and_preserves_comments_through_structured_edits() {
+        let invalid = "[gyro\nsensitivity_x = 1.0";
+        let mut draft = Draft::from_text(invalid.into());
+        assert!(draft.document().is_err());
+        assert_eq!(draft.text(), invalid);
+
+        draft = Draft::from_text("[gyro]\nsensitivity_x = 1.0 # keep\n".into());
+        let mut doc = draft.document().unwrap();
+        let value = doc["gyro"]["sensitivity_x"].as_value_mut().unwrap();
+        crate::bindings::replace_value(value, toml_edit::Value::from(2.0));
+        draft = Draft::from_document(doc);
+        assert!(draft.text.get().is_none());
+        assert_eq!(
+            draft.document().unwrap()["gyro"]["sensitivity_x"].as_float(),
+            Some(2.0)
+        );
+        assert_eq!(draft.text(), "[gyro]\nsensitivity_x = 2.0 # keep\n");
+    }
+
+    #[test]
     fn a_profile_changed_outside_the_editor_is_not_replaced() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("game.toml");
@@ -307,7 +382,7 @@ mod tests {
             Some(path.clone()),
         )
         .unwrap();
-        editor.text.push_str("# Editor change\n");
+        editor.draft.append_text("# Editor change\n");
         let external = "version = 1\n# External change\n";
         fs::write(&path, external).unwrap();
         assert!(editor.save().unwrap_err().contains("changed on disk"));

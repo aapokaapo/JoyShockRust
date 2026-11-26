@@ -10,8 +10,8 @@ use std::{
 
 use evdev::{EventType, InputEvent, RelativeAxisCode};
 
-use joyshockrust_core::{Button, Stick};
-use joyshockrust_motion::{aim_response::validate_flick_axial_threshold, flick_stick::FlickStick};
+use joyshockrust_core::Button;
+use joyshockrust_motion::aim_response::validate_flick_axial_threshold;
 
 use crate::{
     SessionEvent, discovery, forward_reports, gyro_mouse,
@@ -20,7 +20,7 @@ use crate::{
 };
 
 pub use joyshockrust_motion::game_calibration::GameCalibration;
-use joyshockrust_motion::game_calibration::{calculate, positive};
+use joyshockrust_motion::game_calibration::{Confirmation, StickSweep, calculate, positive};
 
 pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
     let mut args = args.peekable();
@@ -270,86 +270,6 @@ fn prompt_value<T>(prompt: &str, parse: impl Fn(&str) -> Option<T>) -> io::Resul
     }
 }
 
-struct StickSweep {
-    flick: FlickStick,
-    measuring: bool,
-    options_pressed: bool,
-    counts: i64,
-    dial: Dial,
-}
-
-#[derive(Default)]
-pub(crate) struct Dial {
-    travel: f64,
-}
-
-impl Dial {
-    pub(crate) fn rotate(&mut self, degrees: Option<f64>) -> bool {
-        const STEP: f64 = 15.0;
-        let Some(degrees) = degrees else {
-            self.travel = 0.0;
-            return false;
-        };
-        self.travel += degrees;
-        if self.travel.abs() >= STEP {
-            self.travel %= STEP;
-            return true;
-        }
-        false
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Confirmation {
-    None,
-    Started,
-    CenterStick,
-    NoMotion,
-    Finished(u64),
-}
-
-impl StickSweep {
-    fn new(scale: f64) -> Self {
-        Self {
-            flick: FlickStick::new(scale)
-                .with_axial_threshold(0.0)
-                .with_steering_sensitivity(1.0),
-            measuring: false,
-            options_pressed: true,
-            counts: 0,
-            dial: Dial::default(),
-        }
-    }
-
-    fn advance(&mut self, stick: Stick, ticks: u32, options: bool) -> (i32, Confirmation, bool) {
-        let pressed = options && !self.options_pressed;
-        self.options_pressed = options;
-        let mut detent = false;
-        let delta = if self.measuring {
-            self.flick.advance_with_rotation(stick, ticks, |degrees| {
-                detent = self.dial.rotate(degrees);
-            })
-        } else {
-            0
-        };
-        self.counts += i64::from(delta);
-        let confirmation = if !pressed {
-            Confirmation::None
-        } else if !self.flick.is_settled(stick) {
-            Confirmation::CenterStick
-        } else if !self.measuring {
-            self.measuring = true;
-            self.flick.advance(stick, ticks);
-            Confirmation::Started
-        } else if self.counts == 0 {
-            Confirmation::NoMotion
-        } else {
-            Confirmation::Finished(self.counts.unsigned_abs())
-        };
-        (delta, confirmation, detent)
-    }
-}
-
 fn measure_turns(counts: i32) -> Result<f64, Box<dyn Error>> {
     let input = io::stdin();
     if !input.is_terminal() {
@@ -383,73 +303,6 @@ fn movement_steps(counts: i32) -> impl Iterator<Item = i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn measurement_recovers_the_game_factor_for_different_turn_counts() {
-        let calibration = calculate(9000, 2.0, 1.25).unwrap();
-        assert!((calibration - 40.0).abs() < 1e-10);
-        let effective = GameCalibration::new(calibration, 2.0).unwrap();
-        assert!((effective.scale(1.0) - 20.0).abs() < 1e-10);
-        assert!((effective.scale(3.0) - 60.0).abs() < 1e-10);
-        assert!(calculate(9000, 2.0, 0.0).is_err());
-        assert!(GameCalibration::new(1.0, f64::INFINITY).is_err());
-    }
-
-    #[test]
-    fn stick_measurement_sums_two_full_rotations_and_uses_whole_turns() {
-        let up = Stick { x: 0.0, y: -1.0 };
-        let right = Stick { x: 1.0, y: 0.0 };
-        let down = Stick { x: 0.0, y: 1.0 };
-        let left = Stick { x: -1.0, y: 0.0 };
-        let center = Stick::default();
-        let mut sweep = StickSweep::new(20.0);
-        let mut ticks = 0;
-        let mut advance = |stick, options| {
-            ticks += 30_000;
-            sweep.advance(stick, ticks, options)
-        };
-
-        assert_eq!(advance(up, true), (0, Confirmation::None, false));
-        advance(center, false);
-        assert_eq!(advance(center, true), (0, Confirmation::Started, false));
-        assert_eq!(advance(up, true), (0, Confirmation::None, false));
-        for direction in [right, down, left, up].into_iter().cycle().take(8) {
-            assert_eq!(advance(direction, false), (1800, Confirmation::None, true));
-        }
-        assert_eq!(advance(up, true), (0, Confirmation::CenterStick, false));
-        for _ in 0..3 {
-            advance(center, false);
-        }
-        let (delta, confirmation, detent) = advance(center, true);
-        assert!(!detent);
-        assert_eq!(delta, 0);
-        assert_eq!(confirmation, Confirmation::Finished(14_400));
-        assert_eq!(calculate(14_400, 2.0, 2.0).unwrap(), 40.0);
-    }
-
-    #[test]
-    fn measurement_can_make_fine_adjustments_next_to_forward() {
-        let mut sweep = StickSweep::new(20.0);
-        let center = Stick::default();
-        sweep.advance(center, 0, false);
-        assert_eq!(sweep.advance(center, 30_000, true).1, Confirmation::Started);
-        sweep.advance(Stick { x: 0.0, y: -1.0 }, 60_000, false);
-        let (x, forward) = 2.0_f32.to_radians().sin_cos();
-        let (counts, _, _) = sweep.advance(Stick { x, y: -forward }, 90_000, false);
-        assert!((39..=40).contains(&counts));
-    }
-
-    #[test]
-    fn dial_uses_relative_steps_and_resets_when_the_stick_recenters() {
-        let mut dial = Dial::default();
-        assert!(!dial.rotate(Some(10.0)));
-        assert!(!dial.rotate(Some(-2.0)));
-        assert!(dial.rotate(Some(8.0)));
-        assert!(!dial.rotate(Some(-14.0)));
-        assert!(dial.rotate(Some(-3.0)));
-        assert!(!dial.rotate(None));
-        assert!(!dial.rotate(Some(-10.0)));
-    }
 
     #[test]
     fn movement_preserves_exact_counts_for_small_and_large_turns() {

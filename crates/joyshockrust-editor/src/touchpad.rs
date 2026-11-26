@@ -1,4 +1,5 @@
 use joyshockrust_ipc::status::Field;
+use joyshockrust_ipc::telemetry::TouchPoints;
 use std::{cell::Cell as State, rc::Rc, time::Duration};
 
 use adw::{gtk, prelude::*};
@@ -407,15 +408,12 @@ type Contacts = [Option<(f64, f64)>; 2];
 
 fn parse_contacts(value: &str) -> Option<Contacts> {
     let mut contacts = [None; 2];
-    if !value.is_empty() {
-        for (index, point) in value.split(';').enumerate() {
-            let (x, y) = point.split_once(',')?;
-            let x = x.parse::<u16>().ok()?;
-            let y = y.parse::<u16>().ok()?;
+    for (normalized, point) in contacts.iter_mut().zip(TouchPoints::parse(value)?.0) {
+        if let Some((x, y)) = point {
             if x >= DUALSENSE_TOUCHPAD_WIDTH || y >= DUALSENSE_TOUCHPAD_HEIGHT {
                 return None;
             }
-            *contacts.get_mut(index)? = Some((
+            *normalized = Some((
                 f64::from(x) / f64::from(DUALSENSE_TOUCHPAD_WIDTH),
                 f64::from(y) / f64::from(DUALSENSE_TOUCHPAD_HEIGHT),
             ));

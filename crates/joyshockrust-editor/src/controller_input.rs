@@ -26,8 +26,18 @@ pub async fn status_value(
     address: &gio::UnixSocketAddress,
     key: Field,
 ) -> Result<Option<String>, glib::Error> {
+    let [value] = status_values(client, address, [key]).await?;
+    Ok(value)
+}
+
+async fn status_values<const N: usize>(
+    client: &gio::SocketClient,
+    address: &gio::UnixSocketAddress,
+    keys: [Field; N],
+) -> Result<[Option<String>; N], glib::Error> {
     let connection = client.connect_future(address).await?;
     let stream = gio::DataInputStream::new(&connection.input_stream());
+    let mut values = std::array::from_fn(|_| None);
     for _ in 0..64 {
         let Some(line) = stream
             .read_line_utf8_future(glib::Priority::DEFAULT)
@@ -35,11 +45,18 @@ pub async fn status_value(
         else {
             break;
         };
-        if let Some(value) = key.line_value(&line) {
-            return Ok(Some(value.to_owned()));
+        for (slot, field) in values.iter_mut().zip(keys) {
+            if slot.is_none()
+                && let Some(value) = field.line_value(&line)
+            {
+                *slot = Some(value.to_owned());
+            }
+        }
+        if values.iter().all(Option::is_some) {
+            break;
         }
     }
-    Ok(None)
+    Ok(values)
 }
 
 pub fn watch_status(
@@ -48,13 +65,24 @@ pub fn watch_status(
     interval: Duration,
     update: impl Fn(Result<Option<String>, ()>) + 'static,
 ) {
+    watch_status_fields(widget, [key], interval, move |result| {
+        update(result.map(|[value]| value));
+    });
+}
+
+pub fn watch_status_fields<const N: usize>(
+    widget: &impl IsA<gtk::Widget>,
+    fields: [Field; N],
+    interval: Duration,
+    update: impl Fn(Result<[Option<String>; N], ()>) + 'static,
+) {
     let update = Rc::new(update);
     let polling = Rc::new(RefCell::new(None::<glib::JoinHandle<()>>));
     let on_map = polling.clone();
     let start = move || {
         let update = update.clone();
         let task = glib::MainContext::default().spawn_local(async move {
-            update(Ok(None));
+            update(Ok(std::array::from_fn(|_| None)));
             let Some(address) = status_address() else {
                 update(Err(()));
                 return;
@@ -62,7 +90,11 @@ pub fn watch_status(
             let client = gio::SocketClient::new();
             client.set_timeout(1);
             loop {
-                update(status_value(&client, &address, key).await.map_err(|_| ()));
+                update(
+                    status_values(&client, &address, fields)
+                        .await
+                        .map_err(|_| ()),
+                );
                 glib::timeout_future(interval).await;
             }
         });
@@ -120,4 +152,41 @@ pub fn read_reports(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::Write, os::unix::net::UnixListener};
+
+    use super::*;
+
+    #[test]
+    fn status_reads_related_gyro_fields_from_one_reply() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .write_all(b"version=1\nimu=1,2,3,0,0,1\nimu=ignored\ngyro_speed_dps=2.2\n")
+                    .unwrap();
+            });
+            glib::MainContext::new().block_on(async {
+                let client = gio::SocketClient::new();
+                client.set_timeout(1);
+                let address = gio::UnixSocketAddress::new(&path);
+                let [imu, speed, absent] = status_values(
+                    &client,
+                    &address,
+                    [Field::Imu, Field::GyroSpeedDps, Field::TouchContacts],
+                )
+                .await
+                .unwrap();
+                assert_eq!(imu.as_deref(), Some("1,2,3,0,0,1"));
+                assert_eq!(speed.as_deref(), Some("2.2"));
+                assert_eq!(absent, None);
+            });
+        });
+    }
 }

@@ -685,3 +685,60 @@ fn gyro_calibration_is_saved_separately_for_each_controller() {
     assert!(first_bias.contains("gyro_bias_dps = [0.25, 0.0, -0.1]"));
     assert!(second_bias.contains("gyro_bias_dps = [0.5, 0.0, -0.1]"));
 }
+
+#[test]
+fn shared_control_client_preserves_requests_and_reports_rejection() {
+    use joyshockrust_ipc::{
+        control::{ControlCommand, OutputTarget, Reply, load_socket_path},
+        unix::ControlClient,
+    };
+
+    let directory = TestDirectory::new("control-client");
+    let reload = directory.0.join("reload.sock");
+    let server = UnixDatagram::bind(load_socket_path(&reload)).unwrap();
+    server
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let profile = directory.0.join("profile.toml");
+    fs::write(&profile, "version = 1\n").unwrap();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut bytes = [0; 512];
+            for (expected, reply) in [
+                (&b"\0set-gamepad\noff"[..], Reply::Applied),
+                (&b"\0select-controller\nany\nany\nauto"[..], Reply::Rejected),
+            ] {
+                let (len, sender) = server.recv_from(&mut bytes).unwrap();
+                assert_eq!(&bytes[..len], expected);
+                assert!(!sender.is_unnamed());
+                server.send_to_addr(reply.bytes(), &sender).unwrap();
+            }
+            let (len, sender) = server.recv_from(&mut bytes).unwrap();
+            let view = joyshockrust_ipc::control::InlineProfile::decode(&bytes[..len]).unwrap();
+            assert_eq!(view.path, Some(profile.as_path()));
+            assert_eq!(view.contents, b"version = 1\n");
+            server
+                .send_to_addr(Reply::Applied.bytes(), &sender)
+                .unwrap();
+        });
+
+        let client = ControlClient::new(reload);
+        client
+            .send(ControlCommand::Emulation {
+                target: OutputTarget::Gamepad,
+                enabled: false,
+            })
+            .unwrap();
+        let error = client
+            .send(ControlCommand::SelectController {
+                id: "any",
+                model: Some("any"),
+                transport: Some("auto"),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert!(error.to_string().contains("controller selection rejected"));
+        client.load_profile(&profile).unwrap();
+    });
+}

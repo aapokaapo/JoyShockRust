@@ -1,4 +1,4 @@
-use joyshockrust_motion::flick_stick::FlickStick;
+use joyshockrust_motion::{flick_stick::FlickStick, game_calibration::Dial};
 use std::{
     ffi::OsString,
     fs::File,
@@ -18,7 +18,6 @@ use crate::{
     ReportTimers, SessionEvent,
     controller_config::ControllerConfig,
     discovery, forward_reports,
-    game_calibration::Dial,
     hidraw::{self, Identity},
     rumble::Rumble,
 };

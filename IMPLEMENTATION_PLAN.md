@@ -21,10 +21,15 @@ session. The physical editor sequence remains the next device
 acceptance check. [Headless Wayland editor tests](TESTING_AND_PERFORMANCE.md#headless-wayland-editor-tests)
 
 The pointer and virtual gamepad portions of the architecture migration
-run in `joyshockrust-motion` and `joyshockrust-mapping`. Next migration
-steps cover the activation and keyboard/mouse gesture state in mapping,
-the profile and IPC client changes, bridge telemetry and bridge-owned
-calibration sessions. [Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
+run in `joyshockrust-motion` and `joyshockrust-mapping`. Move activation
+and keyboard/mouse gesture state in a later mapping increment.
+[Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
+
+The editor retains structured drafts and shares the command client and
+telemetry codecs with the bridge. The RWC sweep runs in motion. Remaining
+steps cover shared profile validation and persistence, event-driven
+inventory and subscriptions, removal of the editor's HID reader, and
+bridge-owned calibration sessions. [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16) · [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17) · [Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
 
 | Area | Shipped | Next acceptance step |
 |---|---|---|

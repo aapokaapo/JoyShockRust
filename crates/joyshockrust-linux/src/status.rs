@@ -1,3 +1,4 @@
+use joyshockrust_ipc::telemetry::{GyroSpeed, ImuReading, StickTravel, TouchPoints, TriggerTravel};
 use joyshockrust_ipc::{
     STATUS_SOCKET,
     status::{Field, STATUS_VERSION, encode_profile_path, write_field},
@@ -446,17 +447,16 @@ impl StatusSocket {
             write_field(
                 &mut response,
                 Field::Imu,
-                format_args!("{gx:.4},{gy:.4},{gz:.4},{ax:.4},{ay:.4},{az:.4}"),
+                ImuReading {
+                    gyro_dps: [gx, gy, gz],
+                    accel_g: [ax, ay, az],
+                },
             );
             let speed = imu.projected_interval.map_or_else(
                 || f64::from(gx).hypot(f64::from(gy)),
                 |([x, y], duration)| f64::from(x).hypot(f64::from(y)) / duration.as_secs_f64(),
             );
-            write_field(
-                &mut response,
-                Field::GyroSpeedDps,
-                format_args!("{speed:.4}"),
-            );
+            write_field(&mut response, Field::GyroSpeedDps, GyroSpeed(speed));
         }
         if let Some(sticks) = snapshot.sticks {
             let [left, right] =
@@ -464,24 +464,22 @@ impl StatusSocket {
             write_field(
                 &mut response,
                 Field::StickTravel,
-                format_args!("{left:.4},{right:.4}"),
+                StickTravel([left, right]),
             );
         }
         if let Some([left, right]) = snapshot.triggers {
             write_field(
                 &mut response,
                 Field::TriggerTravel,
-                format_args!("{left:.6},{right:.6}"),
+                TriggerTravel([f64::from(left), f64::from(right)]),
             );
         }
         if let Some(contacts) = snapshot.touch_contacts {
-            use std::fmt::Write;
-            let _ = write!(response, "{}=", Field::TouchContacts.name());
-            for (index, contact) in contacts.into_iter().flatten().enumerate() {
-                let separator = if index == 0 { "" } else { ";" };
-                let _ = write!(response, "{separator}{},{}", contact.x, contact.y);
-            }
-            response.push('\n');
+            write_field(
+                &mut response,
+                Field::TouchContacts,
+                TouchPoints(contacts.map(|point| point.map(|point| (point.x, point.y)))),
+            );
         }
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {

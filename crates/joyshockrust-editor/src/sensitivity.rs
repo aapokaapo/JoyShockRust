@@ -1,4 +1,5 @@
 use joyshockrust_ipc::status::Field;
+use joyshockrust_ipc::telemetry::{GyroSpeed, ImuReading, StickTravel};
 use joyshockrust_motion::{
     game_calibration::GameCalibration,
     sensitivity::{DEFAULT_GYRO_SENSITIVITY, MAX_GYRO_SENSITIVITY},
@@ -104,10 +105,27 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     };
     let page = adw::PreferencesPage::new();
     page.add(&aim_mode_group(ctx, gyro));
-    page.add(&crate::imu_monitor::group());
+    let (imu, update_imu) = crate::imu_monitor::group();
+    page.add(&imu);
     page.add(&crate::gyro_activation::group(ctx, &doc));
     page.add(&gyro_sensitivity_group(ctx, gyro));
-    page.add(&gyro_response_group(ctx, gyro));
+    let (response, update_speed) = gyro_response_group(ctx, gyro);
+    page.add(&response);
+    controller_input::watch_status_fields(
+        &page,
+        [Field::Imu, Field::GyroSpeedDps],
+        Duration::from_millis(33),
+        move |result| match result {
+            Ok([imu, speed]) => {
+                update_imu(Ok(imu.as_deref().and_then(ImuReading::parse)));
+                update_speed(speed.as_deref().and_then(GyroSpeed::parse));
+            }
+            Err(()) => {
+                update_imu(Err(()));
+                update_speed(None);
+            }
+        },
+    );
     page.add(&calibration_shortcut(ctx, gyro));
 
     let calibration = adw::PreferencesGroup::builder()
@@ -258,7 +276,10 @@ fn setting_row(title: &str, subtitle: &str, value: f64, lower: f64, upper: f64) 
         .build()
 }
 
-fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
+fn gyro_response_group(
+    ctx: &Context,
+    gyro: Option<&dyn TableLike>,
+) -> (adw::PreferencesGroup, impl Fn(Option<GyroSpeed>) + use<>) {
     let group = adw::PreferencesGroup::builder()
         .title("Gyro response")
         .build();
@@ -377,19 +398,14 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
         },
     );
     let plot_ref = plot.downgrade();
-    controller_input::watch_status(
-        &group,
-        Field::GyroSpeedDps,
-        Duration::from_millis(33),
-        move |result| {
-            let speed = result.ok().flatten().as_deref().and_then(response_input);
-            if live_speed.replace(speed) != speed
-                && let Some(plot) = plot_ref.upgrade()
-            {
-                plot.queue_draw();
-            }
-        },
-    );
+    let update_speed = move |speed: Option<GyroSpeed>| {
+        let speed = speed.map(|speed| speed.0);
+        if live_speed.replace(speed) != speed
+            && let Some(plot) = plot_ref.upgrade()
+        {
+            plot.queue_draw();
+        }
+    };
     watch_plot(&plot, &adjustments);
     let plot = plot.downgrade();
     acceleration.connect_active_notify(move |_| {
@@ -397,7 +413,7 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
             plot.queue_draw();
         }
     });
-    group
+    (group, update_speed)
 }
 
 fn watch_plot(plot: &gtk::DrawingArea, settings: &[gtk::Adjustment]) {
@@ -409,13 +425,6 @@ fn watch_plot(plot: &gtk::DrawingArea, settings: &[gtk::Adjustment]) {
             }
         });
     }
-}
-
-fn response_input(value: &str) -> Option<f64> {
-    value
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite() && *value >= 0.0)
 }
 
 fn gyro_curve(response: GyroResponse, live_speed: Option<f64>) -> Curve {
@@ -1041,9 +1050,7 @@ fn scale_row(
 }
 
 fn stick_travel(value: &str) -> Option<[f64; 2]> {
-    let (left, right) = value.split_once(',')?;
-    let travel = [response_input(left)?, response_input(right)?];
-    travel.iter().all(|&value| value <= 100.0).then_some(travel)
+    StickTravel::parse(value).map(|travel| travel.0)
 }
 
 fn stick_curve(exponent: f64, travel: Option<f64>) -> Curve {

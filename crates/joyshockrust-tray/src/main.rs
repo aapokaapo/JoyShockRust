@@ -1,7 +1,9 @@
 use joyshockrust_config::paths::{self, APP_DIRECTORY, PROFILE_FILE, PROFILES_DIRECTORY};
 use joyshockrust_ipc::{
-    STATUS_SOCKET,
+    RELOAD_SOCKET, STATUS_SOCKET,
+    control::{ControlCommand, OutputTarget},
     status::{Field, STATUS_VERSION, decode_profile_path, hidraw_device_name},
+    unix::ControlClient,
 };
 
 use std::{
@@ -176,7 +178,7 @@ enum Action {
     CalibrateGyro,
     Unload,
     ResumeOutputs,
-    SetEmulation(&'static str, bool),
+    SetEmulation(OutputTarget, bool),
     Start,
     Autostart(bool),
     Quit,
@@ -349,19 +351,19 @@ impl ksni::Tray for Tray {
         for (text, flag, setting, enabled) in [
             (
                 "Gamepad and gyro mouse",
-                "--set-emulation-master",
+                OutputTarget::Master,
                 master,
                 can_adjust,
             ),
             (
                 " Gyro mouse",
-                "--set-gyro-mouse",
+                OutputTarget::GyroMouse,
                 gyro,
                 can_adjust && master.unwrap_or(true),
             ),
             (
                 " Gamepad emulation",
-                "--set-gamepad",
+                OutputTarget::Gamepad,
                 gamepad,
                 can_adjust && master.unwrap_or(true),
             ),
@@ -441,9 +443,14 @@ impl Desktop {
         Ok(Status::parse(&reply))
     }
 
+    fn control(&self) -> io::Result<ControlClient> {
+        paths::runtime_socket(RELOAD_SOCKET, true)
+            .map(ControlClient::new)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))
+    }
+
     fn set_outputs_paused(&self, paused: bool) -> io::Result<()> {
-        self.command(&["--set-outputs", if paused { "pause" } else { "resume" }])
-            .map(|_| ())
+        self.control()?.send(ControlCommand::OutputsPaused(paused))
     }
 
     fn calibrate(&self, game: bool, status: &Status) -> io::Result<Child> {
@@ -479,41 +486,31 @@ impl Desktop {
     fn run(&self, action: &Action) -> io::Result<()> {
         match action {
             Action::Select(controller) => {
-                let transport = if controller.transport == "usb" {
-                    "--usb"
-                } else {
-                    "--bluetooth"
-                };
-                self.command(&[
-                    "--select-controller",
-                    &controller.id,
-                    "--controller-model",
-                    controller.model,
-                    transport,
-                ])?;
+                self.control()?.send(ControlCommand::SelectController {
+                    id: &controller.id,
+                    model: Some(controller.model),
+                    transport: Some(controller.transport),
+                })?;
             }
             Action::AutoSelect => {
-                self.command(&[
-                    "--select-controller",
-                    "any",
-                    "--controller-model",
-                    "any",
-                    "--auto-transport",
-                ])?;
+                self.control()?.send(ControlCommand::SelectController {
+                    id: "any",
+                    model: Some("any"),
+                    transport: Some("auto"),
+                })?;
             }
-            Action::Load(path) => {
-                output(Command::new(&self.bridge).arg("--load-profile").arg(path))?;
-            }
+            Action::Load(path) => self.control()?.load_profile(path)?,
             Action::Edit => unreachable!("the editor is handled by the tray loop"),
-            Action::Unload => {
-                self.command(&["--unload-profile"])?;
-            }
+            Action::Unload => self.control()?.send(ControlCommand::UnloadProfile)?,
             Action::CalibrateGame | Action::CalibrateGyro => {
                 unreachable!("calibration is handled by the tray loop")
             }
             Action::ResumeOutputs => self.set_outputs_paused(false)?,
-            Action::SetEmulation(flag, enabled) => {
-                self.command(&[flag, if *enabled { "on" } else { "off" }])?;
+            Action::SetEmulation(target, enabled) => {
+                self.control()?.send(ControlCommand::Emulation {
+                    target: *target,
+                    enabled: *enabled,
+                })?;
             }
 
             Action::Start => {
@@ -774,9 +771,9 @@ mod tests {
         let enabled = controls(&tray);
         assert_eq!(enabled.len(), 3);
         for (item, (text, flag, checked)) in enabled.into_iter().zip([
-            ("Gamepad and gyro mouse", "--set-emulation-master", true),
-            ("Gyro mouse", "--set-gyro-mouse", false),
-            ("Gamepad emulation", "--set-gamepad", true),
+            ("Gamepad and gyro mouse", OutputTarget::Master, true),
+            ("Gyro mouse", OutputTarget::GyroMouse, false),
+            ("Gamepad emulation", OutputTarget::Gamepad, true),
         ]) {
             assert_eq!(item.label.trim(), text);
             assert_eq!(item.checked, checked);
@@ -801,7 +798,7 @@ mod tests {
         (disabled[0].activate)(&mut tray);
         assert!(matches!(
             receiver.try_recv().unwrap(),
-            Action::SetEmulation("--set-emulation-master", true)
+            Action::SetEmulation(OutputTarget::Master, true)
         ));
 
         tray.state.status.as_mut().unwrap().outputs_paused = true;

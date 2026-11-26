@@ -1,6 +1,7 @@
 use joyshockrust_core::trigger::TriggerSide;
 use joyshockrust_ipc::control::TravelPreview;
 use joyshockrust_ipc::status::Field;
+use joyshockrust_ipc::telemetry::TriggerTravel;
 use std::{
     cell::Cell,
     rc::Rc,
@@ -203,9 +204,10 @@ fn send(
 }
 
 fn read_travel(value: &str, side: u8) -> Option<f64> {
-    let (left, right) = value.split_once(',')?;
-    let travel = if side == 0 { left } else { right }.parse::<f64>().ok()?;
-    (0.0..=1.0).contains(&travel).then_some(travel)
+    TriggerTravel::parse(value)?
+        .0
+        .get(usize::from(side))
+        .copied()
 }
 
 fn scaled_travel(travel: f64, limit: u8) -> f64 {

@@ -788,6 +788,7 @@ name = "joyshockrust-ipc"
 version = "0.1.0"
 dependencies = [
  "joyshockrust-core",
+ "libc",
 ]
 
 [[package]]

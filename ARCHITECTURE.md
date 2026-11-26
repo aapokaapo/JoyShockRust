@@ -42,10 +42,13 @@ filesystem work, blocking IPC and shared configuration locks.
 [Discovery](crates/joyshockrust-linux/src/discovery.rs) · [Calibration storage](crates/joyshockrust-linux/src/gyro_calibration.rs) · [Haptics](crates/joyshockrust-linux/src/haptics.rs)
 
 The tray starts and stops the user service and uses XDG autostart for its
-login preference. The editor validates and applies profiles through the
-bridge CLI. The bridge exposes a calibrated IMU snapshot through its
-status socket. The stick preview reads the selected hidraw node while
-visible. Desktop refresh timers are independent of bridge report timing.
+login preference. The editor retains its TOML draft and uses the bridge
+CLI for full validation. Desktop control commands and CLI commands use the
+same Unix-socket client for profile activation and emulation changes.
+The bridge exposes calibrated IMU and preview readings through its status
+socket. The Gyro tab reads both gyro fields from the same reply. The
+Flick Stick preview reads the selected hidraw node while visible.
+Desktop refresh timers are independent of bridge report timing.
 [Desktop lifecycle](DECISIONS.md#desktop-process-lifecycle) · [Live IMU](crates/joyshockrust-editor/src/imu_monitor.rs) · [Stick preview](crates/joyshockrust-editor/src/flick_preview.rs)
 
 ## Workspace
@@ -55,7 +58,7 @@ visible. Desktop refresh timers are independent of bridge report timing.
 | `joyshockrust-core` | Transport-neutral controller state, canonical input names, analog trigger gates and touch-grid geometry. |
 | `joyshockrust-config` | Raw common profile schema, profile version, trigger compatibility rules and desktop paths. |
 | `joyshockrust-input` | USB and Bluetooth parsing, factory conversion and device timebase. |
-| `joyshockrust-ipc` | Local status fields, control payload codecs and socket names. |
+| `joyshockrust-ipc` | Local status fields, typed telemetry and control codecs, and a Linux command client. |
 | `joyshockrust-motion` | Deterministic calibration, gyro and fusion aim, Flick Stick composition, integer pointer motion and stick response. |
 | `joyshockrust-mapping` | Gamepad routes and suppression, touch regions, layers, trigger stages, and integer axis changes. |
 | `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, device-dependent profile compilation, socket servicing, keyboard and mouse bindings, uinput and feedback. |

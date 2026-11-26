@@ -20,11 +20,7 @@ pub struct Context {
 
 impl Context {
     pub fn document(&self) -> Result<DocumentMut, String> {
-        self.editor
-            .borrow()
-            .text
-            .parse::<DocumentMut>()
-            .map_err(|error| error.to_string())
+        self.editor.borrow().draft.document()
     }
 
     pub fn edit(&self, change: impl FnOnce(&mut DocumentMut) -> Result<(), &'static str>) -> bool {
@@ -41,7 +37,7 @@ impl Context {
     ) -> Result<(), String> {
         self.document().and_then(|mut document| {
             change(&mut document)?;
-            self.editor.borrow_mut().text = document.to_string();
+            self.editor.borrow_mut().draft = crate::Draft::from_document(document);
             Ok(())
         })
     }
@@ -324,13 +320,12 @@ fn refresh_page(stack: &adw::ViewStack, ctx: &Context) {
 
 fn advanced_page(ctx: &Context) -> gtk::ScrolledWindow {
     let buffer = gtk::TextBuffer::new(None);
-    buffer.set_text(&ctx.editor.borrow().text);
+    buffer.set_text(ctx.editor.borrow().draft.text());
     let state = ctx.editor.clone();
     buffer.connect_changed(move |buffer| {
         let mut editor = state.borrow_mut();
-        editor.text = buffer
-            .text(&buffer.start_iter(), &buffer.end_iter(), true)
-            .into();
+        let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), true);
+        editor.draft = crate::Draft::from_text(text.into());
         editor.calibration.reset();
         editor.invalid_gyro_sensitivity = [None, None];
     });
@@ -463,11 +458,11 @@ pub(crate) mod tests {
         let game_target = target(1);
         open.activate(Some(&game_target));
         assert_eq!(editor.borrow().path.as_deref(), Some(game.as_path()));
-        assert!(editor.borrow().text.contains("# Game profile"));
+        assert!(editor.borrow().draft.text().contains("# Game profile"));
 
         let new_profile = menu.item_link(2, "section").unwrap();
         let new_target = new_profile.item_attribute_value(0, "target", None).unwrap();
-        editor.borrow_mut().text.push_str("# Unsaved change\n");
+        editor.borrow_mut().draft.append_text("# Unsaved change\n");
         let choose_draft_action = |label| {
             open.activate(Some(&new_target));
             let dialog = window.visible_dialog().unwrap();
@@ -478,10 +473,10 @@ pub(crate) mod tests {
             button.emit_clicked();
         };
         choose_draft_action("Keep Editing");
-        assert!(editor.borrow().text.contains("# Unsaved change"));
+        assert!(editor.borrow().draft.text().contains("# Unsaved change"));
         choose_draft_action("Discard");
         assert_eq!(editor.borrow().path, None);
-        assert_eq!(editor.borrow().text, crate::new_profile_text());
+        assert_eq!(editor.borrow().draft.text(), crate::new_profile_text());
 
         let name = descendants::<gtk::Entry>(window.upcast_ref())
             .into_iter()
@@ -706,8 +701,8 @@ pub(crate) mod tests {
         adw::init().unwrap();
         let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
         editor
-            .text
-            .push_str("[gyro.calibration_hold]\nbutton = 'l3'\nhold_ms = 2500\n");
+            .draft
+            .append_text("[gyro.calibration_hold]\nbutton = 'l3'\nhold_ms = 2500\n");
         let ctx = Context {
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
@@ -748,7 +743,7 @@ pub(crate) mod tests {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();
         let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
-        editor.text.push_str("[gyro]\nsensitivity_x = 4.0 # retain\nbinding = { mode = 'disable-while-held', input = 'l2' }\n");
+        editor.draft.append_text("[gyro]\nsensitivity_x = 4.0 # retain\nbinding = { mode = 'disable-while-held', input = 'l2' }\n");
         let ctx = Context {
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
@@ -830,10 +825,10 @@ pub(crate) mod tests {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();
         let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
-        editor
-            .text
-            .push_str("[gyro]\nsensitivity_x = 42.125 # existing profile\nsensitivity_y = 4.0\n");
-        let initial_text = editor.text.clone();
+        editor.draft.append_text(
+            "[gyro]\nsensitivity_x = 42.125 # existing profile\nsensitivity_y = 4.0\n",
+        );
+        let initial_text = editor.draft.text().to_owned();
         let ctx = Context {
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
@@ -853,7 +848,7 @@ pub(crate) mod tests {
         assert_eq!(entry.text(), "42.125");
         assert_eq!(scale.adjustment().upper(), 20.0);
         assert_eq!(scale.value(), 20.0);
-        assert_eq!(ctx.editor.borrow().text, initial_text);
+        assert_eq!(ctx.editor.borrow().draft.text(), initial_text);
 
         entry.set_text(" 26,875 ");
         let doc = ctx.document().unwrap();
@@ -1081,7 +1076,7 @@ pub(crate) mod tests {
         gtk::gdk::set_allowed_backends("wayland");
         adw::init().unwrap();
         let mut editor = Editor::open(PathBuf::new(), PathBuf::new(), None).unwrap();
-        editor.text.push_str("[bridge]\nrumble = true\n");
+        editor.draft.append_text("[bridge]\nrumble = true\n");
         let ctx = Context {
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
