@@ -49,6 +49,12 @@ Unix stream. The tray reconnects to that stream after a bridge restart and
 marks the list unavailable until a fresh snapshot arrives.
 [Inventory worker](crates/joyshockrust-linux/src/inventory.rs) · [Inventory protocol](crates/joyshockrust-ipc/src/inventory.rs)
 
+The tray also subscribes to status over a separate private stream. The
+bridge captures status between report batches for subscribed clients on
+state changes. The legacy status socket and the stream use the same
+snapshot renderer. A worker sends framed updates and handles slow readers.
+[Publisher](crates/joyshockrust-linux/src/status_updates.rs) · [Stream codec](crates/joyshockrust-ipc/src/stream.rs)
+
 The tray starts and stops the user service and uses XDG autostart for its
 login preference. The editor retains its TOML draft and validates it with
 the shared profile compiler. Desktop control commands and CLI commands

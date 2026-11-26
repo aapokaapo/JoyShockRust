@@ -633,6 +633,14 @@ Check the mapping or gyro binding on the existing virtual devices.
 
 ## Service status acceptance
 
+The status subscription tests compare the initial and changed snapshots
+with `--status`, exercise peer disconnect and partial requests, and
+verify report ordering while a subscriber is waiting. On the test host,
+update both bridge and tray. With the tray running, toggle virtual
+gamepad output from the CLI and check that its tray switch follows.
+Stop and start the bridge. Check that the tray clears its stale status
+and displays the new session without restarting the tray.
+
 Install the updated executable and unit and restart the service. As soon
 as the restart returns, run `$HOME/.local/bin/joyshockrust-linux --status`
 with USB disconnected. Repeat after

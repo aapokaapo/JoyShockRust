@@ -5,14 +5,14 @@ use joyshockrust_config::{
 use joyshockrust_ipc::{
     RELOAD_SOCKET, STATUS_SOCKET,
     control::{ControlCommand, OutputTarget},
-    inventory::{Access, Controller},
+    inventory::{self, Access, Controller},
     status::{Field, STATUS_VERSION, decode_profile_path, hidraw_device_name},
+    stream::{self, Stamp, Topic},
     unix::ControlClient,
 };
 
 use std::{
-    env, fs,
-    io::{self, Read},
+    env, fs, io,
     os::unix::net::UnixStream,
     path::PathBuf,
     process::{Child, Command},
@@ -26,7 +26,7 @@ use ksni::{
     menu::{CheckmarkItem, StandardItem, SubMenu},
 };
 
-mod inventory;
+mod subscriptions;
 
 const BRIDGE_SERVICE: &str = "joyshockrust.service";
 const DESKTOP_ID: &str = "io.github.aapokaapo.JoyShockRust.desktop";
@@ -135,7 +135,7 @@ impl Status {
 #[derive(Clone, Debug)]
 enum Action {
     Select(Controller),
-    InventoryChanged,
+    DesktopChanged,
     AutoSelect,
     Load(PathBuf),
     Edit,
@@ -405,14 +405,6 @@ impl Desktop {
         )
     }
 
-    fn status(&self) -> io::Result<Option<Status>> {
-        let stream = UnixStream::connect(&self.status_socket)?;
-        stream.set_read_timeout(Some(REFRESH))?;
-        let mut reply = String::new();
-        stream.take(64 * 1024).read_to_string(&mut reply)?;
-        Ok(Status::parse(&reply))
-    }
-
     fn control(&self) -> io::Result<ControlClient> {
         paths::runtime_socket(RELOAD_SOCKET, true)
             .map(ControlClient::new)
@@ -465,7 +457,7 @@ impl Desktop {
                     transport: Some(controller.transport.as_str()),
                 })?;
             }
-            Action::InventoryChanged => unreachable!("inventory is handled by the tray loop"),
+            Action::DesktopChanged => unreachable!("subscriptions are handled by the tray loop"),
             Action::AutoSelect => {
                 self.control()?.send(ControlCommand::SelectController {
                     id: "any",
@@ -533,6 +525,25 @@ fn bridge_service(action: &str) -> io::Result<()> {
     output(Command::new("systemctl").args(["--user", action, BRIDGE_SERVICE])).map(|_| ())
 }
 
+fn read_inventory(
+    stream: &mut UnixStream,
+    id: u32,
+) -> io::Result<(Stamp, Option<Vec<Controller>>)> {
+    let inventory::Snapshot {
+        instance,
+        revision,
+        controllers,
+    } = inventory::Snapshot::read(stream, id)?;
+    Ok((Stamp { instance, revision }, controllers))
+}
+
+fn read_status(socket: &mut UnixStream, id: u32) -> io::Result<(Stamp, Option<Status>)> {
+    let (stamp, body) = stream::read_status(socket, id)?;
+    let status = Status::parse(&body)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid desktop status"))?;
+    Ok((stamp, Some(status)))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let home = paths::absolute_env("HOME").ok_or("HOME must be an absolute path")?;
     let desktop = Desktop {
@@ -543,10 +554,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("XDG_RUNTIME_DIR must be an absolute path")?,
     };
     let (sender, receiver) = mpsc::channel();
-    let updates = sender.clone();
-    let inventory = inventory::Subscription::start(&desktop.status_socket, move || {
-        let _ = updates.send(Action::InventoryChanged);
-    })?;
+    let notify = || {
+        let updates = sender.clone();
+        move || {
+            let _ = updates.send(Action::DesktopChanged);
+        }
+    };
+    let inventory = subscriptions::Subscription::start(
+        &desktop.status_socket,
+        Topic::Inventory,
+        read_inventory,
+        notify(),
+    )?;
+    let status = subscriptions::Subscription::start(
+        &desktop.status_socket,
+        Topic::Status,
+        read_status,
+        notify(),
+    )?;
     let tray = Tray {
         actions: sender,
         state: TrayState::default(),
@@ -595,8 +620,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => Some(format!("Could not resume virtual outputs: {error}")),
             };
         }
-        state.status = desktop.status().ok().flatten();
-        state.inventory = inventory.controllers();
+        state.status = status.latest();
+        state.inventory = inventory.latest();
         if last_profiles.is_none_or(|last: Instant| last.elapsed() >= PROFILE_REFRESH) {
             state.profiles = desktop.profile_paths();
             last_profiles = Some(Instant::now());
@@ -607,7 +632,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tray.update(|tray| tray.state.clone_from(&state));
         }
         match receiver.recv_timeout(REFRESH) {
-            Ok(Action::InventoryChanged) => {}
+            Ok(Action::DesktopChanged) => {}
             Ok(_) if calibration.is_some() => {}
             Ok(Action::Edit) if editor.is_none() => {
                 let path = state

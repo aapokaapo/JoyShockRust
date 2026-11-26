@@ -3,6 +3,7 @@
 pub mod control;
 pub mod inventory;
 pub mod status;
+pub mod stream;
 pub mod telemetry;
 #[cfg(target_os = "linux")]
 pub mod unix;

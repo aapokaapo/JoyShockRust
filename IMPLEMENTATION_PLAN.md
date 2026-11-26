@@ -31,9 +31,9 @@ file work off the GTK main thread. It reports saving and activation
 separately. [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16)
 
 Desktop clients share the command and telemetry codecs. The tray
-subscribes to the bridge's versioned inventory stream. The next IPC work
-covers status subscriptions and typed command dispatch. Later steps move
-the editor's HID previews and calibration sessions into the bridge. The
+subscribes to versioned inventory and status streams. The next IPC work
+covers typed command dispatch. Later steps move the editor's HID
+previews and calibration sessions into the bridge. The
 RWC sweep runs in motion. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17) · [Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
 
 | Area | Shipped | Next acceptance step |

@@ -40,6 +40,10 @@ mod rumble;
 #[cfg(target_os = "linux")]
 mod status;
 #[cfg(target_os = "linux")]
+mod status_updates;
+#[cfg(target_os = "linux")]
+mod subscriptions;
+#[cfg(target_os = "linux")]
 mod systemd;
 #[cfg(target_os = "linux")]
 mod touchpad;

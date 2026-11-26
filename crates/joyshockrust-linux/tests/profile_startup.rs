@@ -742,3 +742,76 @@ fn shared_control_client_preserves_requests_and_reports_rejection() {
         client.load_profile(&profile).unwrap();
     });
 }
+
+#[test]
+fn live_status_stream_matches_legacy_status_and_notifies_on_commands() {
+    use std::{
+        io::{Read, Write},
+        os::unix::net::UnixStream,
+    };
+
+    use joyshockrust_ipc::{
+        status::Field,
+        stream::{Topic, read_status},
+    };
+
+    let directory = TestDirectory::new("status-stream");
+    let status = directory.0.join("status");
+    let reload = directory.0.join("reload");
+    let notify = directory.0.join("notify");
+    let listener = UnixDatagram::bind(&notify).unwrap();
+    let timeout = Some(Duration::from_secs(3));
+    listener.set_read_timeout(timeout).unwrap();
+    let binary = env!("CARGO_BIN_EXE_joyshockrust-linux");
+    let bridge = Bridge(
+        Command::new(binary)
+            .env("NOTIFY_SOCKET", &notify)
+            .env("XDG_CONFIG_HOME", &directory.0)
+            .args(["--controller-id", "ff:ff:ff:ff:ff:ff"])
+            .arg("--status-socket")
+            .arg(&status)
+            .arg("--reload-socket")
+            .arg(&reload)
+            .spawn()
+            .unwrap(),
+    );
+    let mut ready = [0; 64];
+    let len = listener.recv(&mut ready).expect("bridge readiness");
+    assert_eq!(&ready[..len], b"READY=1");
+
+    let updates = Topic::Status.socket_path(&status);
+    let mut incomplete = UnixStream::connect(&updates).unwrap();
+    incomplete
+        .write_all(&Topic::Status.subscribe(99)[..3])
+        .unwrap();
+    let mut reader = UnixStream::connect(&updates).unwrap();
+    reader.set_read_timeout(timeout).unwrap();
+    reader.write_all(&Topic::Status.subscribe(42)).unwrap();
+    let legacy = || {
+        let reply = Command::new(binary)
+            .arg("--status")
+            .arg(&status)
+            .output()
+            .unwrap();
+        assert!(reply.status.success());
+        String::from_utf8(reply.stdout).unwrap()
+    };
+    let (first, body) = read_status(&mut reader, 42).unwrap();
+    assert_eq!(Field::Controller.value(&body), Some("waiting"));
+    assert_eq!(body, legacy());
+
+    let command = Command::new(binary)
+        .args(["--set-gamepad", "off"])
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(command.status.success(), "{command:?}");
+    let (updated, body) = read_status(&mut reader, 42).unwrap();
+    assert_eq!(updated.instance, first.instance);
+    assert!(updated.revision > first.revision);
+    assert_eq!(Field::VirtualGamepadEnabled.value(&body), Some("false"));
+    assert_eq!(body, legacy());
+
+    drop(bridge);
+    assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+}

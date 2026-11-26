@@ -77,6 +77,22 @@ partially sent frame. Handshakes and pending writes have a two-second
 deadline. Legacy status, CLI diagnostics and control commands retain their
 existing endpoints. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
 
+## Desktop status subscription
+
+2026-11-26. Add a private `.updates` endpoint beside the one-shot
+status socket. Reuse the inventory transport's version, request IDs,
+revision ordering, client limits and slow-reader policy. Existing
+inventory frames keep their wire layout. Status frames carry the same
+status fields as the one-shot reply.
+
+The worker wakes the bridge for an initial snapshot. The bridge then
+captures snapshots between report batches on state changes, with
+successive updates coalesced to a 250 ms interval. It renders no
+subscription snapshots when nobody is listening. Socket I/O for desktop
+clients stays on the worker. The tray clears stale status on disconnect
+and subscribes again after a restart. The editor still uses the
+one-shot socket for its live previews. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
+
 ## Typed desktop controls and editor drafts
 
 2026-11-26. The editor keeps the parsed TOML document between structured

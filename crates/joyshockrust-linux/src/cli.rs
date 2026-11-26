@@ -540,15 +540,14 @@ pub(super) fn run() -> Result<std::process::ExitCode, Box<dyn std::error::Error>
             };
             (default_runtime(), None, source, None)
         };
-    let status = status_path
+    let mut status = status_path
         .as_deref()
         .map(|path| {
             status::StatusSocket::bind(path)
                 .map_err(|err| format!("could not bind {}: {err}", path.display()))
         })
         .transpose()?;
-    let status = status.as_ref();
-    if let Some(status) = status {
+    if let Some(status) = &status {
         status.update(None, runtime.gyro.is_some());
         let path = active_profile.as_deref();
         status.set_profile(
@@ -597,10 +596,17 @@ pub(super) fn run() -> Result<std::process::ExitCode, Box<dyn std::error::Error>
         None
     };
     let reload = reload.as_ref();
+    if let (Some(status), Some(path)) = (&mut status, status_path.as_deref())
+        && benchmark_target.is_none()
+        && let Err(error) = status.enable_updates(path)
+    {
+        eprintln!("Status subscription unavailable: {error}");
+    }
+    let status = status.as_ref();
     let _inventory = status_path
         .as_deref()
         .filter(|_| benchmark_target.is_none())
-        .and_then(|path| match crate::inventory::Worker::start(path) {
+        .and_then(|path| match crate::inventory::start(path) {
             Ok(worker) => Some(worker),
             Err(error) => {
                 eprintln!("Controller inventory unavailable: {error}");

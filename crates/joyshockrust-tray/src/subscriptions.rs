@@ -8,40 +8,51 @@ use std::{
     time::Duration,
 };
 
-use joyshockrust_ipc::inventory::{self, Controller, Snapshot};
+use joyshockrust_ipc::stream::{Stamp, Topic};
 
 const RETRY: Duration = Duration::from_secs(1);
 const REQUEST_ID: u32 = 1;
 
-#[derive(Default)]
-struct State {
+struct State<T> {
     stream: Option<UnixStream>,
-    controllers: Option<Vec<Controller>>,
+    latest: Option<T>,
     notified: bool,
     closed: bool,
 }
 
-pub struct Subscription(Arc<Mutex<State>>);
+pub struct Subscription<T>(Arc<Mutex<State<T>>>);
 
-impl Subscription {
-    pub fn start(status_socket: &Path, notify: impl Fn() + Send + 'static) -> io::Result<Self> {
-        let state = Arc::new(Mutex::new(State::default()));
+type Decoder<T> = fn(&mut UnixStream, u32) -> io::Result<(Stamp, Option<T>)>;
+
+impl<T: Clone + PartialEq + Send + 'static> Subscription<T> {
+    pub fn start(
+        status_socket: &Path,
+        topic: Topic,
+        read: Decoder<T>,
+        notify: impl Fn() + Send + 'static,
+    ) -> io::Result<Self> {
+        let state = Arc::new(Mutex::new(State {
+            stream: None,
+            latest: None,
+            notified: false,
+            closed: false,
+        }));
         let worker = Arc::clone(&state);
-        let path = inventory::socket_path(status_socket);
+        let path = topic.socket_path(status_socket);
         thread::Builder::new()
-            .name("jsr-tray-inventory".into())
-            .spawn(move || watch(worker, path, notify))?;
+            .name("jsr-tray-subscription".into())
+            .spawn(move || watch(worker, path, topic, read, notify))?;
         Ok(Self(state))
     }
 
-    pub fn controllers(&self) -> Option<Vec<Controller>> {
+    pub fn latest(&self) -> Option<T> {
         let mut state = self.0.lock().unwrap();
         state.notified = false;
-        state.controllers.clone()
+        state.latest.clone()
     }
 }
 
-impl Drop for Subscription {
+impl<T> Drop for Subscription<T> {
     fn drop(&mut self) {
         let mut state = self.0.lock().unwrap();
         state.closed = true;
@@ -51,10 +62,16 @@ impl Drop for Subscription {
     }
 }
 
-fn watch(state: Arc<Mutex<State>>, path: PathBuf, notify: impl Fn()) {
+fn watch<T: PartialEq>(
+    state: Arc<Mutex<State<T>>>,
+    path: PathBuf,
+    topic: Topic,
+    read: Decoder<T>,
+    notify: impl Fn(),
+) {
     while !state.lock().unwrap().closed {
-        let _ = follow(&path, &state, |controllers| {
-            publish(&state, controllers, &notify)
+        let _ = follow(&path, &state, topic, read, |latest| {
+            publish(&state, latest, &notify)
         });
         state.lock().unwrap().stream = None;
         publish(&state, None, &notify);
@@ -62,10 +79,12 @@ fn watch(state: Arc<Mutex<State>>, path: PathBuf, notify: impl Fn()) {
     }
 }
 
-fn follow(
+fn follow<T>(
     path: &Path,
-    state: &Mutex<State>,
-    mut update: impl FnMut(Option<Vec<Controller>>),
+    state: &Mutex<State<T>>,
+    topic: Topic,
+    read: Decoder<T>,
+    mut update: impl FnMut(Option<T>),
 ) -> io::Result<()> {
     let mut stream = UnixStream::connect(path)?;
     {
@@ -77,30 +96,30 @@ fn follow(
     }
     stream.set_read_timeout(Some(RETRY))?;
     stream.set_write_timeout(Some(RETRY))?;
-    stream.write_all(&inventory::subscribe(REQUEST_ID))?;
-    let initial = Snapshot::read(&mut stream, REQUEST_ID)?;
+    stream.write_all(&topic.subscribe(REQUEST_ID))?;
+    let (initial, data) = read(&mut stream, REQUEST_ID)?;
     stream.set_read_timeout(None)?;
     let mut revision = initial.revision;
-    update(initial.controllers);
+    update(data);
     loop {
-        let next = Snapshot::read(&mut stream, REQUEST_ID)?;
+        let (next, data) = read(&mut stream, REQUEST_ID)?;
         if next.instance != initial.instance || next.revision <= revision {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "invalid inventory revision",
+                "invalid subscription revision",
             ));
         }
         revision = next.revision;
-        update(next.controllers);
+        update(data);
     }
 }
 
-fn publish(state: &Mutex<State>, controllers: Option<Vec<Controller>>, notify: &impl Fn()) {
+fn publish<T: PartialEq>(state: &Mutex<State<T>>, latest: Option<T>, notify: &impl Fn()) {
     let mut state = state.lock().unwrap();
-    if state.closed || state.controllers == controllers {
+    if state.closed || state.latest == latest {
         return;
     }
-    state.controllers = controllers;
+    state.latest = latest;
     if !state.notified {
         state.notified = true;
         drop(state);
@@ -113,7 +132,10 @@ mod tests {
     use std::{os::unix::net::UnixListener, sync::mpsc, time::Instant};
 
     use joyshockrust_config::controller::{ModelSelection, Selection};
-    use joyshockrust_ipc::inventory::{Access, REQUEST_LEN, parse_subscription};
+    use joyshockrust_ipc::{
+        inventory::{Access, Controller, Snapshot},
+        stream::HEADER_LEN,
+    };
 
     use super::*;
     use std::io::Read;
@@ -122,12 +144,17 @@ mod tests {
     fn tray_clears_stale_inventory_and_subscribes_to_a_restarted_bridge() {
         let directory = tempfile::tempdir().unwrap();
         let status = directory.path().join("status.sock");
-        let path = inventory::socket_path(&status);
+        let path = Topic::Inventory.socket_path(&status);
         let listener = UnixListener::bind(&path).unwrap();
         let (updated, messages) = mpsc::channel();
-        let subscription = Subscription::start(&status, move || {
-            let _ = updated.send(());
-        })
+        let subscription = Subscription::start(
+            &status,
+            Topic::Inventory,
+            super::super::read_inventory,
+            move || {
+                let _ = updated.send(());
+            },
+        )
         .unwrap();
 
         let controller = Controller {
@@ -150,9 +177,9 @@ mod tests {
                 }
             };
             stream.set_read_timeout(Some(RETRY)).unwrap();
-            let mut request = [0; REQUEST_LEN];
+            let mut request = [0; HEADER_LEN];
             stream.read_exact(&mut request).unwrap();
-            let id = parse_subscription(&request).unwrap();
+            let id = Topic::Inventory.parse_subscription(&request).unwrap();
             stream
                 .write_all(
                     &Snapshot {
@@ -168,16 +195,16 @@ mod tests {
         };
         let stream = server(&listener, 1, Some(vec![controller]));
         messages.recv_timeout(RETRY).unwrap();
-        assert_eq!(subscription.controllers(), Some(vec![controller]));
+        assert_eq!(subscription.latest(), Some(vec![controller]));
         drop(stream);
         drop(listener);
         messages.recv_timeout(RETRY).unwrap();
-        assert_eq!(subscription.controllers(), None);
+        assert_eq!(subscription.latest(), None);
 
         std::fs::remove_file(&path).unwrap();
         let listener = UnixListener::bind(&path).unwrap();
         let _stream = server(&listener, 2, Some(Vec::new()));
         messages.recv_timeout(RETRY).unwrap();
-        assert_eq!(subscription.controllers(), Some(Vec::new()));
+        assert_eq!(subscription.latest(), Some(Vec::new()));
     }
 }

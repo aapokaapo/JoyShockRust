@@ -23,10 +23,11 @@ use joyshockrust_input::{
 };
 use joyshockrust_motion::Calibration;
 
-use crate::{discovery::ControllerFilter, hidraw::Identity};
+use crate::{discovery::ControllerFilter, hidraw::Identity, status_updates::Publisher};
 
 pub struct StatusSocket {
     listener: UnixListener,
+    publisher: Option<Publisher>,
     snapshot: Cell<Snapshot>,
     reports: Cell<ReportStats>,
     sessions: Cell<SessionCounts>,
@@ -120,6 +121,7 @@ impl StatusSocket {
         listener.set_nonblocking(true)?;
         Ok(Self {
             listener,
+            publisher: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),
@@ -144,8 +146,30 @@ impl StatusSocket {
         self.listener.as_fd()
     }
 
+    pub fn enable_updates(&mut self, path: &Path) -> io::Result<()> {
+        self.publisher = Some(Publisher::start(path)?);
+        Ok(())
+    }
+
+    pub fn updates_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.publisher.as_ref().map(Publisher::wake_fd)
+    }
+
+    pub fn publish_updates(&self, wake: bool, last_reload: &'static str) -> Option<Instant> {
+        self.publisher
+            .as_ref()?
+            .publish(wake, last_reload, || self.render(last_reload))
+    }
+
+    fn mark_changed(&self) {
+        if let Some(publisher) = &self.publisher {
+            publisher.changed();
+        }
+    }
+
     pub fn set_filter(&self, filter: ControllerFilter) {
         self.filter.set(filter);
+        self.mark_changed();
     }
 
     pub fn set_profile(&self, source: ProfileSource, name: Option<&OsStr>, path: Option<&Path>) {
@@ -156,42 +180,51 @@ impl StatusSocket {
             path.and_then(|path| std::path::absolute(path).ok())
                 .map(|path| encode_profile_path(&path)),
         );
+        self.mark_changed();
     }
 
     pub fn set_active_hidraw(&self, path: &Path) {
         // Preserve a single key/value line even when a manual device path includes control characters.
         self.active_hidraw
             .replace(Some(path.to_string_lossy().escape_debug().to_string()));
+        self.mark_changed();
     }
 
     pub fn set_gamepad_kind(&self, kind: crate::gamepad::OutputKind) {
         self.gamepad_kind.set(kind);
+        self.mark_changed();
     }
 
     pub fn set_gamepad_enabled(&self, enabled: bool) {
         self.gamepad_enabled.set(enabled);
+        self.mark_changed();
     }
 
     pub fn set_emulation_master(&self, enabled: bool) {
         self.emulation_master_enabled.set(enabled);
+        self.mark_changed();
     }
 
     pub fn set_gyro_override(&self, enabled: Option<bool>) {
         self.gyro_override.set(enabled);
+        self.mark_changed();
     }
 
     pub fn set_gamepad_device(&self, device: Option<&mut evdev::uinput::VirtualDevice>) {
         self.gamepad_sysfs
             .replace(device.and_then(|device| device.get_syspath().ok()));
+        self.mark_changed();
     }
 
     pub fn set_touchpad_policy(&self, requested: bool, grabbed: bool) {
         self.touchpad_grab_requested.set(requested);
         self.touchpad_grabbed.set(grabbed);
+        self.mark_changed();
     }
 
     pub fn set_outputs_paused(&self, paused: bool) {
         self.outputs_paused.set(paused);
+        self.mark_changed();
     }
 
     pub fn update(&self, identity: Option<Identity>, gyro_configured: bool) {
@@ -213,6 +246,7 @@ impl StatusSocket {
         snapshot.identity = identity;
         snapshot.gyro_configured = gyro_configured;
         self.snapshot.set(snapshot);
+        self.mark_changed();
     }
 
     pub fn observe_reports(&self, decoded: u64, rejected: u64) {
@@ -224,6 +258,7 @@ impl StatusSocket {
             reports.baseline = Some((Instant::now(), reports.decoded));
         }
         self.reports.set(reports);
+        self.mark_changed();
     }
 
     pub fn set_imu_calibration(&self, factory: Option<FactoryCalibration>, bias: Calibration) {
@@ -293,7 +328,7 @@ impl StatusSocket {
         self.reports.set(reports);
     }
 
-    pub fn respond(&self, last_reload: &str) -> io::Result<()> {
+    fn render(&self, last_reload: &str) -> String {
         let snapshot = self.snapshot.get();
         let controller = if snapshot.identity.is_some() {
             "connected"
@@ -481,6 +516,11 @@ impl StatusSocket {
                 TouchPoints(contacts.map(|point| point.map(|point| (point.x, point.y)))),
             );
         }
+        response
+    }
+
+    pub fn respond(&self, last_reload: &str) -> io::Result<()> {
+        let response = self.render(last_reload);
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
             match self.listener.accept() {
@@ -667,6 +707,7 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let status = StatusSocket {
             listener,
+            publisher: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),
@@ -775,6 +816,84 @@ mod tests {
     }
 
     #[test]
+    fn status_subscription_observes_reports_without_interrupting_a_batch() {
+        use joyshockrust_ipc::stream::{Topic, read_status};
+
+        let path = std::env::temp_dir().join(format!("jsr-batch-watch-{}.sock", process::id()));
+        let mut status = StatusSocket::bind(&path).unwrap();
+        status.enable_updates(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let identity = Identity {
+            model: DeviceModel::DualSenseEdge,
+            transport: Transport::Usb,
+        };
+        status.update(Some(identity), false);
+
+        let (sender, receiver) = UnixDatagram::pair().unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let expected = crate::REPORT_BATCH_LIMIT * 2;
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        for counter in 0..expected {
+            frame[7] = counter as u8;
+            sender.send(&frame).unwrap();
+        }
+        let mut slow = UnixStream::connect(Topic::Status.socket_path(&path)).unwrap();
+        slow.write_all(&Topic::Status.subscribe(3)[..3]).unwrap();
+        let mut client = UnixStream::connect(Topic::Status.socket_path(&path)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        client.write_all(&Topic::Status.subscribe(4)).unwrap();
+        let feed = std::thread::spawn(move || {
+            loop {
+                let (_, reply) = read_status(&mut client, 4).unwrap();
+                let reports: u64 = Field::ReportsDecoded
+                    .value(&reply)
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!(reports.is_multiple_of(crate::REPORT_BATCH_LIMIT));
+                if reports == expected {
+                    break;
+                }
+                assert!(reports < expected);
+            }
+            frame[7] = expected as u8;
+            sender.send(&frame).unwrap();
+        });
+        let stop_at = Instant::now() + Duration::from_secs(4);
+        let mut input = File::from(OwnedFd::from(receiver));
+        let mut published = 0;
+        crate::forward_reports(
+            &mut input,
+            identity,
+            None,
+            Some(&status),
+            None,
+            crate::ReportTimers {
+                stop_at: Some(stop_at),
+                ..Default::default()
+            },
+            |event| {
+                let crate::SessionEvent::Report(report) = event else {
+                    unreachable!()
+                };
+                assert_eq!(u64::from(report.counter), published);
+                published += 1;
+                Ok(if published > expected {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                })
+            },
+        )
+        .unwrap();
+        feed.join().unwrap();
+        assert_eq!(published, expected + 1);
+    }
+
+    #[test]
     fn status_queries_are_served_between_full_report_batches() {
         let name = format!("joyshockrust-full-batches-test-{}", process::id());
         let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
@@ -782,6 +901,7 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let status = StatusSocket {
             listener,
+            publisher: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),
@@ -879,6 +999,7 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let status = StatusSocket {
             listener,
+            publisher: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),

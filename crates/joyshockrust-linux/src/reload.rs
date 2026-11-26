@@ -467,6 +467,10 @@ pub fn wait<'a>(
     feedback: Option<BorrowedFd<'_>>,
     deadline: Option<Instant>,
 ) -> io::Result<(PollFlags, Option<Request<'a>>, PollFlags)> {
+    let updates_fd = status.and_then(StatusSocket::updates_fd);
+    let outcome = reload.map_or("unavailable", Reload::outcome);
+    let publish_at = status.and_then(|status| status.publish_updates(false, outcome));
+    let deadline = deadline.into_iter().chain(publish_at).min();
     let listener = reload.and_then(|reload| reload.listener.as_ref());
     let load_socket = reload.and_then(|reload| reload.load_socket.as_ref());
     let mut descriptors = [
@@ -479,8 +483,11 @@ pub fn wait<'a>(
         PollFd::new(listener.map_or(fd, AsFd::as_fd), PollFlags::POLLIN),
         PollFd::new(feedback.unwrap_or(fd), PollFlags::POLLIN),
         PollFd::new(load_socket.map_or(fd, AsFd::as_fd), PollFlags::POLLIN),
+        PollFd::new(updates_fd.unwrap_or(fd), PollFlags::POLLIN),
     ];
-    let len = if load_socket.is_some() {
+    let len = if updates_fd.is_some() {
+        7
+    } else if load_socket.is_some() {
         6
     } else if feedback.is_some() {
         5
@@ -526,7 +533,15 @@ pub fn wait<'a>(
             return Err(io::Error::other("status socket lost"));
         }
         if flags.contains(PollFlags::POLLIN) {
-            status.respond(reload.map_or("unavailable", Reload::outcome))?;
+            status.respond(outcome)?;
+        }
+        if updates_fd.is_some()
+            && descriptors[6]
+                .revents()
+                .unwrap_or_else(PollFlags::empty)
+                .contains(PollFlags::POLLIN)
+        {
+            status.publish_updates(true, outcome);
         }
     }
     let mut client = None;
