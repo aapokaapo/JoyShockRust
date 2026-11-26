@@ -6,7 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-profile = ["dep:joyshockrust-input", "dep:joyshockrust-mapping", "dep:joyshockrust-motion", "dep:serde", "dep:toml"]
+controller = ["dep:joyshockrust-input", "dep:serde"]
+profile = ["controller", "dep:joyshockrust-mapping", "dep:joyshockrust-motion", "dep:toml"]
 linux-profile = ["profile", "dep:evdev", "dep:tempfile", "dep:toml_edit"]
 
 [dependencies]

@@ -1,6 +1,6 @@
 //! Shared profile compilation, persistence and desktop paths.
 
-#[cfg(feature = "profile")]
+#[cfg(feature = "controller")]
 pub mod controller;
 #[cfg(all(feature = "linux-profile", target_os = "linux"))]
 pub mod linux_keys;

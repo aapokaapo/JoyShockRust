@@ -30,10 +30,11 @@ profile writes. The editor retains structured drafts and runs profile
 file work off the GTK main thread. It reports saving and activation
 separately. [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16)
 
-Desktop clients share the command and telemetry codecs. The RWC sweep
-runs in motion. Remaining steps cover event-driven inventory and
-subscriptions, removal of the editor's HID reader, and bridge-owned
-calibration sessions. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17) · [Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
+Desktop clients share the command and telemetry codecs. The tray
+subscribes to the bridge's versioned inventory stream. The next IPC work
+covers status subscriptions and typed command dispatch. Later steps move
+the editor's HID previews and calibration sessions into the bridge. The
+RWC sweep runs in motion. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17) · [Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
 
 | Area | Shipped | Next acceptance step |
 |---|---|---|
@@ -249,8 +250,9 @@ The CLI also supports unloading a profile to restore default mappings
 during the current session.
 Status identifies the active mapping source independently of the result of
 the last profile command.
-Controller inventory lists connected nodes independently of the service.
-Status exposes the active node for comparison with the inventory.
+CLI diagnostics list connected nodes independently of the service.
+The tray subscribes to inventory changes from the bridge and compares
+them with the active node from status.
 The virtual gamepad can be enabled or disabled through the control socket
 while retaining the physical controller session and other outputs.
 An opt-in uinput integration test exercises this path without a physical

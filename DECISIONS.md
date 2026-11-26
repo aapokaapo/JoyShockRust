@@ -59,6 +59,24 @@ and uses a separate result for activation. The editor runs file operations
 and control requests on a worker and leaves newer draft edits unsaved.
 [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16)
 
+## Event-driven controller inventory
+
+2026-11-26. Bind a read-only inventory stream beside the status socket
+with the suffix `.inventory`. Limit access to the service user. The
+inventory worker owns its udev monitor, enumeration and socket I/O. It
+publishes an initial snapshot and subsequent changes, including when a
+controller session is active. The tray reconnects and clears stale entries
+on disconnect. An empty list, an unreadable node and an unavailable
+inventory have distinct representations.
+
+Version 1 frames have a request ID and a length. Snapshots carry a
+worker instance ID and an increasing revision. The worker accepts eight
+clients and bounds a snapshot to 128 controllers. It coalesces unsent
+updates and closes a connection if a newer snapshot would replace a
+partially sent frame. Handshakes and pending writes have a two-second
+deadline. Legacy status, CLI diagnostics and control commands retain their
+existing endpoints. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
+
 ## Typed desktop controls and editor drafts
 
 2026-11-26. The editor keeps the parsed TOML document between structured

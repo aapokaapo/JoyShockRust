@@ -834,6 +834,8 @@ application menu or run `systemctl --user start joyshockrust-tray.service`.
 On Bluetooth, the same row shows the battery icon and the percentage
 while discharging. Under **Active controller**, open the submenu to
 choose a connected controller with an HID ID or select **Automatic**.
+The running bridge sends controller list updates to the tray on hotplug.
+Controllers without access or an HID ID appear as disabled entries.
 Under **Active profile**, open the submenu to load a different
 profile from `$config_dir/joyshockrust/profiles/` or choose **Default
 mappings** to unload it. The user service restores the last active

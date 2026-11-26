@@ -73,6 +73,14 @@ impl ModelSelection {
 pub struct ControllerId([u8; 6]);
 
 impl ControllerId {
+    pub const fn from_bytes(bytes: [u8; 6]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn bytes(self) -> [u8; 6] {
+        self.0
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         let mut address = [0; 6];
         let mut parts = value.split(':');

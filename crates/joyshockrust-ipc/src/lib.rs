@@ -1,6 +1,7 @@
 //! JoyShockRust's local wire formats. The applications own I/O and scheduling.
 
 pub mod control;
+pub mod inventory;
 pub mod status;
 pub mod telemetry;
 #[cfg(target_os = "linux")]

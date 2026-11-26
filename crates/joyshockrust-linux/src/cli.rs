@@ -597,6 +597,16 @@ pub(super) fn run() -> Result<std::process::ExitCode, Box<dyn std::error::Error>
         None
     };
     let reload = reload.as_ref();
+    let _inventory = status_path
+        .as_deref()
+        .filter(|_| benchmark_target.is_none())
+        .and_then(|path| match crate::inventory::Worker::start(path) {
+            Ok(worker) => Some(worker),
+            Err(error) => {
+                eprintln!("Controller inventory unavailable: {error}");
+                None
+            }
+        });
     if let Some(status) = status {
         status.set_filter(filter);
         status.set_gamepad_enabled(bridge.virtual_gamepad);

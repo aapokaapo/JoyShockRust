@@ -24,6 +24,8 @@ mod haptics;
 #[allow(unsafe_code)]
 mod hidraw;
 #[cfg(target_os = "linux")]
+mod inventory;
+#[cfg(target_os = "linux")]
 mod keyboard;
 #[cfg(target_os = "linux")]
 mod launch;

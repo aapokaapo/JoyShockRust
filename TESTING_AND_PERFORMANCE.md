@@ -771,6 +771,15 @@ resume. The descriptor-based recovery is covered synthetically.
 
 ## Live controller selection acceptance
 
+The inventory stream tests cover initial and updated snapshots, partial
+requests, incompatible versions, slow clients and tray reconnection.
+To check physical hotplug, start the updated bridge and tray and leave
+one controller active. Connect a second controller and reopen **Active
+controller**. Verify the second controller appears, select it and check
+the active indicator. Disconnect the other controller and check that its
+row disappears. Restart the bridge and verify the tray repopulates
+without a tray restart. An unreadable controller has a disabled row.
+
 Run `--list-controllers` with both controllers connected. Check their
 model, transport and node paths. Add `--show-controller-id` to check the
 IDs, and compare `active_hidraw` from `--status` with the list. Verify the

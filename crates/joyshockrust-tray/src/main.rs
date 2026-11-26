@@ -1,7 +1,11 @@
-use joyshockrust_config::paths::{self, APP_DIRECTORY, PROFILE_FILE, PROFILES_DIRECTORY};
+use joyshockrust_config::{
+    controller::{ModelSelection, Selection},
+    paths::{self, APP_DIRECTORY, PROFILE_FILE, PROFILES_DIRECTORY},
+};
 use joyshockrust_ipc::{
     RELOAD_SOCKET, STATUS_SOCKET,
     control::{ControlCommand, OutputTarget},
+    inventory::{Access, Controller},
     status::{Field, STATUS_VERSION, decode_profile_path, hidraw_device_name},
     unix::ControlClient,
 };
@@ -22,54 +26,14 @@ use ksni::{
     menu::{CheckmarkItem, StandardItem, SubMenu},
 };
 
+mod inventory;
+
 const BRIDGE_SERVICE: &str = "joyshockrust.service";
 const DESKTOP_ID: &str = "io.github.aapokaapo.JoyShockRust.desktop";
 const DESKTOP_ENTRY: &str =
     include_str!("../../../dist/desktop/io.github.aapokaapo.JoyShockRust.desktop");
 const REFRESH: Duration = Duration::from_secs(1);
-const INVENTORY_REFRESH: Duration = Duration::from_secs(4);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Controller {
-    node: String,
-    id: String,
-    model: &'static str,
-    transport: &'static str,
-}
-
-impl Controller {
-    fn from_inventory(line: &str) -> Option<Self> {
-        let (node, description) = line.split_once(": ")?;
-        let (description, id) = description.split_once(", controller_id=")?;
-        let suffix = node.strip_prefix("/dev/hidraw")?;
-        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        if id == "unavailable" {
-            return None;
-        }
-        let (controller, _) = description.split_once(", ")?;
-        let (transport, model) = controller.split_once(' ')?;
-        let (transport, model) = (
-            match transport {
-                "wired" => "usb",
-                "Bluetooth" => "bluetooth",
-                _ => return None,
-            },
-            match model {
-                "DualSense" => "dualsense",
-                "DualSense Edge" => "dualsense-edge",
-                _ => return None,
-            },
-        );
-        Some(Self {
-            node: node.into(),
-            id: id.into(),
-            model,
-            transport,
-        })
-    }
-}
+const PROFILE_REFRESH: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Status {
@@ -171,6 +135,7 @@ impl Status {
 #[derive(Clone, Debug)]
 enum Action {
     Select(Controller),
+    InventoryChanged,
     AutoSelect,
     Load(PathBuf),
     Edit,
@@ -187,7 +152,7 @@ enum Action {
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 struct TrayState {
     status: Option<Status>,
-    inventory: Vec<Controller>,
+    inventory: Option<Vec<Controller>>,
     profiles: Vec<PathBuf>,
     autostart: bool,
     calibrating: bool,
@@ -269,27 +234,36 @@ impl ksni::Tray for Tray {
             menu.push(item("Resume virtual outputs", Action::ResumeOutputs));
         }
         let mut controllers = vec![item("Automatic", Action::AutoSelect)];
-        for controller in &state.inventory {
-            let active = state
-                .status
-                .as_ref()
-                .and_then(|status| status.active_node.as_deref())
-                == Some(controller.node.as_str());
-            let prefix = if active { "✓ " } else { "" };
-            let model = if controller.model == "dualsense-edge" {
-                "DualSense Edge"
-            } else {
-                "DualSense"
-            };
-            let transport = if controller.transport == "usb" {
-                "USB"
-            } else {
-                "Bluetooth"
-            };
-            controllers.push(item(
-                format!("{prefix}{model} · {transport} ({})", controller.node),
-                Action::Select(controller.clone()),
-            ));
+        match state.inventory.as_deref() {
+            None => controllers.push(label("Controller list unavailable")),
+            Some([]) => controllers.push(label("No supported controllers")),
+            Some(inventory) => {
+                for &controller in inventory {
+                    let node = controller.node();
+                    let active = state
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.active_node.as_deref())
+                        == Some(node.as_str());
+                    let prefix = if active { "✓ " } else { "" };
+                    let model = match controller.model {
+                        ModelSelection::DualSense => "DualSense",
+                        ModelSelection::DualSenseEdge => "DualSense Edge",
+                        ModelSelection::Any => unreachable!("inventory supplies a model"),
+                    };
+                    let transport = match controller.transport {
+                        Selection::Usb => "USB",
+                        Selection::Bluetooth => "Bluetooth",
+                        Selection::Auto => unreachable!("inventory supplies a transport"),
+                    };
+                    let name = format!("{prefix}{model} · {transport} ({node})");
+                    controllers.push(match controller.access {
+                        Access::Readable(Some(_)) => item(name, Action::Select(controller)),
+                        Access::Readable(None) => label(format!("{name} · ID unavailable")),
+                        Access::Unreadable => label(format!("{name} · Unreadable")),
+                    });
+                }
+            }
         }
         menu.push(label("Active controller"));
         menu.push(
@@ -431,10 +405,6 @@ impl Desktop {
         )
     }
 
-    fn command(&self, args: &[&str]) -> io::Result<String> {
-        output(Command::new(&self.bridge).args(args))
-    }
-
     fn status(&self) -> io::Result<Option<Status>> {
         let stream = UnixStream::connect(&self.status_socket)?;
         stream.set_read_timeout(Some(REFRESH))?;
@@ -486,12 +456,16 @@ impl Desktop {
     fn run(&self, action: &Action) -> io::Result<()> {
         match action {
             Action::Select(controller) => {
+                let Access::Readable(Some(id)) = controller.access else {
+                    return Err(io::Error::other("controller ID is unavailable"));
+                };
                 self.control()?.send(ControlCommand::SelectController {
-                    id: &controller.id,
-                    model: Some(controller.model),
-                    transport: Some(controller.transport),
+                    id: &id.to_string(),
+                    model: Some(controller.model.as_str()),
+                    transport: Some(controller.transport.as_str()),
                 })?;
             }
+            Action::InventoryChanged => unreachable!("inventory is handled by the tray loop"),
             Action::AutoSelect => {
                 self.control()?.send(ControlCommand::SelectController {
                     id: "any",
@@ -569,6 +543,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("XDG_RUNTIME_DIR must be an absolute path")?,
     };
     let (sender, receiver) = mpsc::channel();
+    let updates = sender.clone();
+    let inventory = inventory::Subscription::start(&desktop.status_socket, move || {
+        let _ = updates.send(Action::InventoryChanged);
+    })?;
     let tray = Tray {
         actions: sender,
         state: TrayState::default(),
@@ -582,7 +560,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..TrayState::default()
     };
     let mut published = TrayState::default();
-    let mut last_inventory = None;
+    let mut last_profiles = None;
     let mut calibration: Option<Child> = None;
     let mut editor: Option<Child> = None;
     while !tray.is_closed() || calibration.is_some() {
@@ -618,26 +596,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
         }
         state.status = desktop.status().ok().flatten();
-        if last_inventory.is_none_or(|last: Instant| last.elapsed() >= INVENTORY_REFRESH) {
-            state.inventory = desktop
-                .command(&[
-                    "--list-controllers",
-                    "--show-controller-id",
-                    "--auto-transport",
-                    "--controller-model",
-                    "any",
-                ])
-                .map_or_else(
-                    |_| Vec::new(),
-                    |reply| {
-                        reply
-                            .lines()
-                            .filter_map(Controller::from_inventory)
-                            .collect()
-                    },
-                );
+        state.inventory = inventory.controllers();
+        if last_profiles.is_none_or(|last: Instant| last.elapsed() >= PROFILE_REFRESH) {
             state.profiles = desktop.profile_paths();
-            last_inventory = Some(Instant::now());
+            last_profiles = Some(Instant::now());
         }
         state.autostart = desktop.autostart_file().is_file();
         if published != state {
@@ -645,6 +607,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tray.update(|tray| tray.state.clone_from(&state));
         }
         match receiver.recv_timeout(REFRESH) {
+            Ok(Action::InventoryChanged) => {}
             Ok(_) if calibration.is_some() => {}
             Ok(Action::Edit) if editor.is_none() => {
                 let path = state
@@ -852,16 +815,14 @@ mod tests {
 
     #[test]
     fn controller_and_profile_menu_actions_are_independent() {
-        let controller = Controller::from_inventory(
-            "/dev/hidraw6: wired DualSense Edge, readable, controller_id=01:02:03:04:05:06",
-        )
-        .unwrap();
-        assert!(
-            Controller::from_inventory(
-                "/dev/hidraw8: Bluetooth DualSense, readable, controller_id=unavailable"
-            )
-            .is_none()
-        );
+        let controller = Controller {
+            hidraw: 6,
+            model: ModelSelection::DualSenseEdge,
+            transport: Selection::Usb,
+            access: Access::Readable(joyshockrust_config::controller::ControllerId::parse(
+                "01:02:03:04:05:06",
+            )),
+        };
         let profile = PathBuf::from("/tmp/gyro profile.toml");
         let (actions, receiver) = mpsc::channel();
         let mut tray = Tray {
@@ -870,7 +831,7 @@ mod tests {
                 status: Status::parse(
                     "version=1\ncontroller=connected\nmodel=dualsense_edge\ntransport=usb\nreport_rate_hz=1000\nbattery_state=full\nprofile_name=gyro profile.toml\nprofile_path_hex=2f746d702f6779726f2070726f66696c652e746f6d6c\nactive_hidraw=/dev/hidraw6",
                 ),
-                inventory: vec![controller.clone()],
+                inventory: Some(vec![controller]),
                 profiles: vec![profile.clone()],
                 ..TrayState::default()
             },

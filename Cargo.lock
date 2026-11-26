@@ -794,6 +794,7 @@ dependencies = [
 name = "joyshockrust-ipc"
 version = "0.1.0"
 dependencies = [
+ "joyshockrust-config",
  "joyshockrust-core",
  "libc",
 ]
@@ -842,6 +843,7 @@ dependencies = [
  "joyshockrust-config",
  "joyshockrust-ipc",
  "ksni",
+ "tempfile",
 ]
 
 [[package]]
@@ -953,6 +955,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]

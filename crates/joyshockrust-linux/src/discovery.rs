@@ -231,6 +231,20 @@ pub struct Candidate {
     pub identity: Identity,
 }
 
+impl Candidate {
+    pub fn open(&self, filter: ControllerFilter) -> io::Result<File> {
+        let (file, actual) = open_controller(&self.path, filter)?;
+        let node = udev::Device::from_devnum(udev::DeviceType::Character, file.metadata()?.rdev())?;
+        if actual != self.identity || node.syspath() != self.syspath {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "HID node identity changed since discovery",
+            ));
+        }
+        Ok(file)
+    }
+}
+
 struct OpenController {
     file: File,
     id: Option<ControllerId>,
@@ -246,15 +260,7 @@ fn find_controller(
         disconnected,
         preferred.filter(|_| filter.controller_id.is_none()),
         |candidate| {
-            let (file, actual) = open_controller(&candidate.path, filter)?;
-            let node =
-                udev::Device::from_devnum(udev::DeviceType::Character, file.metadata()?.rdev())?;
-            if actual != candidate.identity || node.syspath() != candidate.syspath {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "HID node identity changed since discovery",
-                ));
-            }
+            let file = candidate.open(filter)?;
             let id = filter
                 .controller_id
                 .or_else(|| hidraw::controller_id(&file).ok().flatten());

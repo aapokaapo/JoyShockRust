@@ -43,6 +43,12 @@ persistence and PCM haptics use worker paths when needed. The steady-state repor
 filesystem work, blocking IPC and shared configuration locks.
 [Discovery](crates/joyshockrust-linux/src/discovery.rs) · [Calibration storage](crates/joyshockrust-linux/src/gyro_calibration.rs) · [Haptics](crates/joyshockrust-linux/src/haptics.rs)
 
+An inventory worker listens for udev changes while the bridge is waiting
+or processing a controller. It publishes bounded snapshots over a private
+Unix stream. The tray reconnects to that stream after a bridge restart and
+marks the list unavailable until a fresh snapshot arrives.
+[Inventory worker](crates/joyshockrust-linux/src/inventory.rs) · [Inventory protocol](crates/joyshockrust-ipc/src/inventory.rs)
+
 The tray starts and stops the user service and uses XDG autostart for its
 login preference. The editor retains its TOML draft and validates it with
 the shared profile compiler. Desktop control commands and CLI commands
@@ -60,7 +66,7 @@ Desktop refresh timers are independent of bridge report timing.
 | `joyshockrust-core` | Transport-neutral controller state, canonical input names, analog trigger gates and touch-grid geometry. |
 | `joyshockrust-config` | TOML profile compilation, legacy compatibility, Linux key names, atomic profile persistence and desktop paths. |
 | `joyshockrust-input` | USB and Bluetooth parsing, factory conversion and device timebase. |
-| `joyshockrust-ipc` | Local status fields, typed telemetry and control codecs, and a Linux command client. |
+| `joyshockrust-ipc` | Local status fields, typed telemetry, control and controller inventory codecs, and a Linux command client. |
 | `joyshockrust-motion` | Deterministic calibration, gyro and fusion aim, Flick Stick composition, integer pointer motion and stick response. |
 | `joyshockrust-mapping` | Gamepad, keyboard and mouse routing, gesture deadlines, gyro activation, touch regions, layers and trigger stages. |
 | `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, runtime profile activation, socket servicing, uinput event encoding and feedback. |
