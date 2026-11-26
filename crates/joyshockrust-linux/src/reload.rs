@@ -1,3 +1,6 @@
+mod profile_work;
+
+use self::profile_work::{Completion, PrepareError, Worker};
 pub use joyshockrust_ipc::control::OutputTarget;
 
 use joyshockrust_ipc::{
@@ -35,7 +38,7 @@ use crate::{
     adaptive_trigger::Preview,
     discovery::{ControllerFilter, ModelSelection, Selection},
     hidraw::ControllerId,
-    profile::{self, BridgeOptions, RuntimeOptions},
+    profile::{BridgeOptions, RuntimeOptions},
     status::{self, ProfileSource, StatusSocket},
     trigger_travel,
 };
@@ -49,6 +52,7 @@ pub struct Reload {
     listener: Option<UnixListener>,
     load_socket: Option<UnixDatagram>,
     outcome: Cell<Outcome>,
+    worker: Worker,
 }
 
 #[derive(Clone, Copy)]
@@ -107,6 +111,7 @@ impl Reload {
         signals.thread_block()?;
         let signal =
             SignalFd::with_flags(&signals, SfdFlags::SFD_CLOEXEC | SfdFlags::SFD_NONBLOCK)?;
+        let worker = Worker::new(path.clone(), bridge_at_startup)?;
         Ok(Self {
             path,
             selection_path,
@@ -116,6 +121,7 @@ impl Reload {
             listener,
             load_socket,
             outcome: Cell::new(Outcome::NotAttempted),
+            worker,
         })
     }
 
@@ -132,6 +138,8 @@ impl Reload {
 pub struct Request<'a> {
     reload: &'a Reload,
     client: Option<Client>,
+    // The outer option identifies a profile transaction even after resolve takes its settings.
+    prepared: Option<Cell<Option<Box<RuntimeOptions>>>>,
 }
 
 enum Client {
@@ -150,9 +158,35 @@ pub enum Update {
     TriggerTravel(Option<trigger_travel::Settings>),
 }
 
-impl Request<'_> {
-    fn is_unload(&self) -> bool {
-        matches!(&self.client, Some(Client::Load(_, data)) if data == UNLOAD_PROFILE_REQUEST)
+fn is_unload(client: Option<&Client>) -> bool {
+    matches!(client, Some(Client::Load(_, data)) if data == UNLOAD_PROFILE_REQUEST)
+}
+
+fn inline_profile(client: Option<&Client>) -> Result<Option<InlineProfile<'_>>, &'static str> {
+    match client {
+        Some(Client::Load(_, data)) => InlineProfile::decode(data).map(Some),
+        _ => Ok(None),
+    }
+}
+
+impl<'a> Request<'a> {
+    fn new(reload: &'a Reload, client: Option<Client>) -> Self {
+        Self {
+            reload,
+            client,
+            prepared: None,
+        }
+    }
+
+    fn needs_profile_worker(&self) -> bool {
+        match self.client {
+            Some(Client::TriggerPreview(_) | Client::TriggerTravel(_)) => false,
+            _ => {
+                self.selection_payload().is_none()
+                    && self.emulation_payload().is_none()
+                    && self.command_payload(SET_OUTPUTS_PREFIX).is_none()
+            }
+        }
     }
 
     fn selection_payload(&self) -> Option<&[u8]> {
@@ -180,14 +214,10 @@ impl Request<'_> {
         })
     }
 
-    fn inline_profile(&self) -> Result<Option<InlineProfile<'_>>, &'static str> {
-        match &self.client {
-            Some(Client::Load(_, data)) => InlineProfile::decode(data).map(Some),
-            _ => Ok(None),
-        }
-    }
-
     pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
+        if let Some(prepared) = &self.prepared {
+            return prepared.take().map(Update::Profile);
+        }
         if let Some(Client::TriggerPreview(preview)) = &self.client {
             return Some(Update::TriggerPreview(*preview));
         }
@@ -218,9 +248,6 @@ impl Request<'_> {
                 }
             };
         }
-        if self.is_unload() {
-            return Some(Update::Profile(Box::default()));
-        }
         if let Some(payload) = self.selection_payload() {
             if !self.reload.allow_controller_switch {
                 self.rejected("controller selection changes require automatic discovery");
@@ -234,53 +261,7 @@ impl Request<'_> {
                 }
             };
         }
-        self.load()
-            .map(|profile| Update::Profile(Box::new(profile)))
-    }
-
-    fn load(&self) -> Option<RuntimeOptions> {
-        let inline = match self.inline_profile() {
-            Ok(inline) => inline,
-            Err(error) => {
-                self.rejected(error);
-                return None;
-            }
-        };
-        let profile = if let Some(InlineProfile { contents: data, .. }) = inline {
-            if data.len() > MAX_PROFILE_BYTES {
-                self.rejected("profile exceeds 64 KiB");
-                return None;
-            }
-            std::str::from_utf8(data)
-                .map_err(|err| err.into())
-                .and_then(profile::parse)
-        } else if let Some(path) = &self.reload.path {
-            profile::load(path)
-        } else {
-            self.reply(Reply::Unavailable.bytes());
-            return None;
-        };
-        match profile {
-            Ok(profile) => {
-                let next = profile.bridge.unwrap_or_default();
-                let startup = self.reload.bridge_at_startup;
-                if next.rumble.is_some_and(|value| value != startup.rumble)
-                    || next
-                        .virtual_gamepad
-                        .is_some_and(|value| value != startup.virtual_gamepad)
-                {
-                    self.rejected(
-                        "profile changes to rumble or gamepad enablement require restarting JoyShockRust",
-                    );
-                    return None;
-                }
-                Some(profile)
-            }
-            Err(err) => {
-                self.rejected(err);
-                None
-            }
-        }
+        None
     }
 
     pub fn profile_gamepad(&self, profile: &RuntimeOptions) -> crate::gamepad::OutputKind {
@@ -290,28 +271,23 @@ impl Request<'_> {
             .unwrap_or(self.reload.bridge_at_startup.gamepad)
     }
 
-    pub fn applied(self, status: Option<&StatusSocket>) {
-        if self.command_payload(SET_OUTPUTS_PREFIX).is_some() {
+    pub fn applied(self, status: Option<&StatusSocket>) -> io::Result<()> {
+        if self.prepared.is_none() {
+            if self.emulation_payload().is_some() {
+                eprintln!("Emulation setting updated from CLI");
+            } else if self.selection_payload().is_some() {
+                eprintln!("Controller selection updated from CLI");
+            }
             self.reply(Reply::Applied.bytes());
-            return;
+            return Ok(());
         }
-        if self.emulation_payload().is_some() {
-            eprintln!("Emulation setting updated from CLI");
-            self.reply(Reply::Applied.bytes());
-            return;
-        }
-        if self.selection_payload().is_some() {
-            eprintln!("Controller selection updated from CLI");
-            self.reply(Reply::Applied.bytes());
-            return;
-        }
-        self.reload.outcome.set(Outcome::Applied);
-        let (source, name, path) = if self.is_unload() {
+
+        let (source, name, path) = if is_unload(self.client.as_ref()) {
             eprintln!("Profile unloaded from CLI");
             (ProfileSource::Defaults, None, None)
         } else if matches!(self.client, Some(Client::Load(_, _))) {
             eprintln!("Profile loaded from CLI");
-            let profile = self.inline_profile().ok().flatten();
+            let profile = inline_profile(self.client.as_ref()).ok().flatten();
             let name = profile.as_ref().and_then(|profile| profile.name);
             let path = profile.and_then(|profile| profile.path);
             (ProfileSource::Loaded, name, path)
@@ -322,26 +298,31 @@ impl Request<'_> {
             }
             (ProfileSource::Startup, path.and_then(Path::file_name), path)
         };
-        if let Some(selection) = self.reload.selection_path.as_deref() {
-            let selected = matches!(source, ProfileSource::Loaded)
-                .then_some(path)
-                .flatten();
-            if let Err(error) = profile::remember_selection(
-                selection,
-                selected,
-                matches!(source, ProfileSource::Defaults),
-            ) {
-                eprintln!(
-                    "Could not remember active profile {}: {error}",
-                    selection.display()
-                );
-            }
-        }
         if let Some(status) = status {
             status.set_profile(source, name, path);
         }
-        self.reply(Reply::Applied.bytes());
+        if let Some(selection) = &self.reload.selection_path {
+            let selected = path
+                .filter(|_| matches!(source, ProfileSource::Loaded))
+                .map(Path::to_path_buf);
+            self.reload.worker.remember(
+                self.client,
+                selection.clone(),
+                selected,
+                matches!(source, ProfileSource::Defaults),
+            )?;
+        } else {
+            self.confirm_profile();
+        }
+        Ok(())
     }
+
+    fn confirm_profile(&self) {
+        self.reload.outcome.set(Outcome::Applied);
+        self.reply(Reply::Applied.bytes());
+        self.reload.worker.finish();
+    }
+
     pub fn rejected(&self, err: impl Display) {
         if self.emulation_payload().is_some() {
             eprintln!("Emulation setting rejected: {err}");
@@ -360,6 +341,9 @@ impl Request<'_> {
             eprintln!("Profile reload rejected ({}): {err}", path.display());
         }
         self.reply(Reply::Rejected.bytes());
+        if self.prepared.is_some() {
+            self.reload.worker.finish();
+        }
     }
 
     fn reply(&self, response: &[u8]) {
@@ -467,6 +451,9 @@ pub fn wait<'a>(
     feedback: Option<BorrowedFd<'_>>,
     deadline: Option<Instant>,
 ) -> io::Result<(PollFlags, Option<Request<'a>>, PollFlags)> {
+    if let Some(reload) = reload {
+        reload.worker.start_next()?;
+    }
     let updates_fd = status.and_then(StatusSocket::updates_fd);
     let outcome = reload.map_or("unavailable", Reload::outcome);
     let publish_at = status.and_then(|status| status.publish_updates(false, outcome));
@@ -484,19 +471,19 @@ pub fn wait<'a>(
         PollFd::new(feedback.unwrap_or(fd), PollFlags::POLLIN),
         PollFd::new(load_socket.map_or(fd, AsFd::as_fd), PollFlags::POLLIN),
         PollFd::new(updates_fd.unwrap_or(fd), PollFlags::POLLIN),
+        PollFd::new(
+            reload.map_or(fd, |reload| reload.worker.wake.as_fd()),
+            PollFlags::POLLIN,
+        ),
     ];
-    let len = if updates_fd.is_some() {
+    let len = if reload.is_some() {
+        8
+    } else if updates_fd.is_some() {
         7
-    } else if load_socket.is_some() {
-        6
     } else if feedback.is_some() {
         5
-    } else if listener.is_some() {
-        4
     } else if status.is_some() {
         3
-    } else if reload.is_some() {
-        2
     } else {
         1
     };
@@ -517,16 +504,6 @@ pub fn wait<'a>(
             Err(err) => return Err(err.into()),
         }
     }
-    let mut requested = false;
-    if let Some(reload) = reload {
-        let flags = descriptors[1].revents().unwrap_or_else(PollFlags::empty);
-        if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
-            return Err(io::Error::other("profile reload signal descriptor lost"));
-        }
-        if flags.contains(PollFlags::POLLIN) {
-            requested = reload.signal.read_signal()?.is_some();
-        }
-    }
     if let Some(status) = status {
         let flags = descriptors[2].revents().unwrap_or_else(PollFlags::empty);
         if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
@@ -542,6 +519,43 @@ pub fn wait<'a>(
                 .contains(PollFlags::POLLIN)
         {
             status.publish_updates(true, outcome);
+        }
+    }
+    let ready = descriptors[0].revents().unwrap_or_else(PollFlags::empty);
+    let feedback_ready = feedback
+        .and_then(|_| descriptors[4].revents())
+        .unwrap_or_else(PollFlags::empty);
+    if let Some(reload) = reload {
+        let flags = descriptors[7].revents().unwrap_or_else(PollFlags::empty);
+        if flags.contains(PollFlags::POLLIN) {
+            match reload.worker.receive()? {
+                Completion::Prepared(client, Ok(profile)) => {
+                    let mut request = Request::new(reload, client);
+                    request.prepared = Some(Cell::new(Some(profile)));
+                    return Ok((ready, Some(request), feedback_ready));
+                }
+                Completion::Prepared(client, Err(error)) => {
+                    let request = Request::new(reload, client);
+                    match error {
+                        PrepareError::Unavailable => request.reply(Reply::Unavailable.bytes()),
+                        PrepareError::Rejected(err) => request.rejected(err),
+                    }
+                    reload.worker.finish();
+                }
+                Completion::Remembered(client) => Request::new(reload, client).confirm_profile(),
+            }
+        } else if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
+            return Err(io::Error::other("profile worker descriptor lost"));
+        }
+    }
+    let mut requested = false;
+    if let Some(reload) = reload {
+        let flags = descriptors[1].revents().unwrap_or_else(PollFlags::empty);
+        if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
+            return Err(io::Error::other("profile reload signal descriptor lost"));
+        }
+        if flags.contains(PollFlags::POLLIN) {
+            requested = reload.signal.read_signal()?.is_some();
         }
     }
     let mut client = None;
@@ -608,16 +622,20 @@ pub fn wait<'a>(
             }
         }
     }
-    let request = reload
+    let mut request = reload
         .filter(|_| requested || client.is_some())
-        .map(|reload| Request { reload, client });
-    Ok((
-        descriptors[0].revents().unwrap_or_else(PollFlags::empty),
-        request,
-        feedback
-            .and_then(|_| descriptors[4].revents())
-            .unwrap_or_else(PollFlags::empty),
-    ))
+        .map(|reload| Request::new(reload, client));
+    if let Some(reload) = reload
+        && request.as_ref().is_some_and(Request::needs_profile_worker)
+        && let Some(mut pending) = request.take()
+    {
+        if !reload.worker.try_queue(&mut pending.client) {
+            eprintln!("Profile request rejected: the profile worker queue is full");
+            pending.reply(Reply::Rejected.bytes());
+        }
+        reload.worker.start_next()?;
+    }
+    Ok((ready, request, feedback_ready))
 }
 
 #[cfg(test)]
@@ -630,54 +648,51 @@ mod tests {
     use super::*;
     use std::process;
 
+    fn wait_for_request<'a>(input: &UnixStream, reload: &'a Reload) -> Request<'a> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let (_, request, _) =
+                wait(input.as_fd(), Some(reload), None, None, Some(deadline)).unwrap();
+            if let Some(request) = request {
+                return request;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for a prepared profile"
+            );
+        }
+    }
+
     #[test]
     fn reload_rejects_changes_to_bridge_settings() {
-        let reload = Reload {
-            selection_path: None,
-            path: Some(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml"),
-            ),
-            bridge_at_startup: BridgeOptions {
-                rumble: true,
-                ..BridgeOptions::default()
-            },
-            allow_controller_switch: false,
-            signal: SignalFd::new(&SigSet::empty()).unwrap(),
-            listener: None,
-            load_socket: None,
-            outcome: Cell::new(Outcome::NotAttempted),
+        let startup =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml");
+        let bridge = BridgeOptions {
+            rumble: true,
+            ..BridgeOptions::default()
         };
-        let request = Request {
-            reload: &reload,
-            client: None,
-        };
+        assert!(profile_work::prepare(None, Some(&startup), bridge).is_ok());
+
         let address = SocketAddr::from_abstract_name("joyshockrust-reload-options-test").unwrap();
+        let client = |data: &[u8]| Client::Load(address.clone(), data.to_vec());
         assert!(matches!(
-            request.resolve(ControllerFilter::default()),
-            Some(Update::Profile(_))
+            profile_work::prepare(
+                Some(&client(b"version = 1\n[bridge]\nrumble = false\n")),
+                Some(&startup),
+                bridge,
+            ),
+            Err(PrepareError::Rejected(reason)) if reason.contains("require restarting")
         ));
-
-        let request = Request {
-            reload: &reload,
-            client: Some(Client::Load(
-                address.clone(),
-                b"version = 1\n[bridge]\nrumble = false\n".to_vec(),
-            )),
-        };
-        assert!(request.load().is_none());
-        assert_eq!(reload.outcome(), "rejected");
-
-        let request = Request {
-            reload: &reload,
-            client: Some(Client::Load(
-                address,
-                b"version = 1\n[bridge]\nrumble = true\nmodel = 'dualsense-edge'\n".to_vec(),
-            )),
-        };
-        assert!(matches!(
-            request.resolve(ControllerFilter::default()),
-            Some(Update::Profile(_))
-        ));
+        assert!(
+            profile_work::prepare(
+                Some(&client(
+                    b"version = 1\n[bridge]\nrumble = true\nmodel = 'dualsense-edge'\n"
+                )),
+                Some(&startup),
+                bridge,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -691,6 +706,7 @@ mod tests {
             listener: None,
             load_socket: None,
             outcome: Cell::new(Outcome::NotAttempted),
+            worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let current = ControllerFilter {
             transport: Selection::Bluetooth,
@@ -698,13 +714,13 @@ mod tests {
             controller_id: ControllerId::parse("00:11:22:33:44:55"),
         };
         fn request<'a>(server: &'a Reload, payload: &[u8]) -> Request<'a> {
-            Request {
-                reload: server,
-                client: Some(Client::Load(
+            Request::new(
+                server,
+                Some(Client::Load(
                     SocketAddr::from_abstract_name("joyshockrust-select-test").unwrap(),
                     [SELECT_CONTROLLER_PREFIX, payload].concat(),
                 )),
-            }
+            )
         }
         let change = request(&reload, b"aa:bb:cc:dd:ee:ff");
         let Some(Update::Selection(filter)) = change.resolve(current) else {
@@ -716,7 +732,7 @@ mod tests {
         );
         assert_eq!(filter.transport, current.transport);
         assert_eq!(filter.model, current.model);
-        change.applied(None);
+        change.applied(None).unwrap();
         let Some(Update::Selection(cleared)) = request(&reload, b"any\nany\nauto").resolve(filter)
         else {
             panic!("expected controller selection");
@@ -759,6 +775,14 @@ mod tests {
             listener: None,
             load_socket: Some(load_socket),
             outcome: Cell::new(Outcome::NotAttempted),
+            worker: Worker::new(
+                None,
+                BridgeOptions {
+                    rumble: true,
+                    ..BridgeOptions::default()
+                },
+            )
+            .unwrap(),
         };
         let client = UnixDatagram::bind_addr(
             &SocketAddr::from_abstract_name(format!("{base}-client")).unwrap(),
@@ -773,9 +797,7 @@ mod tests {
         client
             .send(b"version = 1\n[gyro]\nsensitivity_y = 2\n")
             .unwrap();
-        let (_, request, feedback) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
-        assert!(feedback.is_empty());
-        let request = request.unwrap();
+        let request = wait_for_request(&input, &reload);
         let current = ControllerFilter {
             transport: Selection::Bluetooth,
             model: crate::discovery::ModelSelection::DualSense,
@@ -785,7 +807,7 @@ mod tests {
             panic!("expected profile update");
         };
         assert!(next.gyro.is_some());
-        request.applied(None);
+        request.applied(None).unwrap();
         let mut reply = [0; 32];
         let len = client.recv(&mut reply).unwrap();
         assert_eq!(&reply[..len], b"applied\n");
@@ -794,10 +816,9 @@ mod tests {
         client
             .send(b"version = 1\n[bridge]\ntransport = 'usb'\nmodel = 'dualsense-edge'\ncontroller_id = '02:00:00:00:00:01'\nrumble = true\n")
             .unwrap();
-        let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
-        let request = request.unwrap();
+        let request = wait_for_request(&input, &reload);
         assert!(matches!(request.resolve(current), Some(Update::Profile(_))));
-        request.applied(None);
+        request.applied(None).unwrap();
         let len = client.recv(&mut reply).unwrap();
         assert_eq!(&reply[..len], b"applied\n");
     }
@@ -819,6 +840,7 @@ mod tests {
             listener: None,
             load_socket: Some(load_socket),
             outcome: Cell::new(Outcome::Applied),
+            worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let client = UnixDatagram::unbound().unwrap();
         let (_sender, input) = UnixStream::pair().unwrap();
@@ -880,15 +902,18 @@ mod tests {
                 .unwrap();
         let listener = UnixListener::bind_addr(&address).unwrap();
         listener.set_nonblocking(true).unwrap();
+        let startup =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml");
         let reload = Reload {
             selection_path: None,
-            path: Some(PathBuf::from("/dev/null")),
+            path: Some(startup.clone()),
             bridge_at_startup: BridgeOptions::default(),
             allow_controller_switch: false,
             signal: SignalFd::new(&SigSet::empty()).unwrap(),
             listener: Some(listener),
             load_socket: None,
             outcome: Cell::new(Outcome::NotAttempted),
+            worker: Worker::new(Some(startup), BridgeOptions::default()).unwrap(),
         };
         let (_sender, input) = UnixStream::pair().unwrap();
         let mut first = UnixStream::connect_addr(&address).unwrap();
@@ -899,18 +924,17 @@ mod tests {
                 .unwrap();
         }
 
-        let (ready, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
-        assert!(ready.is_empty());
-        assert!(request.unwrap().load().is_none());
-        let mut response = String::new();
-        first.read_to_string(&mut response).unwrap();
-        assert_eq!(response, "rejected\n");
-
-        let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
-        request.unwrap().applied(None);
-        response.clear();
-        second.read_to_string(&mut response).unwrap();
-        assert_eq!(response, "applied\n");
+        for client in [&mut first, &mut second] {
+            let request = wait_for_request(&input, &reload);
+            assert!(matches!(
+                request.resolve(ControllerFilter::default()),
+                Some(Update::Profile(_))
+            ));
+            request.applied(None).unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            assert_eq!(response, "applied\n");
+        }
     }
 
     #[test]
@@ -932,6 +956,7 @@ mod tests {
             listener: None,
             load_socket: Some(load_socket),
             outcome: Cell::new(Outcome::NotAttempted),
+            worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let client = UnixDatagram::bind_addr(
             &SocketAddr::from_abstract_name(format!(
@@ -974,7 +999,7 @@ mod tests {
                         Some(Update::Emulation(OutputTarget::Gamepad, true))
                     ));
                     feedback.replace(new_feedback.take());
-                    request.applied(None);
+                    request.applied(None).unwrap();
                     Ok(std::ops::ControlFlow::Continue(()))
                 }
                 crate::SessionEvent::Feedback => {

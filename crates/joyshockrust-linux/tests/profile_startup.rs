@@ -147,6 +147,115 @@ fn installing_a_profile_preserves_source_bytes_and_rejects_invalid_replacements(
 }
 
 #[test]
+fn profile_persistence_does_not_block_status_or_control_and_preserves_request_order() {
+    use joyshockrust_ipc::control::{
+        ControlCommand, OutputTarget, Reply, load_socket_path, profile_path_payload,
+    };
+    use std::{io::Read, os::unix::net::UnixStream, thread, time::Instant};
+
+    let directory = TestDirectory::new("profile-lock");
+    let startup = directory.0.join("profile.toml");
+    let selected = directory.0.join("selected.toml");
+    let remembered = directory.0.join("profile.toml.active");
+    let status = directory.0.join("status");
+    let reload = directory.0.join("reload");
+    let notify = directory.0.join("notify");
+    let listener = UnixDatagram::bind(&notify).unwrap();
+    listener
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let _bridge = Bridge(
+        Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
+            .env("NOTIFY_SOCKET", &notify)
+            .env("XDG_CONFIG_HOME", &directory.0)
+            .arg("--profile-if-present")
+            .arg(&startup)
+            .args(["--controller-id", "ff:ff:ff:ff:ff:ff", "--status-socket"])
+            .arg(&status)
+            .arg("--reload-socket")
+            .arg(&reload)
+            .spawn()
+            .unwrap(),
+    );
+    let mut ready = [0; 64];
+    let len = listener.recv(&mut ready).expect("bridge readiness");
+    assert_eq!(&ready[..len], b"READY=1");
+
+    let connect = |name| {
+        let client = UnixDatagram::bind(directory.0.join(name)).unwrap();
+        client.connect(load_socket_path(&reload)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        client
+    };
+    let profiles = connect("profiles");
+    let control = connect("control");
+    let lock = fs::File::open(&directory.0).unwrap();
+    lock.lock().unwrap();
+    profiles
+        .send(&profile_path_payload(&selected, b"version = 1\n[gyro]\n").unwrap())
+        .unwrap();
+
+    // The atomic save creates its temporary file before taking the directory lock.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !fs::read_dir(&directory.0).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .as_encoded_bytes()
+            .starts_with(b".joyshockrust-profile-")
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "profile persistence did not begin"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    profiles
+        .send(&ControlCommand::UnloadProfile.encode())
+        .unwrap();
+    control
+        .send(
+            &ControlCommand::Emulation {
+                target: OutputTarget::Gamepad,
+                enabled: false,
+            }
+            .encode(),
+        )
+        .unwrap();
+    let assert_applied = |client: &UnixDatagram| {
+        let mut reply = [0; 32];
+        let len = client.recv(&mut reply).unwrap();
+        assert_eq!(&reply[..len], Reply::Applied.bytes());
+    };
+    assert_applied(&control);
+    let mut stream = UnixStream::connect(&status).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let mut snapshot = String::new();
+    stream.read_to_string(&mut snapshot).unwrap();
+    assert!(
+        snapshot.lines().any(|line| line == "profile_source=loaded"),
+        "{snapshot}"
+    );
+    assert!(
+        snapshot
+            .lines()
+            .any(|line| line == "last_reload=not_attempted"),
+        "{snapshot}"
+    );
+    assert!(!remembered.exists());
+
+    lock.unlock().unwrap();
+    assert_applied(&profiles);
+    assert_applied(&profiles);
+    assert_eq!(fs::read_to_string(remembered).unwrap(), "defaults\n");
+}
+
+#[test]
 fn live_profiles_and_controller_selection_change_independently_while_waiting() {
     let directory = TestDirectory::new("selection");
     let controller_file = directory.0.join("joyshockrust/controller.toml");

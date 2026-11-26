@@ -342,7 +342,7 @@ fn serve_session(
                             return Ok(ControlFlow::Break(()));
                         }
                         Some(reload::Update::Selection(_)) => {
-                            reload.applied(status);
+                            reload.applied(status)?;
                             return Ok(ControlFlow::Continue(()));
                         }
                         Some(reload::Update::OutputsPaused(paused)) => {
@@ -350,7 +350,7 @@ fn serve_session(
                                 switch = Some((None, reload));
                                 return Ok(ControlFlow::Break(()));
                             }
-                            reload.applied(status);
+                            reload.applied(status)?;
                             return Ok(ControlFlow::Continue(()));
                         }
                         Some(reload::Update::Emulation(target, enabled)) => {
@@ -421,7 +421,7 @@ fn serve_session(
                             {
                                 mouse.signal_outputs_ready();
                             }
-                            reload.applied(status);
+                            reload.applied(status)?;
                             return Ok(ControlFlow::Continue(()));
                         }
                         None => return Ok(ControlFlow::Continue(())),
@@ -538,7 +538,7 @@ fn serve_session(
                     {
                         mouse.signal_outputs_ready();
                     }
-                    reload.applied(status);
+                    reload.applied(status)?;
                     return Ok(ControlFlow::Continue(()));
                 }
             };
@@ -639,7 +639,7 @@ fn serve_session(
                     status.set_outputs_paused(true);
                 }
             }
-            request.applied(status);
+            request.applied(status)?;
             return Ok(Some(selection.unwrap_or(filter)));
         }
     }

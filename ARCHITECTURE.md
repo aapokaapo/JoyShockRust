@@ -43,6 +43,14 @@ persistence and PCM haptics use worker paths when needed. The steady-state repor
 filesystem work, blocking IPC and shared configuration locks.
 [Discovery](crates/joyshockrust-linux/src/discovery.rs) · [Calibration storage](crates/joyshockrust-linux/src/gyro_calibration.rs) · [Haptics](crates/joyshockrust-linux/src/haptics.rs)
 
+The profile worker reads and compiles live profiles and persists the
+selected profile. The bridge applies a prepared profile between report
+batches and acknowledges it after the persistence attempt. Profile
+requests run in the order the bridge accepts them, with a bounded queue.
+The bridge continues serving status and emulation commands while the
+worker waits for the disk.
+[Profile worker](crates/joyshockrust-linux/src/reload/profile_work.rs)
+
 An inventory worker listens for udev changes while the bridge is waiting
 or processing a controller. It publishes bounded snapshots over a private
 Unix stream. The tray reconnects to that stream after a bridge restart and

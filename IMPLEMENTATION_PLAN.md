@@ -111,6 +111,10 @@ Versioned TOML, snapshots, Unix socket protocol, diagnostics, udev permissions, 
 TOML v1 startup and live profile loads validate before replacing active
 settings. The control socket supports reload, load, unload and output
 toggles. Separate status queries show connection and reload results.
+A worker prepares live profiles and saves the active selection. An
+integration test holds the selection directory lock and verifies that
+status and output controls remain responsive and queued profiles apply
+in order.
 The user's Fedora tests covered user-service startup, USB reconnect,
 valid and rejected reloads, synchronous systemd reload results and
 atomic preset installation. Controller preferences, the selected profile

@@ -606,6 +606,15 @@ game and its raw-input and mouse sensitivity settings.
 
 ## Profile reload acceptance
 
+The integration test holds the active-profile directory lock while the
+bridge applies a preset and queues an unload. Status and emulation
+commands remain responsive. Both profile commands complete in order
+after the lock is released, and the remembered selection is defaults.
+
+```sh
+cargo test --locked -p joyshockrust-linux --test profile_startup profile_persistence
+```
+
 Install the updated executable and unit. Reload the systemd user manager
 and restart the service once so the new executable is running. With USB
 connected, edit the profile to change a gamepad mapping, then run

@@ -680,6 +680,18 @@ live profile selections in a separate file next to the startup profile.
 An explicit unload is remembered as default mappings. The startup file
 is still the target of a startup profile reload and serves as fallback
 if a remembered profile cannot be opened or validated.
+
+2026-11-26. A single bridge worker reads and compiles live profile
+requests with the shared configuration crate and persists the active
+selection after the bridge adopts it. The report loop owns adoption
+and publishes the new active profile immediately. The command reply
+and last reload result follow the persistence attempt. Persistence
+errors are logged and the adopted profile remains active. One profile
+operation runs at a time with up to four queued requests. Excess
+requests receive the existing rejection reply. Status and emulation
+commands can proceed during profile preparation and persistence.
+[Profile worker](crates/joyshockrust-linux/src/reload/profile_work.rs) · [Profile reload acceptance](TESTING_AND_PERFORMANCE.md#profile-reload-acceptance)
+
 Gamepad and gyro mouse selections are process-local and independent.
 The master switch suppresses both outputs while retaining the selections.
 Status exposes the master, individual choices, and effective output states.

@@ -746,7 +746,7 @@ pub(super) fn run() -> Result<std::process::ExitCode, Box<dyn std::error::Error>
                         )
                         | None => return Ok(None),
                     };
-                    reload.applied(status);
+                    reload.applied(status)?;
                     Ok(selection)
                 }
             },
