@@ -1,21 +1,29 @@
+mod profile_work;
+
+use self::profile_work::{
+    Completion, PrepareError, PreparedProfile, ProfileInput, ProfileOrigin, Worker,
+};
+pub use joyshockrust_ipc::control::OutputTarget;
+
+use joyshockrust_ipc::{
+    RELOAD_SOCKET,
+    control::{
+        AddressedCommand, ControlCommand, DecodeError, MAX_DATAGRAM_BYTES, PreviewCommand, Reply,
+        load_socket_path,
+    },
+    unix::ControlClient,
+};
+
 use std::{
     cell::Cell,
-    ffi::OsStr,
     fmt::Display,
-    fs::OpenOptions,
     io::{self, Read, Write},
     os::{
         fd::{AsFd, BorrowedFd},
-        linux::net::SocketAddrExt,
-        unix::{
-            ffi::OsStrExt,
-            fs::OpenOptionsExt,
-            net::{SocketAddr, UnixDatagram, UnixListener, UnixStream},
-        },
+        unix::net::{SocketAddr, UnixDatagram, UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    process,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::Instant,
 };
 
 use nix::{
@@ -31,24 +39,10 @@ use crate::{
     adaptive_trigger::Preview,
     discovery::{ControllerFilter, ModelSelection, Selection},
     hidraw::ControllerId,
-    profile::{self, BridgeOptions, RuntimeOptions},
+    profile::{BridgeOptions, RuntimeOptions},
     status::{self, ProfileSource, StatusSocket},
     trigger_travel,
 };
-
-const MAX_PROFILE_BYTES: usize = 64 * 1024;
-const MAX_PROFILE_NAME_BYTES: usize = 4096;
-const LOAD_PROFILE_PREFIX: &[u8] = b"\0load-profile\n";
-const LOAD_PROFILE_PATH_PREFIX: &[u8] = b"\0load-profile-path\n";
-const SELECT_CONTROLLER_PREFIX: &[u8] = b"\0select-controller\n";
-const UNLOAD_PROFILE_REQUEST: &[u8] = b"\0unload-profile\n";
-const SET_GAMEPAD_PREFIX: &[u8] = b"\0set-gamepad\n";
-const SET_GYRO_MOUSE_PREFIX: &[u8] = b"\0set-gyro-mouse\n";
-const SET_EMULATION_PREFIX: &[u8] = b"\0set-emulation\n";
-const SET_EMULATION_MASTER_PREFIX: &[u8] = b"\0set-emulation-master\n";
-const SET_OUTPUTS_PREFIX: &[u8] = b"\0set-outputs\n";
-const TRIGGER_PREVIEW_PREFIX: &[u8] = b"\0preview-trigger\n";
-const TRIGGER_TRAVEL_PREFIX: &[u8] = b"\0preview-trigger-travel\n";
 
 pub struct Reload {
     path: Option<PathBuf>,
@@ -59,6 +53,7 @@ pub struct Reload {
     listener: Option<UnixListener>,
     load_socket: Option<UnixDatagram>,
     outcome: Cell<Outcome>,
+    worker: Worker,
 }
 
 #[derive(Clone, Copy)]
@@ -117,6 +112,7 @@ impl Reload {
         signals.thread_block()?;
         let signal =
             SignalFd::with_flags(&signals, SfdFlags::SFD_CLOEXEC | SfdFlags::SFD_NONBLOCK)?;
+        let worker = Worker::new(path.clone(), bridge_at_startup)?;
         Ok(Self {
             path,
             selection_path,
@@ -126,6 +122,7 @@ impl Reload {
             listener,
             load_socket,
             outcome: Cell::new(Outcome::NotAttempted),
+            worker,
         })
     }
 
@@ -141,14 +138,28 @@ impl Reload {
 
 pub struct Request<'a> {
     reload: &'a Reload,
-    client: Option<Client>,
+    reply: Option<ReplyTo>,
+    action: Action,
 }
 
-enum Client {
+enum ReplyTo {
     Reload(UnixStream),
-    Load(SocketAddr, Vec<u8>),
-    TriggerPreview(Preview),
-    TriggerTravel(Option<trigger_travel::Settings>),
+    Datagram(SocketAddr),
+}
+
+enum Action {
+    Profile {
+        options: Cell<Option<Box<RuntimeOptions>>>,
+        origin: ProfileOrigin,
+    },
+    Selection {
+        controller_id: Option<ControllerId>,
+        model: Option<ModelSelection>,
+        transport: Option<Selection>,
+    },
+    Emulation(OutputTarget, bool),
+    OutputsPaused(bool),
+    Preview(PreviewCommand),
 }
 
 pub enum Update {
@@ -160,221 +171,26 @@ pub enum Update {
     TriggerTravel(Option<trigger_travel::Settings>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutputTarget {
-    Gamepad,
-    GyroMouse,
-    Both,
-    Master,
-}
-
-impl OutputTarget {
-    pub fn from_flag(flag: &str) -> Option<Self> {
-        match flag {
-            "--set-gamepad" => Some(Self::Gamepad),
-            "--set-gyro-mouse" => Some(Self::GyroMouse),
-            "--set-emulation" => Some(Self::Both),
-            "--set-emulation-master" => Some(Self::Master),
-            _ => None,
-        }
-    }
-
-    fn prefix(self) -> &'static [u8] {
-        match self {
-            Self::Gamepad => SET_GAMEPAD_PREFIX,
-            Self::GyroMouse => SET_GYRO_MOUSE_PREFIX,
-            Self::Both => SET_EMULATION_PREFIX,
-            Self::Master => SET_EMULATION_MASTER_PREFIX,
-        }
-    }
-
-    pub fn settings(
-        self,
-        enabled: bool,
-        gamepad: bool,
-        gyro: Option<bool>,
-    ) -> (bool, Option<bool>) {
-        match self {
-            Self::Gamepad => (enabled, gyro),
-            Self::GyroMouse => (gamepad, Some(enabled)),
-            Self::Both => (enabled, Some(enabled)),
-            Self::Master => (gamepad, gyro),
-        }
-    }
-}
-
-struct InlineProfile<'a> {
-    name: Option<&'a OsStr>,
-    path: Option<&'a Path>,
-    contents: &'a [u8],
-}
-
 impl Request<'_> {
-    fn is_unload(&self) -> bool {
-        matches!(&self.client, Some(Client::Load(_, data)) if data == UNLOAD_PROFILE_REQUEST)
-    }
-
-    fn selection_payload(&self) -> Option<&[u8]> {
-        self.command_payload(SELECT_CONTROLLER_PREFIX)
-    }
-
-    fn command_payload(&self, prefix: &[u8]) -> Option<&[u8]> {
-        match &self.client {
-            Some(Client::Load(_, data)) => data.strip_prefix(prefix),
-            _ => None,
-        }
-    }
-
-    fn emulation_payload(&self) -> Option<(OutputTarget, &[u8])> {
-        [
-            OutputTarget::Gamepad,
-            OutputTarget::GyroMouse,
-            OutputTarget::Both,
-            OutputTarget::Master,
-        ]
-        .into_iter()
-        .find_map(|target| {
-            self.command_payload(target.prefix())
-                .map(|payload| (target, payload))
-        })
-    }
-
-    fn inline_profile(&self) -> Result<Option<InlineProfile<'_>>, &'static str> {
-        let Some(Client::Load(_, data)) = &self.client else {
-            return Ok(None);
-        };
-        let (data, has_path) = if let Some(data) = data.strip_prefix(LOAD_PROFILE_PATH_PREFIX) {
-            (data, true)
-        } else if let Some(data) = data.strip_prefix(LOAD_PROFILE_PREFIX) {
-            (data, false)
-        } else {
-            // Older clients send only the TOML bytes.
-            return Ok(Some(InlineProfile {
-                name: None,
-                path: None,
-                contents: data,
-            }));
-        };
-        let end = data
-            .iter()
-            .position(|&byte| byte == 0)
-            .ok_or("profile request needs a source and profile")?;
-        let source = &data[..end];
-        if source.is_empty() || source.len() > MAX_PROFILE_NAME_BYTES {
-            return Err("invalid profile source");
-        }
-        let name = OsStr::from_bytes(source);
-        let path = Path::new(name);
-        let (name, path) = if has_path {
-            if !path.is_absolute() || path.file_name().is_none() {
-                return Err("expected an absolute profile path");
-            }
-            (path.file_name(), Some(path))
-        } else {
-            if source.contains(&b'/') {
-                return Err("invalid profile filename");
-            }
-            (Some(name), None)
-        };
-        Ok(Some(InlineProfile {
-            name,
-            path,
-            contents: &data[end + 1..],
-        }))
-    }
-
     pub fn resolve(&self, current: ControllerFilter) -> Option<Update> {
-        if let Some(Client::TriggerPreview(preview)) = &self.client {
-            return Some(Update::TriggerPreview(*preview));
-        }
-        if let Some(Client::TriggerTravel(settings)) = &self.client {
-            return Some(Update::TriggerTravel(*settings));
-        }
-        if let Some(payload) = self.command_payload(SET_OUTPUTS_PREFIX) {
-            if !self.reload.allow_controller_switch {
-                self.rejected("pausing outputs requires automatic discovery");
-                return None;
+        match &self.action {
+            Action::Profile { options, .. } => options.take().map(Update::Profile),
+            Action::Selection {
+                controller_id,
+                model,
+                transport,
+            } => Some(Update::Selection(ControllerFilter {
+                controller_id: *controller_id,
+                model: model.unwrap_or(current.model),
+                transport: transport.unwrap_or(current.transport),
+            })),
+            Action::Emulation(target, enabled) => Some(Update::Emulation(*target, *enabled)),
+            Action::OutputsPaused(paused) => Some(Update::OutputsPaused(*paused)),
+            Action::Preview(PreviewCommand::Resistance(preview)) => {
+                Some(Update::TriggerPreview((*preview).into()))
             }
-            return match payload {
-                b"pause" => Some(Update::OutputsPaused(true)),
-                b"resume" => Some(Update::OutputsPaused(false)),
-                _ => {
-                    self.rejected("expected pause or resume");
-                    None
-                }
-            };
-        }
-        if let Some((target, payload)) = self.emulation_payload() {
-            return match payload {
-                b"on" => Some(Update::Emulation(target, true)),
-                b"off" => Some(Update::Emulation(target, false)),
-                _ => {
-                    self.rejected("expected on or off");
-                    None
-                }
-            };
-        }
-        if self.is_unload() {
-            return Some(Update::Profile(Box::default()));
-        }
-        if let Some(payload) = self.selection_payload() {
-            if !self.reload.allow_controller_switch {
-                self.rejected("controller selection changes require automatic discovery");
-                return None;
-            }
-            return match resolve_selection(payload, current) {
-                Ok(filter) => Some(Update::Selection(filter)),
-                Err(error) => {
-                    self.rejected(error);
-                    None
-                }
-            };
-        }
-        self.load()
-            .map(|profile| Update::Profile(Box::new(profile)))
-    }
-
-    fn load(&self) -> Option<RuntimeOptions> {
-        let inline = match self.inline_profile() {
-            Ok(inline) => inline,
-            Err(error) => {
-                self.rejected(error);
-                return None;
-            }
-        };
-        let profile = if let Some(InlineProfile { contents: data, .. }) = inline {
-            if data.len() > MAX_PROFILE_BYTES {
-                self.rejected("profile exceeds 64 KiB");
-                return None;
-            }
-            std::str::from_utf8(data)
-                .map_err(|err| err.into())
-                .and_then(profile::parse)
-        } else if let Some(path) = &self.reload.path {
-            profile::load(path)
-        } else {
-            self.reply(b"unavailable\n");
-            return None;
-        };
-        match profile {
-            Ok(profile) => {
-                let next = profile.bridge.unwrap_or_default();
-                let startup = self.reload.bridge_at_startup;
-                if next.rumble.is_some_and(|value| value != startup.rumble)
-                    || next
-                        .virtual_gamepad
-                        .is_some_and(|value| value != startup.virtual_gamepad)
-                {
-                    self.rejected(
-                        "profile changes to rumble or gamepad enablement require restarting JoyShockRust",
-                    );
-                    return None;
-                }
-                Some(profile)
-            }
-            Err(err) => {
-                self.rejected(err);
-                None
+            Action::Preview(PreviewCommand::Travel(preview)) => {
+                Some(Update::TriggerTravel(preview.map(Into::into)))
             }
         }
     }
@@ -386,165 +202,202 @@ impl Request<'_> {
             .unwrap_or(self.reload.bridge_at_startup.gamepad)
     }
 
-    pub fn applied(self, status: Option<&StatusSocket>) {
-        if self.command_payload(SET_OUTPUTS_PREFIX).is_some() {
-            self.reply(b"applied\n");
-            return;
-        }
-        if self.emulation_payload().is_some() {
-            eprintln!("Emulation setting updated from CLI");
-            self.reply(b"applied\n");
-            return;
-        }
-        if self.selection_payload().is_some() {
-            eprintln!("Controller selection updated from CLI");
-            self.reply(b"applied\n");
-            return;
-        }
-        self.reload.outcome.set(Outcome::Applied);
-        let (source, name, path) = if self.is_unload() {
-            eprintln!("Profile unloaded from CLI");
-            (ProfileSource::Defaults, None, None)
-        } else if matches!(self.client, Some(Client::Load(_, _))) {
-            eprintln!("Profile loaded from CLI");
-            let profile = self.inline_profile().ok().flatten();
-            let name = profile.as_ref().and_then(|profile| profile.name);
-            let path = profile.and_then(|profile| profile.path);
-            (ProfileSource::Loaded, name, path)
-        } else {
-            let path = self.reload.path.as_deref();
-            if let Some(path) = path {
-                eprintln!("Profile reloaded: {}", path.display());
+    pub fn applied(self, status: Option<&StatusSocket>) -> io::Result<()> {
+        let origin = match self.action {
+            Action::Profile { origin, .. } => origin,
+            action => {
+                match action {
+                    Action::Emulation(..) => eprintln!("Emulation setting updated from CLI"),
+                    Action::Selection { .. } => eprintln!("Controller selection updated from CLI"),
+                    _ => {}
+                }
+                self.reload.respond(self.reply.as_ref(), Reply::Applied);
+                return Ok(());
             }
-            (ProfileSource::Startup, path.and_then(Path::file_name), path)
         };
-        if let Some(selection) = self.reload.selection_path.as_deref() {
-            let selected = matches!(source, ProfileSource::Loaded)
-                .then_some(path)
-                .flatten();
-            if let Err(error) = profile::remember_selection(
-                selection,
-                selected,
-                matches!(source, ProfileSource::Defaults),
-            ) {
-                eprintln!(
-                    "Could not remember active profile {}: {error}",
-                    selection.display()
-                );
+
+        let (source, name, path) = match &origin {
+            ProfileOrigin::Defaults => {
+                eprintln!("Profile unloaded from CLI");
+                (ProfileSource::Defaults, None, None)
             }
-        }
+            ProfileOrigin::Inline { name, path } => {
+                eprintln!("Profile loaded from CLI");
+                (ProfileSource::Loaded, name.as_deref(), path.as_deref())
+            }
+            ProfileOrigin::Startup => {
+                let path = self.reload.path.as_deref();
+                if let Some(path) = path {
+                    eprintln!("Profile reloaded: {}", path.display());
+                }
+                (ProfileSource::Startup, path.and_then(Path::file_name), path)
+            }
+        };
         if let Some(status) = status {
             status.set_profile(source, name, path);
         }
-        self.reply(b"applied\n");
-    }
-    pub fn rejected(&self, err: impl Display) {
-        if self.emulation_payload().is_some() {
-            eprintln!("Emulation setting rejected: {err}");
-            self.reply(b"rejected\n");
-            return;
+        if let Some(selection) = &self.reload.selection_path {
+            let selected = match origin {
+                ProfileOrigin::Inline { path, .. } => path,
+                _ => None,
+            };
+            self.reload.worker.remember(
+                self.reply,
+                selection.clone(),
+                selected,
+                matches!(source, ProfileSource::Defaults),
+            )
+        } else {
+            self.reload.confirm_profile(self.reply.as_ref());
+            Ok(())
         }
-        if self.selection_payload().is_some() {
-            eprintln!("Controller selection rejected: {err}");
-            self.reply(b"rejected\n");
-            return;
-        }
-        self.reload.outcome.set(Outcome::Rejected);
-        if matches!(self.client, Some(Client::Load(_, _))) {
-            eprintln!("CLI profile rejected: {err}");
-        } else if let Some(path) = &self.reload.path {
-            eprintln!("Profile reload rejected ({}): {err}", path.display());
-        }
-        self.reply(b"rejected\n");
     }
 
-    fn reply(&self, response: &[u8]) {
-        match &self.client {
-            Some(Client::Reload(stream)) => {
-                let mut stream = stream;
-                let _ = stream.write_all(response);
+    pub fn rejected(&self, err: impl Display) {
+        match self.action {
+            Action::Profile { .. } => {
+                self.reload.reject_profile(self.reply.as_ref(), err);
+                self.reload.worker.finish();
+                return;
             }
-            Some(Client::Load(address, _)) => {
-                if let Some(socket) = &self.reload.load_socket {
-                    let _ = socket.send_to_addr(response, address);
+            Action::Emulation(..) => eprintln!("Emulation setting rejected: {err}"),
+            Action::Selection { .. } => eprintln!("Controller selection rejected: {err}"),
+            Action::OutputsPaused(_) => eprintln!("Virtual output update rejected: {err}"),
+            Action::Preview(_) => eprintln!("Preview rejected: {err}"),
+        }
+        self.reload.respond(self.reply.as_ref(), Reply::Rejected);
+    }
+}
+
+impl Reload {
+    fn respond(&self, reply: Option<&ReplyTo>, response: Reply) {
+        match reply {
+            Some(ReplyTo::Reload(stream)) => {
+                let mut stream = stream;
+                let _ = stream.write_all(response.bytes());
+            }
+            Some(ReplyTo::Datagram(address)) => {
+                if let Some(socket) = &self.load_socket {
+                    let _ = socket.send_to_addr(response.bytes(), address);
                 }
             }
-            Some(Client::TriggerPreview(_) | Client::TriggerTravel(_)) | None => {}
+            None => {}
+        }
+    }
+
+    fn confirm_profile(&self, reply: Option<&ReplyTo>) {
+        self.outcome.set(Outcome::Applied);
+        self.respond(reply, Reply::Applied);
+        self.worker.finish();
+    }
+
+    fn reject_profile(&self, reply: Option<&ReplyTo>, err: impl Display) {
+        self.outcome.set(Outcome::Rejected);
+        if matches!(reply, Some(ReplyTo::Datagram(_))) {
+            eprintln!("CLI profile rejected: {err}");
+        } else if let Some(path) = &self.path {
+            eprintln!("Profile reload rejected ({}): {err}", path.display());
+        }
+        self.respond(reply, Reply::Rejected);
+    }
+
+    fn queue_profile(&self, input: ProfileInput, mut reply: Option<ReplyTo>) -> io::Result<()> {
+        if !self.worker.try_queue(input, &mut reply) {
+            eprintln!("Profile request rejected: the profile worker queue is full");
+            self.respond(reply.as_ref(), Reply::Rejected);
+        }
+        self.worker.start_next()
+    }
+
+    fn selection_action(
+        &self,
+        id: &str,
+        model: Option<&str>,
+        transport: Option<&str>,
+    ) -> Result<Action, &'static str> {
+        if !self.allow_controller_switch {
+            return Err("controller selection changes require automatic discovery");
+        }
+        Ok(Action::Selection {
+            controller_id: parse_controller_selection(id)?,
+            model: model.map(ModelSelection::parse).transpose()?,
+            transport: transport.map(Selection::parse).transpose()?,
+        })
+    }
+
+    fn addressed_request(
+        &self,
+        address: SocketAddr,
+        data: &[u8],
+    ) -> io::Result<Option<Request<'_>>> {
+        let reply = Some(ReplyTo::Datagram(address));
+        let command = match AddressedCommand::decode(data) {
+            Ok(AddressedCommand::LoadProfile(profile)) => {
+                self.queue_profile(
+                    ProfileInput::Inline {
+                        name: profile.name.map(ToOwned::to_owned),
+                        path: profile.path.map(Path::to_path_buf),
+                        contents: profile.contents.to_vec(),
+                    },
+                    reply,
+                )?;
+                return Ok(None);
+            }
+            Ok(AddressedCommand::Control(command)) => command,
+            Err(DecodeError::Profile(error)) => {
+                self.queue_profile(ProfileInput::Invalid(error), reply)?;
+                return Ok(None);
+            }
+            Err(DecodeError::Command(error)) => {
+                eprintln!("Control command rejected: {error}");
+                self.respond(reply.as_ref(), Reply::Rejected);
+                return Ok(None);
+            }
+        };
+        let action = match command {
+            ControlCommand::UnloadProfile => {
+                self.queue_profile(ProfileInput::Defaults, reply)?;
+                return Ok(None);
+            }
+            ControlCommand::Emulation { target, enabled } => Ok(Action::Emulation(target, enabled)),
+            ControlCommand::OutputsPaused(paused) if self.allow_controller_switch => {
+                Ok(Action::OutputsPaused(paused))
+            }
+            ControlCommand::OutputsPaused(_) => Err("pausing outputs requires automatic discovery"),
+            ControlCommand::SelectController {
+                id,
+                model,
+                transport,
+            } => self.selection_action(id, model, transport),
+        };
+        match action {
+            Ok(action) => Ok(Some(Request {
+                reload: self,
+                reply,
+                action,
+            })),
+            Err(error) => {
+                eprintln!("{} rejected: {error}", command.operation());
+                self.respond(reply.as_ref(), Reply::Rejected);
+                Ok(None)
+            }
         }
     }
 }
 
 pub fn request(path: Option<&Path>) -> io::Result<()> {
-    let stream = status::connect(path, "reload.sock")?;
+    let stream = status::connect(path, RELOAD_SOCKET)?;
     let mut response = Vec::new();
     stream.take(32).read_to_end(&mut response)?;
-    check_reply(&response, "profile reload")
-}
-
-fn check_reply(response: &[u8], operation: &str) -> io::Result<()> {
-    match response {
-        b"applied\n" => Ok(()),
-        b"unavailable\n" => Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "no startup profile configured; use --load-profile PATH",
-        )),
-        b"rejected\n" => Err(io::Error::other(format!(
-            "{operation} rejected; see the bridge log for details"
-        ))),
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{operation} returned no valid result"),
-        )),
-    }
-}
-
-fn load_socket_path(reload_socket: &Path) -> PathBuf {
-    let mut path = reload_socket.as_os_str().to_owned();
-    path.push(".load");
-    path.into()
+    Reply::check(&response, "profile reload")
 }
 
 pub fn load_profile(source: &Path, reload_socket: Option<&Path>) -> io::Result<()> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NONBLOCK)
-        .open(source)
-        .map_err(|err| io::Error::new(err.kind(), format!("{}: {err}", source.display())))?;
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "expected a regular profile file",
-        ));
-    }
-    let mut profile = Vec::new();
-    file.take(MAX_PROFILE_BYTES as u64 + 1)
-        .read_to_end(&mut profile)?;
-    if profile.len() > MAX_PROFILE_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "profile exceeds 64 KiB",
-        ));
-    }
-
-    let absolute = std::path::absolute(source)?;
-    let path = absolute.as_os_str().as_bytes();
-    if path.len() > MAX_PROFILE_NAME_BYTES || absolute.file_name().is_none() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "invalid profile path",
-        ));
-    }
-    let mut payload =
-        Vec::with_capacity(LOAD_PROFILE_PATH_PREFIX.len() + path.len() + 1 + profile.len());
-    payload.extend_from_slice(LOAD_PROFILE_PATH_PREFIX);
-    payload.extend_from_slice(path);
-    payload.push(0);
-    payload.extend_from_slice(&profile);
-    send_update(&payload, reload_socket, "profile reload")
+    control_client(reload_socket)?.load_profile(source)
 }
 
 pub fn unload_profile(reload_socket: Option<&Path>) -> io::Result<()> {
-    send_update(UNLOAD_PROFILE_REQUEST, reload_socket, "profile unload")
+    control_client(reload_socket)?.send(ControlCommand::UnloadProfile)
 }
 
 pub fn set_emulation(
@@ -552,15 +405,11 @@ pub fn set_emulation(
     enabled: bool,
     reload_socket: Option<&Path>,
 ) -> io::Result<()> {
-    let mut payload = target.prefix().to_vec();
-    payload.extend_from_slice(if enabled { b"on" } else { b"off" });
-    send_update(&payload, reload_socket, "emulation update")
+    control_client(reload_socket)?.send(ControlCommand::Emulation { target, enabled })
 }
 
 pub fn set_outputs_paused(paused: bool, reload_socket: Option<&Path>) -> io::Result<()> {
-    let mut payload = SET_OUTPUTS_PREFIX.to_vec();
-    payload.extend_from_slice(if paused { b"pause" } else { b"resume" });
-    send_update(&payload, reload_socket, "virtual output update")
+    control_client(reload_socket)?.send(ControlCommand::OutputsPaused(paused))
 }
 
 pub fn parse_controller_selection(value: &str) -> Result<Option<ControllerId>, &'static str> {
@@ -573,77 +422,22 @@ pub fn parse_controller_selection(value: &str) -> Result<Option<ControllerId>, &
     }
 }
 
-fn resolve_selection(
-    payload: &[u8],
-    current: ControllerFilter,
-) -> Result<ControllerFilter, &'static str> {
-    let payload = std::str::from_utf8(payload).map_err(|_| "invalid controller selection")?;
-    let mut fields = payload.split('\n');
-    let controller_id = parse_controller_selection(fields.next().unwrap_or_default())?;
-    let model = fields
-        .next()
-        .filter(|value| !value.is_empty())
-        .map(ModelSelection::parse)
-        .transpose()?;
-    let transport = fields
-        .next()
-        .filter(|value| !value.is_empty())
-        .map(Selection::parse)
-        .transpose()?;
-    if fields.next().is_some() {
-        return Err("unexpected controller selection fields");
-    }
-    Ok(ControllerFilter {
-        controller_id,
-        model: model.unwrap_or(current.model),
-        transport: transport.unwrap_or(current.transport),
-    })
-}
-
 pub fn select_controller(
     id: Option<ControllerId>,
     model: Option<ModelSelection>,
     transport: Option<Selection>,
     reload_socket: Option<&Path>,
 ) -> io::Result<()> {
-    let mut payload = SELECT_CONTROLLER_PREFIX.to_vec();
-    if let Some(id) = id {
-        write!(payload, "{id}")?;
-    } else {
-        payload.extend_from_slice(b"any");
-    }
-    if model.is_some() || transport.is_some() {
-        write!(
-            payload,
-            "\n{}\n{}",
-            model.map_or("", ModelSelection::as_str),
-            transport.map_or("", Selection::as_str)
-        )?;
-    }
-    send_update(&payload, reload_socket, "controller selection")
+    let id = id.map(|id| id.to_string());
+    control_client(reload_socket)?.send(ControlCommand::SelectController {
+        id: id.as_deref().unwrap_or("any"),
+        model: model.map(ModelSelection::as_str),
+        transport: transport.map(Selection::as_str),
+    })
 }
 
-fn send_update(payload: &[u8], reload_socket: Option<&Path>, operation: &str) -> io::Result<()> {
-    let path = load_socket_path(&status::socket_path(reload_socket, "reload.sock")?);
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let id = format!("joyshockrust-profile-{}-{nonce}", process::id());
-    let socket = UnixDatagram::bind_addr(&SocketAddr::from_abstract_name(id.as_bytes())?)?;
-    socket.connect(&path).map_err(|err| {
-        io::Error::new(
-            err.kind(),
-            format!("could not connect to {}: {err}", path.display()),
-        )
-    })?;
-    let timeout = Some(Duration::from_secs(2));
-    socket.set_write_timeout(timeout)?;
-    socket.set_read_timeout(timeout)?;
-    socket.send(payload)?;
-    let mut response = [0; 32];
-    let len = socket.recv(&mut response)?;
-    check_reply(&response[..len], operation)
+fn control_client(reload_socket: Option<&Path>) -> io::Result<ControlClient> {
+    status::socket_path(reload_socket, RELOAD_SOCKET).map(ControlClient::new)
 }
 
 pub fn wait<'a>(
@@ -653,6 +447,19 @@ pub fn wait<'a>(
     feedback: Option<BorrowedFd<'_>>,
     deadline: Option<Instant>,
 ) -> io::Result<(PollFlags, Option<Request<'a>>, PollFlags)> {
+    if let Some(reload) = reload {
+        reload.worker.start_next()?;
+    }
+    let updates_fd = status.and_then(StatusSocket::updates_fd);
+    let preview_fd = status.and_then(StatusSocket::preview_fd);
+    let outcome = reload.map_or("unavailable", Reload::outcome);
+    let publish_at = status.and_then(|status| status.publish_updates(false, outcome));
+    let preview_at = status.and_then(|status| status.publish_preview(false));
+    let deadline = deadline
+        .into_iter()
+        .chain(publish_at)
+        .chain(preview_at)
+        .min();
     let listener = reload.and_then(|reload| reload.listener.as_ref());
     let load_socket = reload.and_then(|reload| reload.load_socket.as_ref());
     let mut descriptors = [
@@ -665,17 +472,23 @@ pub fn wait<'a>(
         PollFd::new(listener.map_or(fd, AsFd::as_fd), PollFlags::POLLIN),
         PollFd::new(feedback.unwrap_or(fd), PollFlags::POLLIN),
         PollFd::new(load_socket.map_or(fd, AsFd::as_fd), PollFlags::POLLIN),
+        PollFd::new(updates_fd.unwrap_or(fd), PollFlags::POLLIN),
+        PollFd::new(
+            reload.map_or(fd, |reload| reload.worker.wake.as_fd()),
+            PollFlags::POLLIN,
+        ),
+        PollFd::new(preview_fd.unwrap_or(fd), PollFlags::POLLIN),
     ];
-    let len = if load_socket.is_some() {
-        6
+    let len = if preview_fd.is_some() {
+        9
+    } else if reload.is_some() {
+        8
+    } else if updates_fd.is_some() {
+        7
     } else if feedback.is_some() {
         5
-    } else if listener.is_some() {
-        4
     } else if status.is_some() {
         3
-    } else if reload.is_some() {
-        2
     } else {
         1
     };
@@ -696,6 +509,64 @@ pub fn wait<'a>(
             Err(err) => return Err(err.into()),
         }
     }
+    if let Some(status) = status {
+        let flags = descriptors[2].revents().unwrap_or_else(PollFlags::empty);
+        if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
+            return Err(io::Error::other("status socket lost"));
+        }
+        if flags.contains(PollFlags::POLLIN) {
+            status.respond(outcome)?;
+        }
+        if updates_fd.is_some()
+            && descriptors[6]
+                .revents()
+                .unwrap_or_else(PollFlags::empty)
+                .contains(PollFlags::POLLIN)
+        {
+            status.publish_updates(true, outcome);
+        }
+        if preview_fd.is_some()
+            && descriptors[8]
+                .revents()
+                .is_some_and(|flags| flags.contains(PollFlags::POLLIN))
+        {
+            status.publish_preview(true);
+        }
+    }
+    let ready = descriptors[0].revents().unwrap_or_else(PollFlags::empty);
+    let feedback_ready = feedback
+        .and_then(|_| descriptors[4].revents())
+        .unwrap_or_else(PollFlags::empty);
+    if let Some(reload) = reload {
+        let flags = descriptors[7].revents().unwrap_or_else(PollFlags::empty);
+        if flags.contains(PollFlags::POLLIN) {
+            match reload.worker.receive()? {
+                Completion::Prepared(reply, Ok(PreparedProfile { options, origin })) => {
+                    let request = Request {
+                        reload,
+                        reply,
+                        action: Action::Profile {
+                            options: Cell::new(Some(options)),
+                            origin,
+                        },
+                    };
+                    return Ok((ready, Some(request), feedback_ready));
+                }
+                Completion::Prepared(reply, Err(error)) => {
+                    match error {
+                        PrepareError::Unavailable => {
+                            reload.respond(reply.as_ref(), Reply::Unavailable)
+                        }
+                        PrepareError::Rejected(err) => reload.reject_profile(reply.as_ref(), err),
+                    }
+                    reload.worker.finish();
+                }
+                Completion::Remembered(reply) => reload.confirm_profile(reply.as_ref()),
+            }
+        } else if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
+            return Err(io::Error::other("profile worker descriptor lost"));
+        }
+    }
     let mut requested = false;
     if let Some(reload) = reload {
         let flags = descriptors[1].revents().unwrap_or_else(PollFlags::empty);
@@ -706,16 +577,7 @@ pub fn wait<'a>(
             requested = reload.signal.read_signal()?.is_some();
         }
     }
-    if let Some(status) = status {
-        let flags = descriptors[2].revents().unwrap_or_else(PollFlags::empty);
-        if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
-            return Err(io::Error::other("status socket lost"));
-        }
-        if flags.contains(PollFlags::POLLIN) {
-            status.respond(reload.map_or("unavailable", Reload::outcome))?;
-        }
-    }
-    let mut client = None;
+    let mut reply = None;
     if let Some(listener) = listener {
         let flags = descriptors[3].revents().unwrap_or_else(PollFlags::empty);
         if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
@@ -725,7 +587,7 @@ pub fn wait<'a>(
             // One connection per wake leaves report processing a chance to run.
             match listener.accept() {
                 Ok((stream, _)) if stream.set_nonblocking(true).is_ok() => {
-                    client = Some(Client::Reload(stream))
+                    reply = Some(ReplyTo::Reload(stream))
                 }
                 Ok(_) => {}
                 Err(err)
@@ -739,37 +601,34 @@ pub fn wait<'a>(
             }
         }
     }
+    let Some(reload) = reload else {
+        return Ok((ready, None, feedback_ready));
+    };
+    if requested || reply.is_some() {
+        reload.queue_profile(ProfileInput::Startup, reply)?;
+        return Ok((ready, None, feedback_ready));
+    }
+
+    let mut request = None;
     if let Some(socket) = load_socket {
         let flags = descriptors[5].revents().unwrap_or_else(PollFlags::empty);
         if flags.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL) {
             return Err(io::Error::other("profile load socket lost"));
         }
-        if !requested && client.is_none() && flags.contains(PollFlags::POLLIN) {
-            let mut data = vec![
-                0;
-                LOAD_PROFILE_PATH_PREFIX.len()
-                    + MAX_PROFILE_NAME_BYTES
-                    + 1
-                    + MAX_PROFILE_BYTES
-                    + 1
-            ];
+        if flags.contains(PollFlags::POLLIN) {
+            // The extra byte distinguishes the largest supported message from an oversized one.
+            let mut data = vec![0; MAX_DATAGRAM_BYTES + 1];
             match socket.recv_from(&mut data) {
                 Ok((len, address)) if address.is_unnamed() => {
-                    if let Some(payload) = data[..len].strip_prefix(TRIGGER_PREVIEW_PREFIX)
-                        && let Ok(preview) = Preview::parse(payload)
-                    {
-                        client = Some(Client::TriggerPreview(preview));
-                    } else if let Some(settings) = data[..len]
-                        .strip_prefix(TRIGGER_TRAVEL_PREFIX)
-                        .and_then(trigger_travel::Settings::parse)
-                    {
-                        client = Some(Client::TriggerTravel(settings));
+                    if let Ok(preview) = PreviewCommand::decode(&data[..len]) {
+                        request = Some(Request {
+                            reload,
+                            reply: None,
+                            action: Action::Preview(preview),
+                        });
                     }
                 }
-                Ok((len, address)) => {
-                    data.truncate(len);
-                    client = Some(Client::Load(address, data));
-                }
+                Ok((len, address)) => request = reload.addressed_request(address, &data[..len])?,
                 Err(err)
                     if matches!(
                         err.kind(),
@@ -779,76 +638,65 @@ pub fn wait<'a>(
             }
         }
     }
-    let request = reload
-        .filter(|_| requested || client.is_some())
-        .map(|reload| Request { reload, client });
-    Ok((
-        descriptors[0].revents().unwrap_or_else(PollFlags::empty),
-        request,
-        feedback
-            .and_then(|_| descriptors[4].revents())
-            .unwrap_or_else(PollFlags::empty),
-    ))
+    Ok((ready, request, feedback_ready))
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
         os::{linux::net::SocketAddrExt, unix::net::SocketAddr},
-        process,
         time::Duration,
     };
 
     use super::*;
+    use std::process;
+
+    fn wait_for_request<'a>(input: &UnixStream, reload: &'a Reload) -> Request<'a> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let (_, request, _) =
+                wait(input.as_fd(), Some(reload), None, None, Some(deadline)).unwrap();
+            if let Some(request) = request {
+                return request;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for a prepared profile"
+            );
+        }
+    }
 
     #[test]
     fn reload_rejects_changes_to_bridge_settings() {
-        let reload = Reload {
-            selection_path: None,
-            path: Some(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml"),
+        let startup =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml");
+        let bridge = BridgeOptions {
+            rumble: true,
+            ..BridgeOptions::default()
+        };
+        assert!(profile_work::prepare(ProfileInput::Startup, Some(&startup), bridge).is_ok());
+
+        let inline = |data: &[u8]| ProfileInput::Inline {
+            name: None,
+            path: None,
+            contents: data.to_vec(),
+        };
+        assert!(matches!(
+            profile_work::prepare(
+                inline(b"version = 1\n[bridge]\nrumble = false\n"),
+                Some(&startup),
+                bridge,
             ),
-            bridge_at_startup: BridgeOptions {
-                rumble: true,
-                ..BridgeOptions::default()
-            },
-            allow_controller_switch: false,
-            signal: SignalFd::new(&SigSet::empty()).unwrap(),
-            listener: None,
-            load_socket: None,
-            outcome: Cell::new(Outcome::NotAttempted),
-        };
-        let request = Request {
-            reload: &reload,
-            client: None,
-        };
-        let address = SocketAddr::from_abstract_name("joyshockrust-reload-options-test").unwrap();
-        assert!(matches!(
-            request.resolve(ControllerFilter::default()),
-            Some(Update::Profile(_))
+            Err(PrepareError::Rejected(reason)) if reason.contains("require restarting")
         ));
-
-        let request = Request {
-            reload: &reload,
-            client: Some(Client::Load(
-                address.clone(),
-                b"version = 1\n[bridge]\nrumble = false\n".to_vec(),
-            )),
-        };
-        assert!(request.load().is_none());
-        assert_eq!(reload.outcome(), "rejected");
-
-        let request = Request {
-            reload: &reload,
-            client: Some(Client::Load(
-                address,
-                b"version = 1\n[bridge]\nrumble = true\nmodel = 'dualsense-edge'\n".to_vec(),
-            )),
-        };
-        assert!(matches!(
-            request.resolve(ControllerFilter::default()),
-            Some(Update::Profile(_))
-        ));
+        assert!(
+            profile_work::prepare(
+                inline(b"version = 1\n[bridge]\nrumble = true\nmodel = 'dualsense-edge'\n"),
+                Some(&startup),
+                bridge,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -862,22 +710,20 @@ mod tests {
             listener: None,
             load_socket: None,
             outcome: Cell::new(Outcome::NotAttempted),
+            worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let current = ControllerFilter {
             transport: Selection::Bluetooth,
             model: crate::discovery::ModelSelection::DualSenseEdge,
             controller_id: ControllerId::parse("00:11:22:33:44:55"),
         };
-        fn request<'a>(server: &'a Reload, payload: &[u8]) -> Request<'a> {
-            Request {
-                reload: server,
-                client: Some(Client::Load(
-                    SocketAddr::from_abstract_name("joyshockrust-select-test").unwrap(),
-                    [SELECT_CONTROLLER_PREFIX, payload].concat(),
-                )),
-            }
+        fn request<'a>(server: &'a Reload, payload: &[u8]) -> Option<Request<'a>> {
+            let address = SocketAddr::from_abstract_name("joyshockrust-select-test").unwrap();
+            server
+                .addressed_request(address, &[b"\0select-controller\n", payload].concat())
+                .unwrap()
         }
-        let change = request(&reload, b"aa:bb:cc:dd:ee:ff");
+        let change = request(&reload, b"aa:bb:cc:dd:ee:ff").unwrap();
         let Some(Update::Selection(filter)) = change.resolve(current) else {
             panic!("expected controller selection");
         };
@@ -887,29 +733,22 @@ mod tests {
         );
         assert_eq!(filter.transport, current.transport);
         assert_eq!(filter.model, current.model);
-        change.applied(None);
-        let Some(Update::Selection(cleared)) = request(&reload, b"any\nany\nauto").resolve(filter)
+        change.applied(None).unwrap();
+        let Some(Update::Selection(cleared)) =
+            request(&reload, b"any\nany\nauto").unwrap().resolve(filter)
         else {
             panic!("expected controller selection");
         };
         assert!(cleared.controller_id.is_none());
         assert_eq!(cleared.transport, Selection::Auto);
         assert_eq!(cleared.model, ModelSelection::Any);
-        assert!(
-            request(&reload, b"any\ninvalid\n")
-                .resolve(current)
-                .is_none()
-        );
-        assert!(
-            request(&reload, b"any\n\nusb\nextra")
-                .resolve(current)
-                .is_none()
-        );
-        assert!(request(&reload, b"invalid").resolve(current).is_none());
+        assert!(request(&reload, b"any\ninvalid\n").is_none());
+        assert!(request(&reload, b"any\n\nusb\nextra").is_none());
+        assert!(request(&reload, b"invalid").is_none());
         assert_eq!(reload.outcome(), "not_attempted");
 
         reload.allow_controller_switch = false;
-        assert!(request(&reload, b"any").resolve(current).is_none());
+        assert!(request(&reload, b"any").is_none());
     }
 
     #[test]
@@ -930,6 +769,14 @@ mod tests {
             listener: None,
             load_socket: Some(load_socket),
             outcome: Cell::new(Outcome::NotAttempted),
+            worker: Worker::new(
+                None,
+                BridgeOptions {
+                    rumble: true,
+                    ..BridgeOptions::default()
+                },
+            )
+            .unwrap(),
         };
         let client = UnixDatagram::bind_addr(
             &SocketAddr::from_abstract_name(format!("{base}-client")).unwrap(),
@@ -944,9 +791,7 @@ mod tests {
         client
             .send(b"version = 1\n[gyro]\nsensitivity_y = 2\n")
             .unwrap();
-        let (_, request, feedback) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
-        assert!(feedback.is_empty());
-        let request = request.unwrap();
+        let request = wait_for_request(&input, &reload);
         let current = ControllerFilter {
             transport: Selection::Bluetooth,
             model: crate::discovery::ModelSelection::DualSense,
@@ -956,7 +801,7 @@ mod tests {
             panic!("expected profile update");
         };
         assert!(next.gyro.is_some());
-        request.applied(None);
+        request.applied(None).unwrap();
         let mut reply = [0; 32];
         let len = client.recv(&mut reply).unwrap();
         assert_eq!(&reply[..len], b"applied\n");
@@ -965,10 +810,9 @@ mod tests {
         client
             .send(b"version = 1\n[bridge]\ntransport = 'usb'\nmodel = 'dualsense-edge'\ncontroller_id = '02:00:00:00:00:01'\nrumble = true\n")
             .unwrap();
-        let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
-        let request = request.unwrap();
+        let request = wait_for_request(&input, &reload);
         assert!(matches!(request.resolve(current), Some(Update::Profile(_))));
-        request.applied(None);
+        request.applied(None).unwrap();
         let len = client.recv(&mut reply).unwrap();
         assert_eq!(&reply[..len], b"applied\n");
     }
@@ -990,6 +834,7 @@ mod tests {
             listener: None,
             load_socket: Some(load_socket),
             outcome: Cell::new(Outcome::Applied),
+            worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let client = UnixDatagram::unbound().unwrap();
         let (_sender, input) = UnixStream::pair().unwrap();
@@ -1041,6 +886,7 @@ mod tests {
         ));
         assert!(read(b"\0preview-trigger-travel\n\x02\x2d\x23\x5f\x55").is_none());
         assert!(read(b"version = 1\n").is_none());
+        assert!(read(b"\0set-gamepad\noff").is_none());
         assert_eq!(reload.outcome(), "applied");
     }
 
@@ -1051,15 +897,18 @@ mod tests {
                 .unwrap();
         let listener = UnixListener::bind_addr(&address).unwrap();
         listener.set_nonblocking(true).unwrap();
+        let startup =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../profiles/gyro-except-l2.toml");
         let reload = Reload {
             selection_path: None,
-            path: Some(PathBuf::from("/dev/null")),
+            path: Some(startup.clone()),
             bridge_at_startup: BridgeOptions::default(),
             allow_controller_switch: false,
             signal: SignalFd::new(&SigSet::empty()).unwrap(),
             listener: Some(listener),
             load_socket: None,
             outcome: Cell::new(Outcome::NotAttempted),
+            worker: Worker::new(Some(startup), BridgeOptions::default()).unwrap(),
         };
         let (_sender, input) = UnixStream::pair().unwrap();
         let mut first = UnixStream::connect_addr(&address).unwrap();
@@ -1070,18 +919,17 @@ mod tests {
                 .unwrap();
         }
 
-        let (ready, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
-        assert!(ready.is_empty());
-        assert!(request.unwrap().load().is_none());
-        let mut response = String::new();
-        first.read_to_string(&mut response).unwrap();
-        assert_eq!(response, "rejected\n");
-
-        let (_, request, _) = wait(input.as_fd(), Some(&reload), None, None, None).unwrap();
-        request.unwrap().applied(None);
-        response.clear();
-        second.read_to_string(&mut response).unwrap();
-        assert_eq!(response, "applied\n");
+        for client in [&mut first, &mut second] {
+            let request = wait_for_request(&input, &reload);
+            assert!(matches!(
+                request.resolve(ControllerFilter::default()),
+                Some(Update::Profile(_))
+            ));
+            request.applied(None).unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            assert_eq!(response, "applied\n");
+        }
     }
 
     #[test]
@@ -1103,6 +951,7 @@ mod tests {
             listener: None,
             load_socket: Some(load_socket),
             outcome: Cell::new(Outcome::NotAttempted),
+            worker: Worker::new(None, BridgeOptions::default()).unwrap(),
         };
         let client = UnixDatagram::bind_addr(
             &SocketAddr::from_abstract_name(format!(
@@ -1113,7 +962,7 @@ mod tests {
         )
         .unwrap();
         client.connect_addr(&address).unwrap();
-        client.send(&[SET_GAMEPAD_PREFIX, b"on"].concat()).unwrap();
+        client.send(b"\0set-gamepad\non").unwrap();
 
         let (old_peer, old_feedback) = UnixStream::pair().unwrap();
         let feedback = RefCell::new(Some(OwnedFd::from(old_feedback)));
@@ -1145,7 +994,7 @@ mod tests {
                         Some(Update::Emulation(OutputTarget::Gamepad, true))
                     ));
                     feedback.replace(new_feedback.take());
-                    request.applied(None);
+                    request.applied(None).unwrap();
                     Ok(std::ops::ControlFlow::Continue(()))
                 }
                 crate::SessionEvent::Feedback => {

@@ -1,15 +1,16 @@
+use joyshockrust_ipc::telemetry::{GyroSpeed, ImuReading, StickTravel, TouchPoints, TriggerTravel};
+use joyshockrust_ipc::{
+    STATUS_SOCKET,
+    status::{Field, STATUS_VERSION, encode_profile_path, write_field},
+};
 use std::{
     cell::{Cell, RefCell},
-    env,
     ffi::OsStr,
     fmt::Display,
     io::{self, Read, Write},
     os::{
         fd::{AsFd, BorrowedFd},
-        unix::{
-            ffi::OsStrExt,
-            net::{UnixListener, UnixStream},
-        },
+        unix::net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -22,10 +23,12 @@ use joyshockrust_input::{
 };
 use joyshockrust_motion::Calibration;
 
-use crate::{discovery::ControllerFilter, hidraw::Identity};
+use crate::{discovery::ControllerFilter, hidraw::Identity, status_updates::Publisher};
 
 pub struct StatusSocket {
     listener: UnixListener,
+    publisher: Option<Publisher>,
+    preview: Option<crate::preview_updates::Publisher>,
     snapshot: Cell<Snapshot>,
     reports: Cell<ReportStats>,
     sessions: Cell<SessionCounts>,
@@ -51,6 +54,25 @@ struct ImuSnapshot {
     sample: Option<RawImuSample>,
     bias: Calibration,
     projected_interval: Option<([f32; 2], Duration)>,
+}
+
+impl ImuSnapshot {
+    fn reading(self) -> Option<(ImuReading, GyroSpeed)> {
+        let sample = self.factory?.convert(self.sample?);
+        let gyro_dps = std::array::from_fn(|i| sample.gyro_dps[i] - self.bias.gyro_bias_dps[i]);
+        let [gx, gy, _] = gyro_dps;
+        let speed = self.projected_interval.map_or_else(
+            || f64::from(gx).hypot(f64::from(gy)),
+            |([x, y], duration)| f64::from(x).hypot(f64::from(y)) / duration.as_secs_f64(),
+        );
+        Some((
+            ImuReading {
+                gyro_dps,
+                accel_g: sample.accel_g,
+            },
+            GyroSpeed(speed),
+        ))
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -119,6 +141,8 @@ impl StatusSocket {
         listener.set_nonblocking(true)?;
         Ok(Self {
             listener,
+            publisher: None,
+            preview: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),
@@ -143,63 +167,110 @@ impl StatusSocket {
         self.listener.as_fd()
     }
 
+    pub fn enable_updates(&mut self, path: &Path) -> io::Result<()> {
+        self.publisher = Some(Publisher::start(path)?);
+        Ok(())
+    }
+
+    pub fn enable_preview(&mut self, path: &Path) -> io::Result<()> {
+        let preview = crate::preview_updates::Publisher::start(path)?;
+        preview.set_session(self.snapshot.get().identity);
+        self.preview = Some(preview);
+        Ok(())
+    }
+
+    pub fn preview_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.preview
+            .as_ref()
+            .map(crate::preview_updates::Publisher::wake_fd)
+    }
+
+    pub fn publish_preview(&self, wake: bool) -> Option<Instant> {
+        self.preview
+            .as_ref()?
+            .publish(wake, || self.imu.get().reading())
+    }
+
+    pub fn observe_preview(&self, controls: Controls, contacts: [Option<TouchContact>; 2]) {
+        if let Some(preview) = &self.preview {
+            preview.observe(controls, contacts);
+        }
+    }
+
+    pub fn updates_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.publisher.as_ref().map(Publisher::wake_fd)
+    }
+
+    pub fn publish_updates(&self, wake: bool, last_reload: &'static str) -> Option<Instant> {
+        self.publisher
+            .as_ref()?
+            .publish(wake, last_reload, || self.render(last_reload))
+    }
+
+    fn mark_changed(&self) {
+        if let Some(publisher) = &self.publisher {
+            publisher.changed();
+        }
+    }
+
     pub fn set_filter(&self, filter: ControllerFilter) {
         self.filter.set(filter);
+        self.mark_changed();
     }
 
     pub fn set_profile(&self, source: ProfileSource, name: Option<&OsStr>, path: Option<&Path>) {
         self.profile_source.set(source);
         self.profile_name
             .replace(name.map(|name| name.to_string_lossy().escape_debug().to_string()));
-        self.profile_path_hex
-            .replace(
-                path.and_then(|path| std::path::absolute(path).ok())
-                    .map(|path| {
-                        use std::fmt::Write;
-                        let bytes = path.as_os_str().as_bytes();
-                        let mut encoded = String::with_capacity(bytes.len() * 2);
-                        for byte in bytes {
-                            let _ = write!(encoded, "{byte:02x}");
-                        }
-                        encoded
-                    }),
-            );
+        self.profile_path_hex.replace(
+            path.and_then(|path| std::path::absolute(path).ok())
+                .map(|path| encode_profile_path(&path)),
+        );
+        self.mark_changed();
     }
 
     pub fn set_active_hidraw(&self, path: &Path) {
         // Preserve a single key/value line even when a manual device path includes control characters.
         self.active_hidraw
             .replace(Some(path.to_string_lossy().escape_debug().to_string()));
+        self.mark_changed();
     }
 
     pub fn set_gamepad_kind(&self, kind: crate::gamepad::OutputKind) {
         self.gamepad_kind.set(kind);
+        self.mark_changed();
     }
 
     pub fn set_gamepad_enabled(&self, enabled: bool) {
         self.gamepad_enabled.set(enabled);
+        self.mark_changed();
     }
 
     pub fn set_emulation_master(&self, enabled: bool) {
         self.emulation_master_enabled.set(enabled);
+        self.mark_changed();
     }
 
     pub fn set_gyro_override(&self, enabled: Option<bool>) {
         self.gyro_override.set(enabled);
+        self.mark_changed();
     }
 
     pub fn set_gamepad_device(&self, device: Option<&mut evdev::uinput::VirtualDevice>) {
         self.gamepad_sysfs
             .replace(device.and_then(|device| device.get_syspath().ok()));
+        self.mark_changed();
     }
 
     pub fn set_touchpad_policy(&self, requested: bool, grabbed: bool) {
         self.touchpad_grab_requested.set(requested);
         self.touchpad_grabbed.set(grabbed);
+        self.mark_changed();
     }
 
     pub fn set_outputs_paused(&self, paused: bool) {
         self.outputs_paused.set(paused);
+        self.mark_changed();
     }
 
     pub fn update(&self, identity: Option<Identity>, gyro_configured: bool) {
@@ -210,6 +281,9 @@ impl StatusSocket {
         }
         let mut snapshot = self.snapshot.get();
         if snapshot.identity != identity {
+            if let Some(preview) = &self.preview {
+                preview.set_session(identity);
+            }
             let mut sessions = self.sessions.get();
             sessions.ended += u64::from(snapshot.identity.is_some());
             sessions.started += u64::from(identity.is_some());
@@ -221,6 +295,7 @@ impl StatusSocket {
         snapshot.identity = identity;
         snapshot.gyro_configured = gyro_configured;
         self.snapshot.set(snapshot);
+        self.mark_changed();
     }
 
     pub fn observe_reports(&self, decoded: u64, rejected: u64) {
@@ -232,6 +307,7 @@ impl StatusSocket {
             reports.baseline = Some((Instant::now(), reports.decoded));
         }
         self.reports.set(reports);
+        self.mark_changed();
     }
 
     pub fn set_imu_calibration(&self, factory: Option<FactoryCalibration>, bias: Calibration) {
@@ -301,7 +377,7 @@ impl StatusSocket {
         self.reports.set(reports);
     }
 
-    pub fn respond(&self, last_reload: &str) -> io::Result<()> {
+    fn render(&self, last_reload: &str) -> String {
         let snapshot = self.snapshot.get();
         let controller = if snapshot.identity.is_some() {
             "connected"
@@ -360,60 +436,122 @@ impl StatusSocket {
         let outputs_paused = self.outputs_paused.get();
         let gyro_selected = self.gyro_override.get().unwrap_or(snapshot.gyro_configured);
         let gyro_enabled = master_enabled && gyro_selected;
-        let mut response = format!(
-            "version=1\ncontroller={controller}\ngyro_configured={}\nlast_reload={last_reload}\ntransport={transport}\nmodel={model}\nbattery_state={battery_state}\nbattery_percent={percent}\nreports_decoded={}\nreports_rejected={}\nreport_rate_hz={rate}\nreport_full_batches={}\nuinput_gamepad_batches={}\nuinput_mouse_batches={}\ncontroller_sessions_started={}\ncontroller_sessions_ended={}\nselected_transport={selected_transport}\nselected_model={selected_model}\ncontroller_id_configured={}\nuinput_keyboard_batches={}\nuinput_mouse_button_batches={}\nprofile_source={profile_source}\nactive_hidraw={active_hidraw}\nvirtual_gamepad_enabled={gamepad_enabled}\nvirtual_gamepad_kind={gamepad_kind}\nvirtual_gamepad_sysfs={gamepad_sysfs}\nnative_touchpad_grabbed={touchpad_grabbed}\nnative_touchpad_grab_requested={touchpad_grab_requested}\noutputs_paused={outputs_paused}\nprofile_name={profile_name}\ngyro_mouse_enabled={gyro_enabled}\nemulation_master_enabled={master_enabled}\nvirtual_gamepad_selected={gamepad_selected}\ngyro_mouse_selected={gyro_selected}\n",
+        let mut response = String::with_capacity(1024);
+        write_field(&mut response, Field::Version, STATUS_VERSION);
+        write_field(&mut response, Field::Controller, controller);
+        write_field(
+            &mut response,
+            Field::GyroConfigured,
             snapshot.gyro_configured,
-            reports.decoded,
-            reports.rejected,
+        );
+        write_field(&mut response, Field::LastReload, last_reload);
+        write_field(&mut response, Field::Transport, transport);
+        write_field(&mut response, Field::Model, model);
+        write_field(&mut response, Field::BatteryState, battery_state);
+        write_field(&mut response, Field::BatteryPercent, percent);
+        write_field(&mut response, Field::ReportsDecoded, reports.decoded);
+        write_field(&mut response, Field::ReportsRejected, reports.rejected);
+        write_field(&mut response, Field::ReportRateHz, rate);
+        write_field(
+            &mut response,
+            Field::ReportFullBatches,
             reports.full_batches,
+        );
+        write_field(
+            &mut response,
+            Field::UinputGamepadBatches,
             reports.gamepad_batches,
+        );
+        write_field(
+            &mut response,
+            Field::UinputMouseBatches,
             reports.mouse_batches,
+        );
+        write_field(
+            &mut response,
+            Field::ControllerSessionsStarted,
             sessions.started,
+        );
+        write_field(
+            &mut response,
+            Field::ControllerSessionsEnded,
             sessions.ended,
+        );
+        write_field(&mut response, Field::SelectedTransport, selected_transport);
+        write_field(&mut response, Field::SelectedModel, selected_model);
+        write_field(
+            &mut response,
+            Field::ControllerIdConfigured,
             filter.controller_id.is_some(),
+        );
+        write_field(
+            &mut response,
+            Field::UinputKeyboardBatches,
             reports.keyboard_batches,
+        );
+        write_field(
+            &mut response,
+            Field::UinputMouseButtonBatches,
             reports.mouse_button_batches,
         );
+        write_field(&mut response, Field::ProfileSource, profile_source);
+        write_field(&mut response, Field::ActiveHidraw, active_hidraw);
+        write_field(&mut response, Field::VirtualGamepadEnabled, gamepad_enabled);
+        write_field(&mut response, Field::VirtualGamepadKind, gamepad_kind);
+        write_field(&mut response, Field::VirtualGamepadSysfs, gamepad_sysfs);
+        write_field(
+            &mut response,
+            Field::NativeTouchpadGrabbed,
+            touchpad_grabbed,
+        );
+        write_field(
+            &mut response,
+            Field::NativeTouchpadGrabRequested,
+            touchpad_grab_requested,
+        );
+        write_field(&mut response, Field::OutputsPaused, outputs_paused);
+        write_field(&mut response, Field::ProfileName, profile_name);
+        write_field(&mut response, Field::GyroMouseEnabled, gyro_enabled);
+        write_field(&mut response, Field::EmulationMasterEnabled, master_enabled);
+        write_field(
+            &mut response,
+            Field::VirtualGamepadSelected,
+            gamepad_selected,
+        );
+        write_field(&mut response, Field::GyroMouseSelected, gyro_selected);
         if let Some(path) = self.profile_path_hex.borrow().as_deref() {
-            use std::fmt::Write;
-            let _ = writeln!(response, "profile_path_hex={path}");
+            write_field(&mut response, Field::ProfilePathHex, path);
         }
-        let imu = self.imu.get();
-        if let (Some(factory), Some(raw)) = (imu.factory, imu.sample) {
-            use std::fmt::Write;
-            let sample = factory.convert(raw);
-            let [gx, gy, gz] =
-                std::array::from_fn(|i| sample.gyro_dps[i] - imu.bias.gyro_bias_dps[i]);
-            let [ax, ay, az] = sample.accel_g;
-            let _ = writeln!(
-                response,
-                "imu={gx:.4},{gy:.4},{gz:.4},{ax:.4},{ay:.4},{az:.4}"
-            );
-            let speed = imu.projected_interval.map_or_else(
-                || f64::from(gx).hypot(f64::from(gy)),
-                |([x, y], duration)| f64::from(x).hypot(f64::from(y)) / duration.as_secs_f64(),
-            );
-            let _ = writeln!(response, "gyro_speed_dps={speed:.4}");
+        if let Some((imu, speed)) = self.imu.get().reading() {
+            write_field(&mut response, Field::Imu, imu);
+            write_field(&mut response, Field::GyroSpeedDps, speed);
         }
         if let Some(sticks) = snapshot.sticks {
-            use std::fmt::Write;
-            let [left, right] =
-                sticks.map(|stick| 100.0 * f64::from(stick.x).hypot(f64::from(stick.y)).min(1.0));
-            let _ = writeln!(response, "stick_travel={left:.4},{right:.4}");
+            write_field(
+                &mut response,
+                Field::StickTravel,
+                StickTravel::from_sticks(sticks),
+            );
         }
         if let Some([left, right]) = snapshot.triggers {
-            use std::fmt::Write;
-            let _ = writeln!(response, "trigger_travel={left:.6},{right:.6}");
+            write_field(
+                &mut response,
+                Field::TriggerTravel,
+                TriggerTravel([f64::from(left), f64::from(right)]),
+            );
         }
         if let Some(contacts) = snapshot.touch_contacts {
-            use std::fmt::Write;
-            let _ = write!(response, "touch_contacts=");
-            for (index, contact) in contacts.into_iter().flatten().enumerate() {
-                let separator = if index == 0 { "" } else { ";" };
-                let _ = write!(response, "{separator}{},{}", contact.x, contact.y);
-            }
-            response.push('\n');
+            write_field(
+                &mut response,
+                Field::TouchContacts,
+                TouchPoints(contacts.map(|point| point.map(|point| (point.x, point.y)))),
+            );
         }
+        response
+    }
+
+    pub fn respond(&self, last_reload: &str) -> io::Result<()> {
+        let response = self.render(last_reload);
         // Bound work per wakeup. Clients receive one snapshot and EOF.
         for _ in 0..8 {
             match self.listener.accept() {
@@ -438,7 +576,7 @@ impl StatusSocket {
 }
 
 pub fn query(path: Option<&Path>, mut output: impl Write) -> io::Result<()> {
-    let stream = connect(path, "status.sock")?;
+    let stream = connect(path, STATUS_SOCKET)?;
     // Allow a full escaped Linux path in the active_hidraw field.
     io::copy(&mut stream.take(64 * 1024), &mut output)?;
     Ok(())
@@ -448,12 +586,8 @@ pub(crate) fn socket_path(path: Option<&Path>, socket_name: &str) -> io::Result<
     if let Some(path) = path {
         return Ok(path.to_path_buf());
     }
-    let runtime = env::var_os("XDG_RUNTIME_DIR")
-        .filter(|dir| !dir.is_empty())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
-    Ok(PathBuf::from(runtime)
-        .join("joyshockrust")
-        .join(socket_name))
+    joyshockrust_config::paths::runtime_socket(socket_name, false)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))
 }
 
 pub(crate) fn connect(path: Option<&Path>, socket_name: &str) -> io::Result<UnixStream> {
@@ -604,6 +738,8 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let status = StatusSocket {
             listener,
+            publisher: None,
+            preview: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),
@@ -712,6 +848,84 @@ mod tests {
     }
 
     #[test]
+    fn status_subscription_observes_reports_without_interrupting_a_batch() {
+        use joyshockrust_ipc::stream::{Topic, read_status};
+
+        let path = std::env::temp_dir().join(format!("jsr-batch-watch-{}.sock", process::id()));
+        let mut status = StatusSocket::bind(&path).unwrap();
+        status.enable_updates(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let identity = Identity {
+            model: DeviceModel::DualSenseEdge,
+            transport: Transport::Usb,
+        };
+        status.update(Some(identity), false);
+
+        let (sender, receiver) = UnixDatagram::pair().unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let expected = crate::REPORT_BATCH_LIMIT * 2;
+        let mut frame = [0; 64];
+        frame[0] = 1;
+        for counter in 0..expected {
+            frame[7] = counter as u8;
+            sender.send(&frame).unwrap();
+        }
+        let mut slow = UnixStream::connect(Topic::Status.socket_path(&path)).unwrap();
+        slow.write_all(&Topic::Status.subscribe(3)[..3]).unwrap();
+        let mut client = UnixStream::connect(Topic::Status.socket_path(&path)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        client.write_all(&Topic::Status.subscribe(4)).unwrap();
+        let feed = std::thread::spawn(move || {
+            loop {
+                let (_, reply) = read_status(&mut client, 4).unwrap();
+                let reports: u64 = Field::ReportsDecoded
+                    .value(&reply)
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!(reports.is_multiple_of(crate::REPORT_BATCH_LIMIT));
+                if reports == expected {
+                    break;
+                }
+                assert!(reports < expected);
+            }
+            frame[7] = expected as u8;
+            sender.send(&frame).unwrap();
+        });
+        let stop_at = Instant::now() + Duration::from_secs(4);
+        let mut input = File::from(OwnedFd::from(receiver));
+        let mut published = 0;
+        crate::forward_reports(
+            &mut input,
+            identity,
+            None,
+            Some(&status),
+            None,
+            crate::ReportTimers {
+                stop_at: Some(stop_at),
+                ..Default::default()
+            },
+            |event| {
+                let crate::SessionEvent::Report(report) = event else {
+                    unreachable!()
+                };
+                assert_eq!(u64::from(report.counter), published);
+                published += 1;
+                Ok(if published > expected {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                })
+            },
+        )
+        .unwrap();
+        feed.join().unwrap();
+        assert_eq!(published, expected + 1);
+    }
+
+    #[test]
     fn status_queries_are_served_between_full_report_batches() {
         let name = format!("joyshockrust-full-batches-test-{}", process::id());
         let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
@@ -719,6 +933,8 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let status = StatusSocket {
             listener,
+            publisher: None,
+            preview: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),
@@ -816,6 +1032,8 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let status = StatusSocket {
             listener,
+            publisher: None,
+            preview: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),

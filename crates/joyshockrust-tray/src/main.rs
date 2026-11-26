@@ -1,7 +1,22 @@
+use joyshockrust_config::{
+    controller::{ModelSelection, Selection},
+    paths::{self, APP_DIRECTORY, PROFILE_FILE, PROFILES_DIRECTORY},
+};
+use joyshockrust_ipc::{
+    RELOAD_SOCKET, STATUS_SOCKET,
+    control::{ControlCommand, OutputTarget},
+    inventory::{Access, Controller},
+    status::{Field, STATUS_VERSION, decode_profile_path, hidraw_device_name},
+    stream::{self, Stamp, Topic},
+    unix::{
+        ControlClient,
+        subscriptions::{Subscription, read_inventory},
+    },
+};
+
 use std::{
-    env, fs,
-    io::{self, Read},
-    os::unix::{ffi::OsStringExt, net::UnixStream},
+    env, fs, io,
+    os::unix::net::UnixStream,
     path::PathBuf,
     process::{Child, Command},
     sync::mpsc,
@@ -19,49 +34,7 @@ const DESKTOP_ID: &str = "io.github.aapokaapo.JoyShockRust.desktop";
 const DESKTOP_ENTRY: &str =
     include_str!("../../../dist/desktop/io.github.aapokaapo.JoyShockRust.desktop");
 const REFRESH: Duration = Duration::from_secs(1);
-const INVENTORY_REFRESH: Duration = Duration::from_secs(4);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Controller {
-    node: String,
-    id: String,
-    model: &'static str,
-    transport: &'static str,
-}
-
-impl Controller {
-    fn from_inventory(line: &str) -> Option<Self> {
-        let (node, description) = line.split_once(": ")?;
-        let (description, id) = description.split_once(", controller_id=")?;
-        let suffix = node.strip_prefix("/dev/hidraw")?;
-        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        if id == "unavailable" {
-            return None;
-        }
-        let (controller, _) = description.split_once(", ")?;
-        let (transport, model) = controller.split_once(' ')?;
-        let (transport, model) = (
-            match transport {
-                "wired" => "usb",
-                "Bluetooth" => "bluetooth",
-                _ => return None,
-            },
-            match model {
-                "DualSense" => "dualsense",
-                "DualSense Edge" => "dualsense-edge",
-                _ => return None,
-            },
-        );
-        Some(Self {
-            node: node.into(),
-            id: id.into(),
-            model,
-            transport,
-        })
-    }
-}
+const PROFILE_REFRESH: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Status {
@@ -80,27 +53,22 @@ struct Status {
 
 impl Status {
     fn parse(reply: &str) -> Option<Self> {
-        let raw_field = |key| {
-            reply
-                .lines()
-                .filter_map(|line| line.split_once('='))
-                .find_map(|(name, value)| (name == key).then_some(value))
-        };
+        let raw_field = |key: Field| key.value(reply);
         let field = |key| raw_field(key).filter(|&value| value != "none");
-        if field("version") != Some("1") {
+        if field(Field::Version) != Some(STATUS_VERSION) {
             return None;
         }
-        let connected = match field("controller")? {
+        let connected = match field(Field::Controller)? {
             "connected" => true,
             "waiting" => false,
             _ => return None,
         };
-        let model = match field("model") {
+        let model = match field(Field::Model) {
             Some("dualsense") => "DualSense",
             Some("dualsense_edge") => "DualSense Edge",
             _ => "Controller",
         };
-        let transport = field("transport").filter(|_| connected);
+        let transport = field(Field::Transport).filter(|_| connected);
         let connection_icon = match transport {
             Some("usb") => "drive-harddisk-usb-symbolic",
             Some("bluetooth") => "bluetooth-symbolic",
@@ -112,14 +80,14 @@ impl Status {
             "No active controller"
         }
         .into();
-        let rate = field("report_rate_hz")
+        let rate = field(Field::ReportRateHz)
             .filter(|_| connected)
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|value| value.is_finite() && *value >= 0.0)
             .map_or_else(|| "—".into(), |rate| format!("{rate:.1} Hz"));
-        let battery = match field("battery_state").filter(|_| transport == Some("bluetooth")) {
+        let battery = match field(Field::BatteryState).filter(|_| transport == Some("bluetooth")) {
             Some("discharging") => Some(
-                field("battery_percent")
+                field(Field::BatteryPercent)
                     .and_then(|value| value.parse::<u8>().ok())
                     .filter(|&value| value <= 100)
                     .map_or_else(
@@ -135,13 +103,13 @@ impl Status {
             Some("not_charging") => Some("🔋⏸".into()),
             _ => None,
         };
-        let fallback_profile = match field("profile_source") {
+        let fallback_profile = match field(Field::ProfileSource) {
             Some("loaded") => "Loaded profile",
             Some("startup") => "Startup profile",
             Some("command_line") => "Command-line mappings",
             _ => "Default mappings",
         };
-        let profile = raw_field("profile_name")
+        let profile = raw_field(Field::ProfileName)
             .filter(|name| !name.is_empty())
             .unwrap_or(fallback_profile);
         let enabled = |key| field(key).and_then(|value| value.parse::<bool>().ok());
@@ -150,37 +118,25 @@ impl Status {
             connection_icon,
             rate,
             battery,
-            active_node: field("active_hidraw")
+            active_node: field(Field::ActiveHidraw)
                 .filter(|_| connected)
                 .map(str::to_owned),
             profile: profile.into(),
-            active_profile: field("profile_path_hex").and_then(decode_profile_path),
-            outputs_paused: field("outputs_paused") == Some("true"),
-            emulation_master: enabled("emulation_master_enabled"),
-            gamepad_selected: enabled("virtual_gamepad_selected")
-                .or_else(|| enabled("virtual_gamepad_enabled")),
-            gyro_mouse_selected: enabled("gyro_mouse_selected")
-                .or_else(|| enabled("gyro_mouse_enabled")),
+            active_profile: field(Field::ProfilePathHex).and_then(decode_profile_path),
+            outputs_paused: field(Field::OutputsPaused) == Some("true"),
+            emulation_master: enabled(Field::EmulationMasterEnabled),
+            gamepad_selected: enabled(Field::VirtualGamepadSelected)
+                .or_else(|| enabled(Field::VirtualGamepadEnabled)),
+            gyro_mouse_selected: enabled(Field::GyroMouseSelected)
+                .or_else(|| enabled(Field::GyroMouseEnabled)),
         })
     }
-}
-
-fn decode_profile_path(hex: &str) -> Option<PathBuf> {
-    let (chunks, remainder) = hex.as_bytes().as_chunks::<2>();
-    if !remainder.is_empty() {
-        return None;
-    }
-    let bytes: Vec<u8> = chunks
-        .iter()
-        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
-        .collect::<Option<_>>()?;
-    let path = PathBuf::from(std::ffi::OsString::from_vec(bytes));
-    path.is_absolute().then_some(path)
 }
 
 #[derive(Clone, Debug)]
 enum Action {
     Select(Controller),
+    DesktopChanged,
     AutoSelect,
     Load(PathBuf),
     Edit,
@@ -188,7 +144,7 @@ enum Action {
     CalibrateGyro,
     Unload,
     ResumeOutputs,
-    SetEmulation(&'static str, bool),
+    SetEmulation(OutputTarget, bool),
     Start,
     Autostart(bool),
     Quit,
@@ -197,7 +153,7 @@ enum Action {
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 struct TrayState {
     status: Option<Status>,
-    inventory: Vec<Controller>,
+    inventory: Option<Vec<Controller>>,
     profiles: Vec<PathBuf>,
     autostart: bool,
     calibrating: bool,
@@ -279,27 +235,36 @@ impl ksni::Tray for Tray {
             menu.push(item("Resume virtual outputs", Action::ResumeOutputs));
         }
         let mut controllers = vec![item("Automatic", Action::AutoSelect)];
-        for controller in &state.inventory {
-            let active = state
-                .status
-                .as_ref()
-                .and_then(|status| status.active_node.as_deref())
-                == Some(controller.node.as_str());
-            let prefix = if active { "✓ " } else { "" };
-            let model = if controller.model == "dualsense-edge" {
-                "DualSense Edge"
-            } else {
-                "DualSense"
-            };
-            let transport = if controller.transport == "usb" {
-                "USB"
-            } else {
-                "Bluetooth"
-            };
-            controllers.push(item(
-                format!("{prefix}{model} · {transport} ({})", controller.node),
-                Action::Select(controller.clone()),
-            ));
+        match state.inventory.as_deref() {
+            None => controllers.push(label("Controller list unavailable")),
+            Some([]) => controllers.push(label("No supported controllers")),
+            Some(inventory) => {
+                for &controller in inventory {
+                    let node = controller.node();
+                    let active = state
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.active_node.as_deref())
+                        == Some(node.as_str());
+                    let prefix = if active { "✓ " } else { "" };
+                    let model = match controller.model {
+                        ModelSelection::DualSense => "DualSense",
+                        ModelSelection::DualSenseEdge => "DualSense Edge",
+                        ModelSelection::Any => unreachable!("inventory supplies a model"),
+                    };
+                    let transport = match controller.transport {
+                        Selection::Usb => "USB",
+                        Selection::Bluetooth => "Bluetooth",
+                        Selection::Auto => unreachable!("inventory supplies a transport"),
+                    };
+                    let name = format!("{prefix}{model} · {transport} ({node})");
+                    controllers.push(match controller.access {
+                        Access::Readable(Some(_)) => item(name, Action::Select(controller)),
+                        Access::Readable(None) => label(format!("{name} · ID unavailable")),
+                        Access::Unreadable => label(format!("{name} · Unreadable")),
+                    });
+                }
+            }
         }
         menu.push(label("Active controller"));
         menu.push(
@@ -361,19 +326,19 @@ impl ksni::Tray for Tray {
         for (text, flag, setting, enabled) in [
             (
                 "Gamepad and gyro mouse",
-                "--set-emulation-master",
+                OutputTarget::Master,
                 master,
                 can_adjust,
             ),
             (
                 " Gyro mouse",
-                "--set-gyro-mouse",
+                OutputTarget::GyroMouse,
                 gyro,
                 can_adjust && master.unwrap_or(true),
             ),
             (
                 " Gamepad emulation",
-                "--set-gamepad",
+                OutputTarget::Gamepad,
                 gamepad,
                 can_adjust && master.unwrap_or(true),
             ),
@@ -434,48 +399,28 @@ impl Desktop {
     }
 
     fn profile_paths(&self) -> Vec<PathBuf> {
-        let root = self.config.join("joyshockrust");
-        let mut paths: Vec<_> = fs::read_dir(root.join("profiles"))
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "toml") && path.is_file())
-            .collect();
-        paths.sort();
-        let startup = root.join("profile.toml");
-        if startup.is_file() {
-            paths.insert(0, startup);
-        }
-        paths
+        let root = self.config.join(APP_DIRECTORY);
+        paths::profile_paths(
+            &root.join(PROFILES_DIRECTORY),
+            Some(&root.join(PROFILE_FILE)),
+        )
     }
 
-    fn command(&self, args: &[&str]) -> io::Result<String> {
-        output(Command::new(&self.bridge).args(args))
-    }
-
-    fn status(&self) -> io::Result<Option<Status>> {
-        let stream = UnixStream::connect(&self.status_socket)?;
-        stream.set_read_timeout(Some(REFRESH))?;
-        let mut reply = String::new();
-        stream.take(64 * 1024).read_to_string(&mut reply)?;
-        Ok(Status::parse(&reply))
+    fn control(&self) -> io::Result<ControlClient> {
+        paths::runtime_socket(RELOAD_SOCKET, true)
+            .map(ControlClient::new)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))
     }
 
     fn set_outputs_paused(&self, paused: bool) -> io::Result<()> {
-        self.command(&["--set-outputs", if paused { "pause" } else { "resume" }])
-            .map(|_| ())
+        self.control()?.send(ControlCommand::OutputsPaused(paused))
     }
 
     fn calibrate(&self, game: bool, status: &Status) -> io::Result<Child> {
         let node = status
             .active_node
             .as_deref()
-            .filter(|node| {
-                node.strip_prefix("/dev/hidraw").is_some_and(|suffix| {
-                    !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-                })
-            })
+            .filter(|node| hidraw_device_name(node))
             .ok_or_else(|| io::Error::other("connect a controller to calibrate"))?;
         let mut dialog = Command::new(self.bridge.with_file_name("joyshockrust-editor"));
         if game {
@@ -504,41 +449,35 @@ impl Desktop {
     fn run(&self, action: &Action) -> io::Result<()> {
         match action {
             Action::Select(controller) => {
-                let transport = if controller.transport == "usb" {
-                    "--usb"
-                } else {
-                    "--bluetooth"
+                let Access::Readable(Some(id)) = controller.access else {
+                    return Err(io::Error::other("controller ID is unavailable"));
                 };
-                self.command(&[
-                    "--select-controller",
-                    &controller.id,
-                    "--controller-model",
-                    controller.model,
-                    transport,
-                ])?;
+                self.control()?.send(ControlCommand::SelectController {
+                    id: &id.to_string(),
+                    model: Some(controller.model.as_str()),
+                    transport: Some(controller.transport.as_str()),
+                })?;
             }
+            Action::DesktopChanged => unreachable!("subscriptions are handled by the tray loop"),
             Action::AutoSelect => {
-                self.command(&[
-                    "--select-controller",
-                    "any",
-                    "--controller-model",
-                    "any",
-                    "--auto-transport",
-                ])?;
+                self.control()?.send(ControlCommand::SelectController {
+                    id: "any",
+                    model: Some("any"),
+                    transport: Some("auto"),
+                })?;
             }
-            Action::Load(path) => {
-                output(Command::new(&self.bridge).arg("--load-profile").arg(path))?;
-            }
+            Action::Load(path) => self.control()?.load_profile(path)?,
             Action::Edit => unreachable!("the editor is handled by the tray loop"),
-            Action::Unload => {
-                self.command(&["--unload-profile"])?;
-            }
+            Action::Unload => self.control()?.send(ControlCommand::UnloadProfile)?,
             Action::CalibrateGame | Action::CalibrateGyro => {
                 unreachable!("calibration is handled by the tray loop")
             }
             Action::ResumeOutputs => self.set_outputs_paused(false)?,
-            Action::SetEmulation(flag, enabled) => {
-                self.command(&[flag, if *enabled { "on" } else { "off" }])?;
+            Action::SetEmulation(target, enabled) => {
+                self.control()?.send(ControlCommand::Emulation {
+                    target: *target,
+                    enabled: *enabled,
+                })?;
             }
 
             Action::Start => {
@@ -587,24 +526,36 @@ fn bridge_service(action: &str) -> io::Result<()> {
     output(Command::new("systemctl").args(["--user", action, BRIDGE_SERVICE])).map(|_| ())
 }
 
+fn read_status(socket: &mut UnixStream, id: u32) -> io::Result<(Stamp, Option<Status>)> {
+    let (stamp, body) = stream::read_status(socket, id)?;
+    let status = Status::parse(&body)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid desktop status"))?;
+    Ok((stamp, Some(status)))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let home = env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .ok_or("HOME must be an absolute path")?;
+    let home = paths::absolute_env("HOME").ok_or("HOME must be an absolute path")?;
     let desktop = Desktop {
         bridge: env::current_exe()?.with_file_name("joyshockrust-linux"),
-        config: env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .unwrap_or_else(|| home.join(".config")),
-        status_socket: env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or("XDG_RUNTIME_DIR must be an absolute path")?
-            .join("joyshockrust/status.sock"),
+        config: paths::config_home(paths::absolute_env("XDG_CONFIG_HOME"), Some(home))
+            .expect("absolute home has a config fallback"),
+        status_socket: paths::runtime_socket(STATUS_SOCKET, true)
+            .ok_or("XDG_RUNTIME_DIR must be an absolute path")?,
     };
     let (sender, receiver) = mpsc::channel();
+    let notify = || {
+        let updates = sender.clone();
+        move || {
+            let _ = updates.send(Action::DesktopChanged);
+        }
+    };
+    let inventory = Subscription::start(
+        &desktop.status_socket,
+        Topic::Inventory,
+        read_inventory,
+        notify(),
+    )?;
+    let status = Subscription::start(&desktop.status_socket, Topic::Status, read_status, notify())?;
     let tray = Tray {
         actions: sender,
         state: TrayState::default(),
@@ -618,7 +569,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..TrayState::default()
     };
     let mut published = TrayState::default();
-    let mut last_inventory = None;
+    let mut last_profiles = None;
     let mut calibration: Option<Child> = None;
     let mut editor: Option<Child> = None;
     while !tray.is_closed() || calibration.is_some() {
@@ -653,27 +604,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(error) => Some(format!("Could not resume virtual outputs: {error}")),
             };
         }
-        state.status = desktop.status().ok().flatten();
-        if last_inventory.is_none_or(|last: Instant| last.elapsed() >= INVENTORY_REFRESH) {
-            state.inventory = desktop
-                .command(&[
-                    "--list-controllers",
-                    "--show-controller-id",
-                    "--auto-transport",
-                    "--controller-model",
-                    "any",
-                ])
-                .map_or_else(
-                    |_| Vec::new(),
-                    |reply| {
-                        reply
-                            .lines()
-                            .filter_map(Controller::from_inventory)
-                            .collect()
-                    },
-                );
+        state.status = status.latest();
+        state.inventory = inventory.latest();
+        if last_profiles.is_none_or(|last: Instant| last.elapsed() >= PROFILE_REFRESH) {
             state.profiles = desktop.profile_paths();
-            last_inventory = Some(Instant::now());
+            last_profiles = Some(Instant::now());
         }
         state.autostart = desktop.autostart_file().is_file();
         if published != state {
@@ -681,6 +616,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tray.update(|tray| tray.state.clone_from(&state));
         }
         match receiver.recv_timeout(REFRESH) {
+            Ok(Action::DesktopChanged) => {}
             Ok(_) if calibration.is_some() => {}
             Ok(Action::Edit) if editor.is_none() => {
                 let path = state
@@ -807,9 +743,9 @@ mod tests {
         let enabled = controls(&tray);
         assert_eq!(enabled.len(), 3);
         for (item, (text, flag, checked)) in enabled.into_iter().zip([
-            ("Gamepad and gyro mouse", "--set-emulation-master", true),
-            ("Gyro mouse", "--set-gyro-mouse", false),
-            ("Gamepad emulation", "--set-gamepad", true),
+            ("Gamepad and gyro mouse", OutputTarget::Master, true),
+            ("Gyro mouse", OutputTarget::GyroMouse, false),
+            ("Gamepad emulation", OutputTarget::Gamepad, true),
         ]) {
             assert_eq!(item.label.trim(), text);
             assert_eq!(item.checked, checked);
@@ -834,7 +770,7 @@ mod tests {
         (disabled[0].activate)(&mut tray);
         assert!(matches!(
             receiver.try_recv().unwrap(),
-            Action::SetEmulation("--set-emulation-master", true)
+            Action::SetEmulation(OutputTarget::Master, true)
         ));
 
         tray.state.status.as_mut().unwrap().outputs_paused = true;
@@ -888,16 +824,14 @@ mod tests {
 
     #[test]
     fn controller_and_profile_menu_actions_are_independent() {
-        let controller = Controller::from_inventory(
-            "/dev/hidraw6: wired DualSense Edge, readable, controller_id=01:02:03:04:05:06",
-        )
-        .unwrap();
-        assert!(
-            Controller::from_inventory(
-                "/dev/hidraw8: Bluetooth DualSense, readable, controller_id=unavailable"
-            )
-            .is_none()
-        );
+        let controller = Controller {
+            hidraw: 6,
+            model: ModelSelection::DualSenseEdge,
+            transport: Selection::Usb,
+            access: Access::Readable(joyshockrust_config::controller::ControllerId::parse(
+                "01:02:03:04:05:06",
+            )),
+        };
         let profile = PathBuf::from("/tmp/gyro profile.toml");
         let (actions, receiver) = mpsc::channel();
         let mut tray = Tray {
@@ -906,7 +840,7 @@ mod tests {
                 status: Status::parse(
                     "version=1\ncontroller=connected\nmodel=dualsense_edge\ntransport=usb\nreport_rate_hz=1000\nbattery_state=full\nprofile_name=gyro profile.toml\nprofile_path_hex=2f746d702f6779726f2070726f66696c652e746f6d6c\nactive_hidraw=/dev/hidraw6",
                 ),
-                inventory: vec![controller.clone()],
+                inventory: Some(vec![controller]),
                 profiles: vec![profile.clone()],
                 ..TrayState::default()
             },

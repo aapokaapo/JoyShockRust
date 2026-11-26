@@ -1,3 +1,5 @@
+use joyshockrust_core::trigger::TriggerSide;
+use joyshockrust_ipc::control::TravelPreview;
 use std::{
     cell::Cell,
     rc::Rc,
@@ -6,9 +8,7 @@ use std::{
 
 use adw::{gtk, prelude::*};
 
-use crate::{controller_input, response_plot, triggers};
-
-const PREVIEW_MESSAGE: &[u8] = b"\0preview-trigger-travel\n";
+use crate::{live_preview::LivePreview, response_plot, triggers};
 
 #[derive(Clone)]
 pub struct Chart {
@@ -55,6 +55,7 @@ impl Chart {
 }
 
 pub fn add(
+    telemetry: &LivePreview,
     group: &adw::PreferencesGroup,
     side: &str,
     initial: [u8; 4],
@@ -113,7 +114,7 @@ pub fn add(
 
     let armed = Rc::new(Cell::new(false));
     let refresh_at = Cell::new(Instant::now());
-    controller_input::watch_status(&area, "trigger_travel=", Duration::from_millis(33), {
+    telemetry.watch(&area, {
         let thresholds = thresholds.clone();
         let stages = stages.clone();
         let range = range.clone();
@@ -132,12 +133,10 @@ pub fn add(
             } else if was_active && !active {
                 stop();
             }
-            let unavailable = result.is_err();
+            let unavailable = result.is_none();
             let travel = result
-                .ok()
-                .flatten()
-                .as_deref()
-                .and_then(|value| read_travel(value, side));
+                .and_then(|frame| frame.history.samples.last())
+                .map(|sample| f64::from(sample.triggers[usize::from(side)]));
             if live.replace(travel) != travel {
                 area.queue_draw();
             }
@@ -178,7 +177,7 @@ fn is_active(area: &gtk::DrawingArea) -> bool {
 }
 
 fn stop() {
-    let _ = triggers::send_preview_message(PREVIEW_MESSAGE, &[]);
+    let _ = triggers::send_preview_message(&TravelPreview::encode(None));
 }
 
 fn send(
@@ -187,26 +186,18 @@ fn send(
     [lower, upper]: [bool; 2],
     (limit, relative): (u8, bool),
 ) {
-    let stage_mask = u8::from(lower) | (u8::from(upper) << 1);
-    let _ = triggers::send_preview_message(
-        PREVIEW_MESSAGE,
-        &[
-            side,
-            partial,
-            partial_release,
-            full,
-            full_release,
-            stage_mask,
-            if relative { limit } else { 100 },
-            limit,
-        ],
-    );
-}
-
-fn read_travel(value: &str, side: u8) -> Option<f64> {
-    let (left, right) = value.split_once(',')?;
-    let travel = if side == 0 { left } else { right }.parse::<f64>().ok()?;
-    (0.0..=1.0).contains(&travel).then_some(travel)
+    let request = TravelPreview {
+        side: if side == 0 {
+            TriggerSide::Left
+        } else {
+            TriggerSide::Right
+        },
+        thresholds: [partial, partial_release, full, full_release],
+        stages: [lower, upper],
+        threshold_scale: if relative { limit } else { 100 },
+        travel_limit: Some(limit),
+    };
+    let _ = triggers::send_preview_message(&TravelPreview::encode(Some(request)));
 }
 
 fn scaled_travel(travel: f64, limit: u8) -> f64 {
@@ -326,7 +317,7 @@ fn draw(
 
 #[cfg(test)]
 mod tests {
-    use super::{read_travel, scaled_travel};
+    use super::scaled_travel;
 
     #[test]
     fn scaled_marker_reaches_one_at_the_limit_and_stays_there() {
@@ -335,14 +326,5 @@ mod tests {
         assert_eq!(scaled_travel(0.6, 60), 1.0);
         assert_eq!(scaled_travel(0.9, 60), 1.0);
         assert_eq!(scaled_travel(0.3, 100), 0.3);
-    }
-
-    #[test]
-    fn live_travel_selects_the_correct_side_and_rejects_invalid_values() {
-        assert_eq!(read_travel("0.300000,1.000000", 0), Some(0.3));
-        assert_eq!(read_travel("0.300000,1.000000", 1), Some(1.0));
-        assert_eq!(read_travel("NaN,-0.1", 0), None);
-        assert_eq!(read_travel("NaN,-0.1", 1), None);
-        assert_eq!(read_travel("0.3", 0), None);
     }
 }

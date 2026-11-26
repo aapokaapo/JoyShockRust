@@ -5,6 +5,116 @@ Use [Architecture](ARCHITECTURE.md) for current runtime behavior and the
 [implementation plan](IMPLEMENTATION_PLAN.md#current-status) for current
 acceptance work.
 
+## Shared configuration and IPC
+
+2026-11-25. Use shared core input names and geometry, and keep
+deterministic gyro sensitivity and radial stick response in motion.
+The config crate owns common raw profile structures, trigger
+compatibility and desktop paths. Linux resolves keyboard outputs and
+virtual-device capabilities, and the editor continues to edit TOML
+documents in place. Gesture state and timers stay in the application
+paths that own their effects. [Workspace boundaries](ARCHITECTURE.md#workspace)
+
+The IPC crate defines the existing wire keys and codecs. Socket
+lifecycle, addressed versus unnamed request handling, polling and
+preview expiry stay with the bridge. Legacy TOML shapes and field
+precedence, status ordering, socket paths and request sizes retain
+their existing contracts. [IPC codecs](crates/joyshockrust-ipc/src)
+
+## Portable pointer and virtual gamepad processing
+
+2026-11-26. `PointerMotion` owns gyro and Flick Stick state and returns
+integer X/Y counts. The input crate supplies factory scaling and sensor
+timing. Preserve independent fractional carry and Flick Stick's
+resume timing during calibration to retain the existing report deltas.
+The mapping crate owns normalized gamepad routing, target ranges and
+change detection. It commits published state after the output adapter
+accepts the event batch. Linux owns the devices, physical activation
+checks and calibration persistence. [Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
+
+## Portable keyboard and mouse routing
+
+2026-11-26. Keep gesture state, deadlines, shared-key ownership, stick
+zones and touchpad pointer actions in the mapping crate. The bridge
+supplies timestamps and resolves host key names when it loads a profile.
+Mapping returns key changes and relative motion through an output sink.
+It commits held keys after the sink accepts the batch. Per-session bitsets
+and reusable event buffers keep report processing allocation-free.
+[Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
+
+## Shared profile compilation and persistence
+
+2026-11-26. Compile profiles in `joyshockrust-config` using the existing
+motion and mapping rules and an injected key resolver. Linux builds
+share an evdev key-name resolver. The bridge still decides whether a
+profile's settings can be applied to its running session.
+
+Stage writes beside the destination and use an exclusive directory
+lock during the final comparison and publish for JoyShockRust writers.
+New profiles use a no-clobber operation. Editor and game calibration
+updates compare the original bytes under that lock. External applications
+can write without acquiring the lock, so edits that race after the
+comparison can still be replaced. Profile saving retains the TOML text
+and uses a separate result for activation. The editor runs file operations
+and control requests on a worker and leaves newer draft edits unsaved.
+[Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16)
+
+## Event-driven controller inventory
+
+2026-11-26. Bind a read-only inventory stream beside the status socket
+with the suffix `.inventory`. Limit access to the service user. The
+inventory worker owns its udev monitor, enumeration and socket I/O. It
+publishes an initial snapshot and subsequent changes, including when a
+controller session is active. The tray reconnects and clears stale entries
+on disconnect. An empty list, an unreadable node and an unavailable
+inventory have distinct representations.
+
+Version 1 frames have a request ID and a length. Snapshots carry a
+worker instance ID and an increasing revision. The worker accepts eight
+clients and bounds a snapshot to 128 controllers. It coalesces unsent
+updates and closes a connection if a newer snapshot would replace a
+partially sent frame. Handshakes and pending writes have a two-second
+deadline. Legacy status, CLI diagnostics and control commands retain their
+existing endpoints. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
+
+## Desktop status subscription
+
+2026-11-26. Add a private `.updates` endpoint beside the one-shot
+status socket. Reuse the inventory transport's version, request IDs,
+revision ordering, client limits and slow-reader policy. Existing
+inventory frames keep their wire layout. Status frames carry the same
+status fields as the one-shot reply.
+
+The worker wakes the bridge for an initial snapshot. The bridge then
+captures snapshots between report batches on state changes, with
+successive updates coalesced to a 250 ms interval. It renders no
+subscription snapshots when nobody is listening. Socket I/O for desktop
+clients stays on the worker. The tray clears stale status on disconnect
+and subscribes again after a restart. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
+
+The IPC crate owns the shared Unix subscription client and server,
+including connection limits and partial I/O. The bridge supplies udev
+inventory and schedules status snapshots at report boundaries. Only
+bridge builds enable the server feature. [Transport](crates/joyshockrust-ipc/src/unix/subscriptions.rs)
+
+## Typed desktop controls and editor drafts
+
+2026-11-26. The editor keeps the parsed TOML document between structured
+edits and preserves invalid raw drafts. The tray and editor send their
+control commands through the existing IPC wire format. The gyro widgets
+read both live fields from one reply, and IPC defines the value formats
+for the status telemetry. The deterministic RWC sweep and detents are in
+motion. [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16) · [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
+
+2026-11-26. Decode addressed requests and unnamed trigger previews in
+`joyshockrust-ipc`. The bridge retains socket addressing, validates
+controller filters and dispatches typed commands at report boundaries.
+The codec accepts existing raw, named and path-bearing profile packets.
+Malformed addressed control messages receive the existing rejection reply
+without changing the last profile result. Profile errors are reported
+in profile queue order. Preview senders continue to receive no reply.
+[Command codec](crates/joyshockrust-ipc/src/control.rs) · [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
+
 ## ADR-001 — Linux-first Rust 2024
 **Accepted.** New implementation, not direct C++ port. Keep safe Rust and clear module boundaries.
 
@@ -43,12 +153,11 @@ For changes, add a dated ADR with context, alternatives, consequences and valida
 
 ## Live editor input previews
 
-2026-11-24. The editor polls the existing bridge status socket while the
-corresponding preview is mapped. The bridge retains only the latest touch
-positions for display, using the same decoded reports as the touch mappings.
-The editor draws those positions over its draft grid. This keeps the preview
-independent of profile activation and avoids a second hidraw reader.
-The touch snapshot distinguishes finger release from connection loss.
+2026-11-24. The first touchpad preview polled the bridge status socket
+and used the latest touch positions from the same decoded reports as the
+touch mappings. The editor draws those positions over its draft grid
+independently of profile activation. The touch snapshot distinguishes
+finger release from connection loss.
 The touchpad preview projects zone boundaries and contact positions
 onto the same tapered surface so both follow the illustrated pad.
 Buttons and Touchpad share the bundled DualSense SVG. Touchpad crops the
@@ -57,6 +166,18 @@ The editor applies valid dimensions to the draft when the row or column
 value changes and retains the live preview across those edits.
 Response charts reuse the bridge's stick travel and projected gyro speed
 and apply the editor's draft curve settings to those inputs.
+
+2026-11-26. Normal editor previews share a single versioned
+`.preview` subscription per window while any preview widget is mapped.
+The bridge owns HID acquisition and captures ordered normalized buttons,
+sticks, triggers and touch points in a 96-report ring. Calibrated IMU
+values are included once per snapshot. A worker sends snapshots to
+desktop clients at a 16 ms publication interval during active input.
+Clients consume unseen reports by sequence number. If a client lags
+past the retained window or the session changes, Flick Stick drops its
+state and waits for the stick to return to neutral before rearming. The
+existing calibration windows keep their dedicated controller readers.
+[Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Preview verification](TESTING_AND_PERFORMANCE.md#editor-telemetry-verification)
 
 ## D-pad remapping
 
@@ -170,7 +291,7 @@ Only one remap layer is active at a time. The selected layer remains active unti
 
 The generic uinput gamepad emits Linux `BTN_X` for physical Square and `BTN_Y` for Triangle. Linux aliases those codes to `BTN_NORTH` and `BTN_WEST` respectively. SDL's Linux fallback uses X/Y for generic devices and position names for Sony devices. The USB parser retains the physical face positions. Sources checked 2026-11-22. [Linux event codes](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/include/uapi/linux/input-event-codes.h#L380-L389) · [SDL mapping](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/src/joystick/linux/SDL_sysjoystick.c#L2342-L2374)
 
-Flick Stick uses the selected physical stick and device report timing. It defaults to the right stick, a 100 ms initial turn and 90% engagement, follows the shortest angular change while held, and re-arms within 25% radial travel. It clears queued motion on timestamp gaps and keeps the selected virtual stick centered. An angular axial threshold snaps directions close to each cardinal axis and blends continuously back to the physical angle. Only the initial flick uses this response. Held steering tracks physical angle changes from the starting position with a separate multiplier. Calibration sweeps use the physical angle and full sensitivity so small corrections remain possible near each axis. The Sticks editor uses the runtime angle calculation and reads the active controller directly while the preview is visible. The Gyro editor reads the latest IMU snapshot over the existing status socket. The bridge stores the raw sample and active bias during report processing and converts them to physical units when serving that socket. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
+Flick Stick uses the selected physical stick and device report timing. It defaults to the right stick, a 100 ms initial turn and 90% engagement, follows the shortest angular change while held, and re-arms within 25% radial travel. It clears queued motion on timestamp gaps and keeps the selected virtual stick centered. An angular axial threshold snaps directions close to each cardinal axis and blends continuously back to the physical angle. Only the initial flick uses this response. Held steering tracks physical angle changes from the starting position with a separate multiplier. Calibration sweeps use the physical angle and full sensitivity so small corrections remain possible near each axis. The Sticks editor uses the runtime angle calculation on ordered bridge telemetry. The Gyro editor displays the latest calibrated IMU snapshot from the same stream. The bridge stores the raw sample and active bias during report processing and converts them to physical units when publishing telemetry or serving legacy status. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
 
 ## Phase 5 first increment
 
@@ -578,6 +699,18 @@ live profile selections in a separate file next to the startup profile.
 An explicit unload is remembered as default mappings. The startup file
 is still the target of a startup profile reload and serves as fallback
 if a remembered profile cannot be opened or validated.
+
+2026-11-26. A single bridge worker reads and compiles live profile
+requests with the shared configuration crate and persists the active
+selection after the bridge adopts it. The report loop owns adoption
+and publishes the new active profile immediately. The command reply
+and last reload result follow the persistence attempt. Persistence
+errors are logged and the adopted profile remains active. One profile
+operation runs at a time with up to four queued requests. Excess
+requests receive the existing rejection reply. Status and emulation
+commands can proceed during profile preparation and persistence.
+[Profile worker](crates/joyshockrust-linux/src/reload/profile_work.rs) · [Profile reload acceptance](TESTING_AND_PERFORMANCE.md#profile-reload-acceptance)
+
 Gamepad and gyro mouse selections are process-local and independent.
 The master switch suppresses both outputs while retaining the selections.
 Status exposes the master, individual choices, and effective output states.

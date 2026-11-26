@@ -1,5 +1,101 @@
 # Testing, instrumentation and performance
 
+## Shared profile compilation and saving
+
+2026-11-26. Profile tests cover rejected TOML and evdev key names,
+new-file collision protection, competing saves from the same original
+and RWC edits that preserve comments and inline tables. Editor tests cover
+an external change and newer draft edits made before a save completes.
+The Wayland suite exercises the profile picker, saving and stick binding
+validation without launching the bridge.
+
+## Portable keyboard and mouse replay
+
+2026-11-26. The workspace passed 254 tests and doctests, with 16
+ignored by default. Eight ignored editor tests passed on headless
+Wayland. The mapping tests also passed without the profile feature.
+The Linux allocation checks cover steady-state keyboard and mouse
+processing. A portable test verifies shared-key release and retry
+after an output failure.
+
+A release-mode harness compared this extraction with `a0b3eeb` on one
+CPU. The synthetic trace combined tap, hold and double-tap, overlapping
+key bindings, a modified mouse click, trigger scrolling, stick movement
+and touch contacts. The checksum of ordered evdev events and gesture
+deadlines matched in all 12 paired runs. Each run retained 10,000 blocks
+of 64 reports after 300 warm-up blocks. The table gives median run
+percentiles for block averages in nanoseconds per report.
+
+| Revision | p50 | p95 | p99 | p99.9 |
+|---|---:|---:|---:|---:|
+| `a0b3eeb` | 385 | 450 | 1,322 | 3,731 |
+| Portable keyboard and mouse routing | 110 | 125 | 438 | 1,738 |
+
+The p99 ranges overlapped across runs. This measures in-process mapping
+and evdev event encoding. It does not include kernel delivery or a
+physical controller.
+
+## Portable pointer and gamepad replay
+
+2026-11-26. The combined gyro and Flick Stick replay matches every
+integer X/Y delta recorded on `023e981`, including wraparound, duplicate
+and backward timestamps, a gap and gyro activation changes. The mapping
+output test covers release and retry after failed submission, 255- and
+1023-count trigger ranges, and unchanged output after rounding.
+
+A temporary release-mode harness compared the previous and extracted
+pointer and gamepad output paths on the same CPU. Each case retained
+10,000 blocks of 64 synthetic reports per run after 300 warm-up blocks.
+Twelve paired runs alternated execution order. Old and new checksums
+matched in every run. The timings below are block averages per report,
+summarized by the median of each run's percentile.
+
+| Path | Old p50 (ns) | New p50 (ns) | Old p99 (ns) | New p99 (ns) |
+|---|---:|---:|---:|---:|
+| Gyro and Flick Stick composition | 64.31 | 66.12 | 121.58 | 108.21 |
+| Gamepad quantization and event encoding | 43.97 | 44.28 | 68.62 | 82.86 |
+
+Run-level p99 ranges overlapped in both cases. The harness measures
+in-process calculation and event encoding. Physical input and uinput
+delivery require separate measurement.
+
+## Shared-library refactor verification
+
+2026-11-25. The locked offline workspace suite passed 247 tests and
+doctests, with 16 ignored by default. The example suite passed the
+legacy vibration wire test. Five ignored editor tests passed separately
+on headless Wayland, covering trigger bindings, profile selection,
+touchpad regions, gyro activation and sensitivity. The workspace suite
+also passed the steady-state zero-allocation replay.
+
+For the release-build smoke comparison, the same temporary harness
+decoded the captured DualSense Edge USB reports and mapped them with
+a stick curve, a button remap, a digital trigger stage and synthetic
+touch contacts. A block contains 64 reports. The harness discarded 100
+warm-up blocks and retained 10,000 blocks per run. Twelve retained runs
+per revision alternated order on one CPU on an AMD EPYC 9V74 host
+with Linux 6.18.57 and Rust 1.100.0. The baseline was `99c95f8`
+and the candidate was `2696ba4`. Both produced the same output
+checksum in every run.
+
+| Metric | Baseline | Candidate |
+|---|---:|---:|
+| Median run p50 (ns per report) | 79 | 79 |
+| Median run p95 (ns per report) | 80 | 80 |
+| Median run p99 (ns per report) | 111 | 109.5 |
+| Median run p99.9 (ns per report) | 715.5 | 687 |
+| Largest observed block average (ns per report) | 30,733 | 28,939 |
+| Median user CPU per run (ms) | 55.54 | 55.52 |
+| Median system CPU per run (ms) | 0 | 0 |
+| Median peak RSS per run (KiB) | 10,624 | 10,624 |
+
+The run-level p99 ranges overlapped (91–126 ns baseline and 89–136 ns
+candidate). Timing is for the average report in each block. CPU and
+RSS include the test harness. The run covers in-process input decoding
+and gamepad mapping. End-to-end USB and Bluetooth latency, kernel
+virtual output, haptics, and status polling under contention still need
+measurement on a physical test host.
+
 ## Initial targets (provisional, one controller)
 | Metric | Target | Definition |
 |---|---|---|
@@ -22,10 +118,10 @@ These are **engineering targets**, not established measurements. Measure USB and
 
 ## Current acceptance priorities
 
-Use the latest build from the `test` branch. For the revisions
-through `d761a87`, workspace tests and eight headless Wayland editor tests
-passed. Those editor tests exercise GTK controls and synthetic events.
-Use the sequence below to verify the current physical behavior. Record
+Use the latest build from the `test` branch. The
+[headless editor suite](#headless-wayland-editor-tests) covers GTK
+controls and synthetic events. Use the sequence below to verify the
+current physical behavior. Record
 the commit, controller model, USB/Bluetooth, Fedora/kernel, and game and
 input backend where relevant.
 
@@ -43,6 +139,24 @@ and reconnect, Steam controller visibility with the SDL filter, and one
 successful four-turn RWC measure/save. These results precede the current
 editor changes. The detailed procedures below retain their recorded
 scope. [Desktop test procedure](#desktop-tray-acceptance) · [Benchmark procedure](#live-bridge-benchmark)
+
+## Headless Wayland editor tests
+
+CI runs the editor's display-dependent tests using Weston and a private
+D-Bus session. The runner starts a fresh GTK process for each case and
+uses a temporary runtime directory for the Wayland socket and the
+editor's IPC paths.
+
+With Weston and `dbus-run-session` available, run from the repository:
+
+```sh
+cargo fetch --locked
+scripts/test-editor-wayland.sh
+```
+
+The tests cover profile draft protection, calibration
+dialogs, key capture and cancellation, output modes, trigger mappings,
+stick zones, touchpad regions, gyro activation and sensitivity.
 
 ## Virtual gamepad acceptance
 
@@ -492,6 +606,15 @@ game and its raw-input and mouse sensitivity settings.
 
 ## Profile reload acceptance
 
+The integration test holds the active-profile directory lock while the
+bridge applies a preset and queues an unload. Status and emulation
+commands remain responsive. Both profile commands complete in order
+after the lock is released, and the remembered selection is defaults.
+
+```sh
+cargo test --locked -p joyshockrust-linux --test profile_startup profile_persistence
+```
+
 Install the updated executable and unit. Reload the systemd user manager
 and restart the service once so the new executable is running. With USB
 connected, edit the profile to change a gamepad mapping, then run
@@ -504,6 +627,87 @@ command works when USB is unplugged. The user's Fedora run of `5d13eda`
 confirmed successful reloads and rejection of profile version 2 with the
 same bridge process running. The user's Fedora run of `4800d3b` also
 confirmed the systemd reload command reports success, failure and recovery.
+
+## Desktop control command verification
+
+Codec tests cover the established control datagrams, controller filter
+fields, legacy profile envelopes, the message size limit and trigger
+preview layouts. The bridge integration test holds a profile write
+lock, sends malformed and valid controls and verifies that profile
+activation and rejection results remain ordered. Trigger preview tests
+check that the sender's socket address determines which messages are
+accepted.
+
+```sh
+cargo test --locked -p joyshockrust-ipc control::tests
+cargo test --locked -p joyshockrust-linux --test profile_startup profile_persistence
+cargo test --locked -p joyshockrust-linux trigger_preview_is_received_without_a_profile_reload
+```
+
+2026-11-26. A release-mode harness compared typed dispatch with
+`2e2be8a` on one pinned CPU in six alternating pairs. Each run warmed up
+with 1,000 reports and measured 12,000 synthetic USB button transitions
+per condition. The measured interval ran from Unix datagram injection
+to the bridge's encoded gamepad event batch. In the command condition
+the injector also sent an output-resume command before every 32nd
+report and verified the reply. Values below are medians of run
+percentiles, in microseconds.
+
+| Condition | Previous p50 | Typed dispatch p50 | Previous p99 | Typed dispatch p99 |
+|---|---:|---:|---:|---:|
+| Reports alone | 2.21 | 2.37 | 6.79 | 6.39 |
+| Reports with control commands | 2.40 | 2.43 | 8.77 | 8.36 |
+
+Run-level p99 ranges overlapped in both conditions. The median idle CPU
+time was zero for both versions in 1.5-second windows at 10 ms
+accounting resolution. The harness measured a synthetic input socket
+and gamepad encoding. Physical HID and kernel uinput latency remain
+unmeasured for this revision.
+
+## Editor telemetry verification
+
+The bridge test decodes synthetic USB and Bluetooth reports for DualSense
+and DualSense Edge. It checks press/release ordering, bounded history,
+disconnect clearing and a new session on reconnect. Capturing reports
+into a full history ring performs zero heap allocations in the test.
+IPC tests cover wire payload validation and detecting missed samples.
+The editor test verifies that a neutral report between two frames rearms
+Flick Stick and that a gap clears its accumulated turn. The Wayland test
+maps two preview widgets, confirms they receive the same subscription
+and verifies that the connection closes when the last widget unmaps.
+
+```sh
+cargo test --locked -p joyshockrust-ipc -p joyshockrust-linux preview
+cargo test --locked -p joyshockrust-editor intermediate_neutral_report
+scripts/test-editor-wayland.sh
+```
+
+2026-11-26. A release-mode harness compared the bridge with the preview
+endpoint disabled, enabled without a subscriber, and enabled with a
+subscriber consuming the stream. Six interleaved runs per condition used
+one pinned CPU and 1,200 measured synthetic reports at a target 1 kHz
+after a 200-report warm-up. The interval ran from datagram injection to
+gamepad event batch encoding. The table shows medians of run percentiles
+in microseconds.
+
+| Preview endpoint | p50 | p99 |
+|---|---:|---:|
+| Disabled | 5.51 | 33.19 |
+| Enabled, no subscriber | 5.69 | 78.05 |
+| Active subscriber | 6.57 | 134.07 |
+
+With a subscriber, the worker delivered a median of 83 snapshots per run.
+Run-level p99 ranges overlapped substantially. The active subscriber's
+range was 17.24–172.30 µs and the disabled endpoint's was
+15.02–207.06 µs. This comparison covers capture and publication under
+synthetic input. Hardware and kernel uinput delivery are outside the
+measured interval.
+
+For a physical check, open Sticks, Gyro, Touchpad and the L2 or R2
+inspector in turn. Verify that their live readings follow the active
+controller. Change between USB and Bluetooth, and between DualSense
+and DualSense Edge. Check that disconnect clears each preview and that
+Flick Stick rearms after centering on the new connection.
 
 ## Profile installation acceptance
 
@@ -518,6 +722,14 @@ install a chosen preset as the service profile and reload the service.
 Check the mapping or gyro binding on the existing virtual devices.
 
 ## Service status acceptance
+
+The status subscription tests compare the initial and changed snapshots
+with `--status`, exercise peer disconnect and partial requests, and
+verify report ordering while a subscriber is waiting. On the test host,
+update both bridge and tray. With the tray running, toggle virtual
+gamepad output from the CLI and check that its tray switch follows.
+Stop and start the bridge. Check that the tray clears its stale status
+and displays the new session without restarting the tray.
 
 Install the updated executable and unit and restart the service. As soon
 as the restart returns, run `$HOME/.local/bin/joyshockrust-linux --status`
@@ -656,6 +868,15 @@ return to discovery. After reconnect, verify gamepad and gyro output
 resume. The descriptor-based recovery is covered synthetically.
 
 ## Live controller selection acceptance
+
+The inventory stream tests cover initial and updated snapshots, partial
+requests, incompatible versions, slow clients and tray reconnection.
+To check physical hotplug, start the updated bridge and tray and leave
+one controller active. Connect a second controller and reopen **Active
+controller**. Verify the second controller appears, select it and check
+the active indicator. Disconnect the other controller and check that its
+row disappears. Restart the bridge and verify the tray repopulates
+without a tray restart. An unreadable controller has a disabled row.
 
 Run `--list-controllers` with both controllers connected. Check their
 model, transport and node paths. Add `--show-controller-id` to check the
@@ -1040,12 +1261,10 @@ the center while moving, and R pulses once per continuous movement.
 Try an inner radius below the deadzone and confirm **Update Mapping**
 shows a validation error while the dialog stays open.
 
-Run the GTK dialog test with a built bridge from a Wayland session.
+Run the GTK dialog test from a Wayland session.
 
 ```sh
-cargo build --locked -p joyshockrust-linux
-JOYSHOCKRUST_TEST_BRIDGE="$PWD/target/debug/joyshockrust-linux" \
-  cargo test --locked -p joyshockrust-editor stick_keyboard_dialog_validates_and_updates_the_profile -- --ignored
+cargo test --locked -p joyshockrust-editor stick_keyboard_dialog_validates_and_updates_the_profile -- --ignored
 ```
 
 In **Touchpad**, set a grid with one row and two columns. Select the

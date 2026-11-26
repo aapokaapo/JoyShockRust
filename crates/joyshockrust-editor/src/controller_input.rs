@@ -1,14 +1,12 @@
+use joyshockrust_ipc::status::Field;
 use std::{
-    cell::RefCell,
     fs::{File, OpenOptions},
     io::{self, Read},
     os::unix::fs::OpenOptionsExt,
     path::Path,
-    rc::Rc,
-    time::Duration,
 };
 
-use adw::{gio, glib, gtk, prelude::*};
+use adw::{gio, glib, prelude::*};
 use joyshockrust_core::Controls;
 use joyshockrust_input::{
     DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN, DUALSENSE_EDGE_USB_REPORT_LEN, DeviceModel, Transport,
@@ -16,20 +14,18 @@ use joyshockrust_input::{
 };
 
 pub fn status_address() -> Option<gio::UnixSocketAddress> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;
-    let runtime = Path::new(&runtime);
-    runtime
-        .is_absolute()
-        .then(|| gio::UnixSocketAddress::new(&runtime.join("joyshockrust/status.sock")))
+    joyshockrust_config::paths::runtime_socket(joyshockrust_ipc::STATUS_SOCKET, true)
+        .map(|path| gio::UnixSocketAddress::new(&path))
 }
 
-pub async fn status_value(
+pub(crate) async fn status_values<const N: usize>(
     client: &gio::SocketClient,
     address: &gio::UnixSocketAddress,
-    key: &str,
-) -> Result<Option<String>, glib::Error> {
+    keys: [Field; N],
+) -> Result<[Option<String>; N], glib::Error> {
     let connection = client.connect_future(address).await?;
     let stream = gio::DataInputStream::new(&connection.input_stream());
+    let mut values = std::array::from_fn(|_| None);
     for _ in 0..64 {
         let Some(line) = stream
             .read_line_utf8_future(glib::Priority::DEFAULT)
@@ -37,50 +33,18 @@ pub async fn status_value(
         else {
             break;
         };
-        if let Some(value) = line.strip_prefix(key) {
-            return Ok(Some(value.to_owned()));
-        }
-    }
-    Ok(None)
-}
-
-pub fn watch_status(
-    widget: &impl IsA<gtk::Widget>,
-    key: &'static str,
-    interval: Duration,
-    update: impl Fn(Result<Option<String>, ()>) + 'static,
-) {
-    let update = Rc::new(update);
-    let polling = Rc::new(RefCell::new(None::<glib::JoinHandle<()>>));
-    let on_map = polling.clone();
-    let start = move || {
-        let update = update.clone();
-        let task = glib::MainContext::default().spawn_local(async move {
-            update(Ok(None));
-            let Some(address) = status_address() else {
-                update(Err(()));
-                return;
-            };
-            let client = gio::SocketClient::new();
-            client.set_timeout(1);
-            loop {
-                update(status_value(&client, &address, key).await.map_err(|_| ()));
-                glib::timeout_future(interval).await;
+        for (slot, field) in values.iter_mut().zip(keys) {
+            if slot.is_none()
+                && let Some(value) = field.line_value(&line)
+            {
+                *slot = Some(value.to_owned());
             }
-        });
-        on_map.replace(Some(task));
-    };
-    let on_map = start.clone();
-    widget.connect_map(move |_| on_map());
-    widget.connect_unmap(move |_| {
-        if let Some(task) = polling.borrow_mut().take() {
-            task.abort();
         }
-    });
-    // The inspector can attach a chart to an already visible preferences group.
-    if widget.as_ref().is_mapped() {
-        start();
+        if values.iter().all(Option::is_some) {
+            break;
+        }
     }
+    Ok(values)
 }
 
 pub fn open(path: &Path) -> io::Result<File> {
@@ -122,4 +86,41 @@ pub fn read_reports(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::Write, os::unix::net::UnixListener};
+
+    use super::*;
+
+    #[test]
+    fn status_reads_related_gyro_fields_from_one_reply() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("status.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .write_all(b"version=1\nimu=1,2,3,0,0,1\nimu=ignored\ngyro_speed_dps=2.2\n")
+                    .unwrap();
+            });
+            glib::MainContext::new().block_on(async {
+                let client = gio::SocketClient::new();
+                client.set_timeout(1);
+                let address = gio::UnixSocketAddress::new(&path);
+                let [imu, speed, absent] = status_values(
+                    &client,
+                    &address,
+                    [Field::Imu, Field::GyroSpeedDps, Field::TouchContacts],
+                )
+                .await
+                .unwrap();
+                assert_eq!(imu.as_deref(), Some("1,2,3,0,0,1"));
+                assert_eq!(speed.as_deref(), Some("2.2"));
+                assert_eq!(absent, None);
+            });
+        });
+    }
 }

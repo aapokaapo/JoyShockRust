@@ -259,9 +259,8 @@ pub(super) fn mapping_dialog(
             let zones = [inner.read()?, outer.read()?];
             apply_mapping(&mut doc, side, &keys, &zones)?;
             let text = doc.to_string();
-            let mut editor = ctx.editor.borrow_mut();
-            editor.validate_profile_text(&text)?;
-            editor.text = text;
+            crate::validate_profile_text(&text)?;
+            ctx.editor.borrow_mut().draft = crate::Draft::from_document(doc);
             Ok(())
         })();
         match result {

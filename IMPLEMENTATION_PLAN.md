@@ -10,6 +10,35 @@ game compatibility (Phase 6) and measured performance (Phase 7) still have
 open work. Phase numbers group related deliverables. They do not imply
 that every acceptance check in an earlier phase has passed.
 
+The 2026-11-25 duplication refactor introduced shared input and motion
+types, common profile structures, desktop paths and local IPC codecs.
+Characterization tests cover compatibility at their boundaries.
+Synthetic replay and headless editor checks cover the implementation.
+Physical acceptance is tracked separately. [Refactor verification](TESTING_AND_PERFORMANCE.md#shared-library-refactor-verification)
+
+CI also runs the display-dependent editor suite in a headless Wayland
+session. The physical editor sequence remains the next device
+acceptance check. [Headless Wayland editor tests](TESTING_AND_PERFORMANCE.md#headless-wayland-editor-tests)
+
+Pointer processing runs in `joyshockrust-motion`. The mapping crate
+handles gamepad, keyboard and mouse routing, gesture deadlines and gyro
+activation. The bridge publishes virtual events using the resolved mappings.
+[Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
+
+The editor and bridge share profile compilation, key names and atomic
+profile writes. The editor retains structured drafts and runs profile
+file work off the GTK main thread. It reports saving and activation
+separately. [Profile issue](https://github.com/aapokaapo/JoyShockRust/issues/16)
+
+Desktop clients share the command and telemetry codecs. The tray
+subscribes to versioned inventory and status streams using the shared
+Unix transport in `joyshockrust-ipc`. The shared codec decodes
+profile, output, controller-selection and trigger preview datagrams.
+The bridge validates controller selection and applies the decoded
+commands. Editor previews share one demand-driven stream of ordered
+bridge telemetry. The next IPC step moves calibration sessions into
+the bridge. The RWC sweep runs in motion. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17) · [Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
+
 | Area | Shipped | Next acceptance step |
 |---|---|---|
 | Desktop controls | Tray lifecycle and telemetry, independent controller/profile selection, guided calibration, and a GTK/Wayland editor with live previews and exclusive per-button routing. | Verify the latest editor on Fedora with a physical controller. Check keyboard capture, output isolation, tray profile restore, and calibration navigation. |
@@ -84,6 +113,10 @@ Versioned TOML, snapshots, Unix socket protocol, diagnostics, udev permissions, 
 TOML v1 startup and live profile loads validate before replacing active
 settings. The control socket supports reload, load, unload and output
 toggles. Separate status queries show connection and reload results.
+A worker prepares live profiles and saves the active selection. An
+integration test holds the selection directory lock and verifies that
+status and output controls remain responsive and queued profiles apply
+in order.
 The user's Fedora tests covered user-service startup, USB reconnect,
 valid and rejected reloads, synchronous systemd reload results and
 atomic preset installation. Controller preferences, the selected profile
@@ -224,8 +257,9 @@ The CLI also supports unloading a profile to restore default mappings
 during the current session.
 Status identifies the active mapping source independently of the result of
 the last profile command.
-Controller inventory lists connected nodes independently of the service.
-Status exposes the active node for comparison with the inventory.
+CLI diagnostics list connected nodes independently of the service.
+The tray subscribes to inventory changes from the bridge and compares
+them with the active node from status.
 The virtual gamepad can be enabled or disabled through the control socket
 while retaining the physical controller session and other outputs.
 An opt-in uinput integration test exercises this path without a physical

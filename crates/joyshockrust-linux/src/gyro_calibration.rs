@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use joyshockrust_input::{FactoryCalibration, RawImuSample, Timebase, TimestampUpdate};
+use joyshockrust_input::{FactoryCalibration, ImuStream, RawImuSample, TimestampUpdate};
 use joyshockrust_motion::{
     Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
 };
@@ -65,6 +65,15 @@ pub fn load(device: &File) -> Option<Calibration> {
     }
 }
 
+pub(crate) fn guard_window_process(parent: i32) -> Result<(), Box<dyn Error>> {
+    // Release calibration resources if the window exits, even during setup.
+    nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL)?;
+    if nix::unistd::getppid().as_raw() != parent {
+        return Err("calibration window has closed".into());
+    }
+    Ok(())
+}
+
 pub fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
     let mode = args.next();
     match mode.as_deref().and_then(|arg| arg.to_str()) {
@@ -74,10 +83,7 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error
             if args.next().is_some() || parent <= 1 {
                 return Err("expected a controller node and calibration window process ID".into());
             }
-            nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL)?;
-            if nix::unistd::getppid().as_raw() != parent {
-                return Err("calibration window has closed".into());
-            }
+            guard_window_process(parent)?;
             measure(Path::new(&node))?;
         }
         Some("--save") => {
@@ -196,22 +202,25 @@ fn measure(node: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 struct Sampler {
-    factory: FactoryCalibration,
-    clock: Timebase,
+    input: ImuStream,
     estimate: StationaryCalibration,
 }
 
 impl Sampler {
     fn new(factory: FactoryCalibration) -> Self {
         Self {
-            factory,
-            clock: Timebase::new(150_000).expect("valid 50 ms sensor gap"),
+            input: ImuStream::new(
+                factory,
+                joyshockrust_input::ticks_in_nanoseconds(MotionConfig::default().max_gap_ns) as u32,
+            )
+            .expect("valid sensor gap limit"),
             estimate: StationaryCalibration::default(),
         }
     }
 
     fn observe(&mut self, sample: RawImuSample) -> Option<Calibration> {
-        let elapsed = match self.clock.observe(sample.device_ticks) {
+        let timed = self.input.observe(sample);
+        let elapsed = match timed.timing {
             TimestampUpdate::FirstSample => Duration::ZERO,
             TimestampUpdate::Advanced { elapsed, .. } => elapsed,
             TimestampUpdate::Gap { .. } => {
@@ -220,7 +229,7 @@ impl Sampler {
             }
             TimestampUpdate::Repeated { .. } | TimestampUpdate::OutOfOrder { .. } => return None,
         };
-        let calibrated = self.factory.convert(sample);
+        let calibrated = timed.calibrated();
         self.estimate.observe(ImuSample {
             timestamp_ns: elapsed.as_nanos() as u64,
             gyro_dps: calibrated.gyro_dps,

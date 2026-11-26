@@ -5,9 +5,7 @@ use std::{
 };
 
 use evdev::{AbsoluteAxisCode, AttributeSetRef, PropType, raw_stream::RawDevice};
-use joyshockrust_core::{Button, Buttons};
-use joyshockrust_input::{DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH, TouchContact};
-use serde::Deserialize;
+pub use joyshockrust_mapping::touchpad::ClickState;
 
 use crate::hidraw;
 
@@ -24,29 +22,17 @@ pub fn try_grab_native(hidraw: &File) -> Option<RawDevice> {
 }
 
 fn probe_native(hid: &udev::Device) -> io::Result<RawDevice> {
-    let mut devices = udev::Enumerator::new()?;
-    devices.match_parent(hid)?;
-    devices.match_subsystem("input")?;
     let mut last_error = None;
-    for node in devices.scan_devices()? {
-        if !node.sysname().as_encoded_bytes().starts_with(b"event") {
-            continue;
-        }
-        let Some(path) = node.devnode() else {
-            continue;
-        };
-        let Some(parent) = node.parent_with_subsystem("input")? else {
-            continue;
-        };
+    let found = hidraw::find_input_event(hid, |path, parent| {
         if !parent
             .attribute_value("name")
             .and_then(std::ffi::OsStr::to_str)
             .is_some_and(|name| name.ends_with(" Touchpad"))
         {
-            continue;
+            return None;
         }
         match open_native(path, hid) {
-            Ok(Some(device)) => return Ok(device),
+            Ok(Some(device)) => return Some(device),
             Ok(None) => {}
             Err(err) => {
                 last_error = Some(io::Error::new(
@@ -55,13 +41,16 @@ fn probe_native(hid: &udev::Device) -> io::Result<RawDevice> {
                 ))
             }
         }
-    }
-    Err(last_error.unwrap_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "no matching native touchpad evdev node",
-        )
-    }))
+        None
+    })?;
+    found.ok_or_else(|| {
+        last_error.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "no matching native touchpad evdev node",
+            )
+        })
+    })
 }
 
 fn open_native(path: &std::path::Path, hid: &udev::Device) -> io::Result<Option<RawDevice>> {
@@ -98,173 +87,13 @@ fn matches_touchpad(
         })
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Config {
-    columns: usize,
-    rows: usize,
-    #[serde(default)]
-    regions: Vec<RegionConfig>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RegionConfig {
-    column: usize,
-    row: usize,
-    touch: Option<String>,
-    click: Option<String>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Region {
-    touch: Option<Button>,
-    click: Option<Button>,
-}
-
-#[derive(PartialEq, Eq)]
-pub struct Grid {
-    size: GridSize,
-    regions: Vec<Option<Region>>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct GridSize {
-    columns: usize,
-    rows: usize,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct TouchRegion {
-    size: GridSize,
-    index: usize,
-}
-
-impl TouchRegion {
-    pub fn pressed(self, contacts: &[Option<TouchContact>; 2]) -> bool {
-        contacts
-            .iter()
-            .flatten()
-            .any(|&contact| self.contains(contact))
-    }
-
-    pub fn contains(self, contact: TouchContact) -> bool {
-        self.size.index(contact) == self.index
-    }
-}
-
-impl GridSize {
-    fn index(self, contact: TouchContact) -> usize {
-        let column = usize::from(contact.x) * self.columns / usize::from(DUALSENSE_TOUCHPAD_WIDTH);
-        let row = usize::from(contact.y) * self.rows / usize::from(DUALSENSE_TOUCHPAD_HEIGHT);
-        row * self.columns + column
-    }
-
-    fn region(self, row: usize, column: usize) -> Result<TouchRegion, &'static str> {
-        if !(1..=self.rows).contains(&row) || !(1..=self.columns).contains(&column) {
-            return Err("touchpad region row or column is outside the grid");
-        }
-        Ok(TouchRegion {
-            size: self,
-            index: (row - 1) * self.columns + column - 1,
-        })
-    }
-}
-
-#[derive(Default)]
-pub enum ClickState {
-    #[default]
-    Released,
-    Unmapped,
-    Mapped(Button),
-}
-
-impl Config {
-    pub fn resolve(self) -> Result<Grid, &'static str> {
-        let cells = self
-            .columns
-            .checked_mul(self.rows)
-            .filter(|count| (1..=25).contains(count))
-            .ok_or("touchpad grid must have between 1 and 25 cells")?;
-        let mut regions = vec![None; cells];
-        let size = GridSize {
-            columns: self.columns,
-            rows: self.rows,
-        };
-        for region in self.regions {
-            let index = size.region(region.row, region.column)?.index;
-            if regions[index].is_some() {
-                return Err("duplicate touchpad region");
-            }
-            let touch = region
-                .touch
-                .as_deref()
-                .map(super::gamepad::parse_target)
-                .transpose()?;
-            let click = region
-                .click
-                .as_deref()
-                .map(super::gamepad::parse_target)
-                .transpose()?;
-            if touch.is_none() && click.is_none() {
-                return Err("touchpad region needs a touch or click binding");
-            }
-            regions[index] = Some(Region { touch, click });
-        }
-        Ok(Grid { size, regions })
-    }
-}
-
-impl Grid {
-    pub fn parse_region(&self, spec: &str) -> Result<TouchRegion, &'static str> {
-        let (row, column) = spec
-            .split_once(':')
-            .ok_or("expected ROW:COLUMN for a touchpad region")?;
-        let row = row.parse().map_err(|_| "invalid touchpad region row")?;
-        let column = column
-            .parse()
-            .map_err(|_| "invalid touchpad region column")?;
-        self.size.region(row, column)
-    }
-
-    pub fn map(
-        &self,
-        physical: &mut Buttons,
-        contacts: [Option<TouchContact>; 2],
-        click: &mut ClickState,
-    ) -> Buttons {
-        let mut regions = contacts
-            .into_iter()
-            .flatten()
-            .map(|contact| self.regions[self.size.index(contact)]);
-        let primary = regions.next().flatten();
-        let mut outputs = Buttons::default();
-        for region in primary.into_iter().chain(regions.flatten()) {
-            if let Some(button) = region.touch {
-                outputs.insert(button);
-            }
-        }
-
-        if !physical.contains(Button::TouchpadClick) {
-            *click = ClickState::Released;
-        } else if matches!(click, ClickState::Released) {
-            *click = primary
-                .and_then(|region| region.click)
-                .map_or(ClickState::Unmapped, ClickState::Mapped);
-        }
-        if let ClickState::Mapped(button) = *click {
-            physical.remove(Button::TouchpadClick);
-            outputs.insert(button);
-        }
-        outputs
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{gamepad::GamepadState, profile};
     use evdev::KeyCode;
+    use joyshockrust_core::{Button, Buttons};
+    use joyshockrust_input::TouchContact;
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
 
     #[test]

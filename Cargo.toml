@@ -1,8 +1,11 @@
 [workspace]
 members = [
     "crates/joyshockrust-core",
+    "crates/joyshockrust-config",
     "crates/joyshockrust-input",
+    "crates/joyshockrust-ipc",
     "crates/joyshockrust-linux",
+    "crates/joyshockrust-mapping",
     "crates/joyshockrust-motion",
     "crates/joyshockrust-tray",
     "crates/joyshockrust-editor",
@@ -14,6 +17,10 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
+
+[workspace.dependencies]
+evdev = "0.13.2"
+toml_edit = { version = "0.24", default-features = false, features = ["parse", "display"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

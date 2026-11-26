@@ -2,7 +2,14 @@
 
 #![no_std]
 
+mod button_names;
+pub mod touch_region;
+pub mod trigger;
+
+pub use trigger::{DEFAULT_TRIGGER_THRESHOLDS, validate_trigger_thresholds};
+
 /// Face buttons are named by their position on the controller.
+/// The variant order defines the bit positions used by the telemetry protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {
     West,
@@ -36,6 +43,20 @@ pub enum Button {
 pub struct Buttons(u32);
 
 impl Buttons {
+    /// Bit positions use the order of the existing Button variants.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    pub const fn from_bits(bits: u32) -> Option<Self> {
+        let supported = (1 << (Button::DPadLeft as u32 + 1)) - 1;
+        if bits & !supported == 0 {
+            Some(Self(bits))
+        } else {
+            None
+        }
+    }
+
     pub fn insert(&mut self, button: Button) {
         self.0 |= 1 << button as u32;
     }
@@ -50,6 +71,14 @@ impl Buttons {
 
     pub const fn difference(self, other: Self) -> Self {
         Self(self.0 & !other.0)
+    }
+
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    pub const fn symmetric_difference(self, other: Self) -> Self {
+        Self(self.0 ^ other.0)
     }
 
     pub const fn contains(self, button: Button) -> bool {
@@ -113,21 +142,6 @@ impl DPad {
             (-1, -1) => Self::UpLeft,
             _ => Self::Neutral,
         }
-    }
-}
-
-/// Pull and release points in percent, in partial then full order.
-pub const DEFAULT_TRIGGER_THRESHOLDS: [u8; 4] = [45, 35, 95, 85];
-
-pub fn validate_trigger_thresholds(
-    [partial, partial_release, full, full_release]: [u8; 4],
-) -> Result<(), &'static str> {
-    if partial_release < partial && partial < full_release && full_release < full && full <= 100 {
-        Ok(())
-    } else {
-        Err(
-            "Trigger thresholds must satisfy partial release < partial pull < full release < full pull ≤ 100%.",
-        )
     }
 }
 

@@ -1,10 +1,6 @@
-use std::{
-    cell::Cell,
-    io,
-    os::unix::net::UnixDatagram,
-    path::{Path, PathBuf},
-    rc::Rc,
-};
+use joyshockrust_core::trigger::TriggerSide;
+use joyshockrust_ipc::control::ResistancePreview;
+use std::{cell::Cell, io, os::unix::net::UnixDatagram, path::Path, rc::Rc};
 
 use adw::{gtk, prelude::*};
 use joyshockrust_core::{DEFAULT_TRIGGER_THRESHOLDS, validate_trigger_thresholds};
@@ -27,27 +23,17 @@ const STAGES: [(&str, &str, &str, &str); 2] = [
     ("Full pull", "full", "full_button", "0.95:0.85"),
 ];
 
-pub fn send_preview(payload: &[u8]) -> io::Result<()> {
-    send_preview_message(b"\0preview-trigger\n", payload)
+pub(crate) fn send_preview_message(message: &[u8]) -> io::Result<()> {
+    let path =
+        joyshockrust_config::paths::runtime_socket(joyshockrust_ipc::DEFAULT_LOAD_SOCKET, false)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
+    send_preview_to(&path, message)
 }
 
-pub(crate) fn send_preview_message(prefix: &[u8], payload: &[u8]) -> io::Result<()> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|path| !path.is_empty())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is unset"))?;
-    send_preview_to(
-        &PathBuf::from(runtime).join("joyshockrust/reload.sock.load"),
-        prefix,
-        payload,
-    )
-}
-
-fn send_preview_to(path: &Path, prefix: &[u8], payload: &[u8]) -> io::Result<()> {
+fn send_preview_to(path: &Path, message: &[u8]) -> io::Result<()> {
     let socket = UnixDatagram::unbound()?;
     socket.set_nonblocking(true)?;
-    let mut message = prefix.to_vec();
-    message.extend_from_slice(payload);
-    socket.send_to(&message, path)?;
+    socket.send_to(message, path)?;
     Ok(())
 }
 
@@ -149,7 +135,7 @@ pub fn append(
         .and_then(Item::as_bool)
         .unwrap_or_else(|| legacy_overlap(doc, side));
     let range = travel_range(values);
-    let travel = trigger_travel::add(&group, side, initial, overlap, range);
+    let travel = trigger_travel::add(&ctx.live, &group, side, initial, overlap, range);
     add_travel_limit(&group, ctx, side, mode, range.0, travel.clone());
     let stages = Rc::new(Cell::new([false; 2]));
 
@@ -424,16 +410,21 @@ fn is_analog_target(action: Option<&str>) -> bool {
 
 fn travel_range(settings: Option<&dyn TableLike>) -> (u8, bool) {
     let limit = settings.and_then(|table| table.get("travel_limit_percent"));
-    let relative = limit.is_some()
-        || settings
-            .and_then(|table| table.get("full_pull_exclusive"))
-            .and_then(Item::as_bool)
-            == Some(true);
+    let exclusive = settings
+        .and_then(|table| table.get("full_pull_exclusive"))
+        .and_then(Item::as_bool)
+        .unwrap_or_default();
+    let relative =
+        joyshockrust_config::profile::relative_trigger_stages(exclusive, limit.is_some());
     let percent = limit
         .or_else(|| settings.and_then(|table| table.get("full_travel_percent")))
         .and_then(Item::as_integer)
         .and_then(|value| u8::try_from(value).ok())
-        .filter(|value| (1..=100).contains(value))
+        .and_then(|percent| {
+            joyshockrust_config::profile::trigger_travel_limit(Some(percent))
+                .ok()
+                .flatten()
+        })
         .unwrap_or(100);
     (percent, relative)
 }
@@ -591,12 +582,16 @@ fn save_effect(
     }) {
         return;
     }
-    let side = u8::from(side == "r2");
+    let side = TriggerSide::parse(side).expect("trigger inspector selected a trigger");
     let [start, strength] = if enabled { [start, strength] } else { [0, 0] };
     let result = ctx
         .editor
         .borrow_mut()
-        .preview_trigger([side, start, strength]);
+        .preview_trigger(ResistancePreview::Set {
+            side,
+            start,
+            strength,
+        });
     feedback.set_visible(result.is_err());
     if let Err(error) = result {
         feedback.set_text(&format!(
@@ -623,7 +618,7 @@ mod tests {
             (&[0, 0, 0][..], &b"\0preview-trigger\n\x00\x00\x00"[..]),
             (&[][..], &b"\0preview-trigger\n"[..]),
         ] {
-            send_preview_to(&path, b"\0preview-trigger\n", payload).unwrap();
+            send_preview_to(&path, &ResistancePreview::parse(payload).unwrap().encode()).unwrap();
             let mut buffer = [0; 32];
             let (len, sender) = listener.recv_from(&mut buffer).unwrap();
             assert!(sender.is_unnamed());

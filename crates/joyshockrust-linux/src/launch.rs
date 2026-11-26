@@ -12,7 +12,7 @@ use std::{
 
 const SDL_IGNORE: &str = "SDL_GAMECONTROLLER_IGNORE_DEVICES";
 const SDL_ALLOW: &str = "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT";
-const DUALSENSE_IDS: &str = "0x054c/0x0ce6,0x054c/0x0df2";
+use joyshockrust_input::SUPPORTED_CONTROLLER_IDS;
 
 pub fn run(mut args: impl Iterator<Item = OsString>) -> io::Error {
     let separator = args.next();
@@ -65,9 +65,27 @@ fn ignore_list(mut existing: OsString) -> io::Result<OsString> {
         }
         existing = OsString::from_vec(contents);
     }
-    if !existing.is_empty() {
-        existing.push(",");
+    for (vendor, product) in SUPPORTED_CONTROLLER_IDS {
+        if !existing.is_empty() {
+            existing.push(",");
+        }
+        existing.push(format!("0x{vendor:04x}/0x{product:04x}"));
     }
-    existing.push(DUALSENSE_IDS);
     Ok(existing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deployed_access_rules_include_each_supported_controller() {
+        let hidraw = include_str!("../../../dist/udev/70-joyshockrust-hidraw.rules");
+        let rumble = include_str!("../../../dist/udev/70-joyshockrust-rumble.rules");
+        for (vendor, product) in SUPPORTED_CONTROLLER_IDS {
+            assert!(hidraw.contains(&format!("{vendor:04X}:{product:04X}")));
+            assert!(rumble.contains(&format!(r#"ATTRS{{id/vendor}}=="{vendor:04x}""#)));
+            assert!(rumble.contains(&format!("{product:04x}")));
+        }
+    }
 }

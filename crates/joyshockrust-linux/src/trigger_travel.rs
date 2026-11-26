@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
-use joyshockrust_core::{Controls, validate_trigger_thresholds};
+use joyshockrust_core::Controls;
+use joyshockrust_ipc::control::TravelPreview;
 
 use crate::gyro_gate::{TriggerGate, TriggerSide};
 
@@ -11,48 +12,30 @@ pub struct Settings {
     travel_limit: Option<TriggerGate>,
 }
 
-impl Settings {
-    pub fn parse(payload: &[u8]) -> Option<Option<Self>> {
-        if payload.is_empty() {
-            return Some(None);
-        }
-        let &[
-            side @ 0..=1,
-            partial,
-            partial_release,
-            full,
-            full_release,
-            ref rest @ ..,
-        ] = payload
-        else {
-            return None;
-        };
-        let (mask, scale, travel_limit) = match rest {
-            [] => (3, 100, None),
-            &[mask @ 1..=3] => (mask, 100, None),
-            &[mask @ 1..=3, scale @ 1..=100] => (mask, scale, None),
-            &[mask @ 0..=3, scale @ 1..=100, limit @ 1..=100] => (mask, scale, Some(limit)),
-            _ => return None,
-        };
-        validate_trigger_thresholds([partial, partial_release, full, full_release]).ok()?;
-        let side = if side == 0 {
-            TriggerSide::Left
-        } else {
-            TriggerSide::Right
-        };
-        Some(Some(Self {
+impl From<TravelPreview> for Settings {
+    fn from(preview: TravelPreview) -> Self {
+        let TravelPreview {
+            side,
+            thresholds: [partial, partial_release, full, full_release],
+            stages: [lower, upper],
+            threshold_scale,
+            travel_limit,
+        } = preview;
+        Self {
             side,
             gates: [
-                (mask & 1 != 0).then(|| {
-                    TriggerGate::from_percent(side, partial, partial_release).within_travel(scale)
+                lower.then(|| {
+                    TriggerGate::from_percent(side, partial, partial_release)
+                        .within_travel(threshold_scale)
                 }),
-                (mask & 2 != 0).then(|| {
-                    TriggerGate::from_percent(side, full, full_release).within_travel(scale)
+                upper.then(|| {
+                    TriggerGate::from_percent(side, full, full_release)
+                        .within_travel(threshold_scale)
                 }),
             ],
             travel_limit: travel_limit
                 .map(|limit| TriggerGate::from_percent(side, limit, limit - 1)),
-        }))
+        }
     }
 }
 
@@ -109,9 +92,13 @@ impl Preview {
 mod tests {
     use super::*;
 
+    fn decode_settings(payload: &[u8]) -> Option<Option<Settings>> {
+        TravelPreview::parse(payload).map(|preview| preview.map(Into::into))
+    }
+
     #[test]
     fn travel_limit_ticks_on_engagement_and_rearms_on_release_with_no_stage_bindings() {
-        let settings = Settings::parse(&[1, 45, 35, 95, 85, 0, 100, 60]).unwrap();
+        let settings = decode_settings(&[1, 45, 35, 95, 85, 0, 100, 60]).unwrap();
         let mut preview = None;
         Preview::refresh(&mut preview, settings);
         let mut controls = Controls {
@@ -137,13 +124,13 @@ mod tests {
         }
         Preview::refresh(
             &mut preview,
-            Settings::parse(&[1, 45, 35, 95, 85, 0, 100, 50]).unwrap(),
+            decode_settings(&[1, 45, 35, 95, 85, 0, 100, 50]).unwrap(),
         );
         assert!(
             !preview.as_mut().unwrap().crossed(&controls),
             "editing the limit is silent"
         );
-        assert!(Settings::parse(&[1, 45, 35, 95, 85, 0, 100, 0]).is_none());
+        assert!(decode_settings(&[1, 45, 35, 95, 85, 0, 100, 0]).is_none());
     }
 
     #[test]
@@ -151,7 +138,7 @@ mod tests {
         let mut preview = None;
         Preview::refresh(
             &mut preview,
-            Settings::parse(&[0, 45, 35, 95, 85, 1]).unwrap(),
+            decode_settings(&[0, 45, 35, 95, 85, 1]).unwrap(),
         );
         let preview = preview.as_mut().unwrap();
         let mut controls = Controls::default();
@@ -169,7 +156,7 @@ mod tests {
     #[test]
     fn preview_cues_each_stage_with_hysteresis_and_tracks_live_edits() {
         let mut preview = None;
-        Preview::refresh(&mut preview, Settings::parse(&[0, 45, 35, 95, 85]).unwrap());
+        Preview::refresh(&mut preview, decode_settings(&[0, 45, 35, 95, 85]).unwrap());
         let mut controls = Controls {
             right_trigger: 1.0,
             ..Controls::default()
@@ -193,15 +180,15 @@ mod tests {
                 "{position}"
             );
         }
-        Preview::refresh(&mut preview, Settings::parse(&[0, 30, 20, 95, 85]).unwrap());
+        Preview::refresh(&mut preview, decode_settings(&[0, 30, 20, 95, 85]).unwrap());
         assert!(preview.as_mut().unwrap().crossed(&controls));
-        Preview::refresh(&mut preview, Settings::parse(&[1, 30, 20, 95, 85]).unwrap());
+        Preview::refresh(&mut preview, decode_settings(&[1, 30, 20, 95, 85]).unwrap());
         assert!(!preview.as_mut().unwrap().crossed(&controls));
         preview.as_mut().unwrap().expires = Instant::now();
         controls.right_trigger = 0.0;
         assert!(!preview.as_mut().unwrap().crossed(&controls));
-        assert!(Settings::parse(&[0, 20, 30, 95, 85]).is_none());
-        Preview::refresh(&mut preview, Settings::parse(&[]).unwrap());
+        assert!(decode_settings(&[0, 20, 30, 95, 85]).is_none());
+        Preview::refresh(&mut preview, decode_settings(&[]).unwrap());
         assert!(preview.is_none());
     }
 }

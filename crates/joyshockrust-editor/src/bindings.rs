@@ -44,12 +44,10 @@ fn keyboard_bindings(doc: &DocumentMut) -> Result<Option<&ArrayOfTables>, &'stat
 }
 
 pub(crate) fn region_input(input: &str) -> Option<(&str, i64, i64)> {
-    let (kind, location) = input.split_once(':')?;
-    if !matches!(kind, "touch" | "click") {
-        return None;
-    }
-    let (row, column) = location.split_once(':')?;
-    Some((kind, row.parse().ok()?, column.parse().ok()?))
+    use joyshockrust_core::touch_region::{TouchAction, parse_cell};
+    let (kind, location) = TouchAction::split(input)?;
+    let (row, column) = parse_cell(location).ok()?;
+    Some((kind.name(), row, column))
 }
 
 #[derive(Clone, Copy)]
@@ -469,6 +467,13 @@ pub(crate) fn replace_value(old: &mut Value, mut new: Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_trigger_matching_keeps_the_editor_lookup_contract() {
+        assert!(!matching_triggers("l2", "l2:0.45:0.35"));
+        assert!(matching_triggers("l2:0.450:0.35", "l2:0.45:0.350"));
+        assert!(!matching_triggers("r2:partial", "l2:partial"));
+    }
 
     #[test]
     fn editing_single_keys_preserves_custom_actions_and_other_profile_sections() {

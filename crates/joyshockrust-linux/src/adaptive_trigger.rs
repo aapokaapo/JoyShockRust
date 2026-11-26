@@ -7,7 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use joyshockrust_core::trigger::TriggerSide;
 use joyshockrust_input::{DeviceModel, Transport};
+use joyshockrust_ipc::control::ResistancePreview;
 use nix::{
     poll::{PollFd, PollFlags, poll},
     sys::{
@@ -15,71 +17,52 @@ use nix::{
         signalfd::SignalFd,
     },
 };
-use serde::Deserialize;
 
 use crate::discovery::{self, ControllerFilter, Selection};
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
-#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum Effect {
-    #[default]
-    Off,
-    Resistance {
-        start: u8,
-        strength: u8,
-    },
-}
+pub use joyshockrust_config::profile::AdaptiveTriggerEffect as Effect;
 
-impl Effect {
-    pub fn validate(self) -> Result<Self, &'static str> {
-        if let Self::Resistance { start, strength } = self
-            && (start > 9 || !(1..=8).contains(&strength))
-        {
-            return Err("adaptive trigger resistance requires start 0–9 and strength 1–8");
+fn encode_effect(effect: Effect) -> [u8; 11] {
+    let mut data = [0; 11];
+    match effect {
+        Effect::Off => data[0] = 0x05,
+        Effect::Resistance { start, strength } => {
+            data[0] = 0x21;
+            let active = 0x03ff_u16 & (u16::MAX << start);
+            let forces = (start..10).fold(0_u32, |bits, zone| {
+                bits | (u32::from(strength - 1) << (3 * zone))
+            });
+            data[1..3].copy_from_slice(&active.to_le_bytes());
+            data[3..7].copy_from_slice(&forces.to_le_bytes());
         }
-        Ok(self)
     }
-
-    fn encode(self) -> [u8; 11] {
-        let mut data = [0; 11];
-        match self {
-            Self::Off => data[0] = 0x05,
-            Self::Resistance { start, strength } => {
-                data[0] = 0x21;
-                let active = 0x03ff_u16 & (u16::MAX << start);
-                let forces = (start..10).fold(0_u32, |bits, zone| {
-                    bits | (u32::from(strength - 1) << (3 * zone))
-                });
-                data[1..3].copy_from_slice(&active.to_le_bytes());
-                data[3..7].copy_from_slice(&forces.to_le_bytes());
-            }
-        }
-        data
-    }
+    data
 }
-
 #[derive(Clone, Copy)]
 pub enum Preview {
     Set { side: usize, effect: Effect },
     Reset,
 }
 
-impl Preview {
-    pub fn parse(payload: &[u8]) -> Result<Self, &'static str> {
-        match payload {
-            [] => Ok(Self::Reset),
-            &[side @ 0..=1, start, strength] => {
-                let effect = if start == 0 && strength == 0 {
+impl From<ResistancePreview> for Preview {
+    fn from(preview: ResistancePreview) -> Self {
+        match preview {
+            ResistancePreview::Reset => Self::Reset,
+            ResistancePreview::Set {
+                side,
+                start,
+                strength,
+            } => {
+                let effect = if strength == 0 {
                     Effect::Off
                 } else {
-                    Effect::Resistance { start, strength }.validate()?
+                    Effect::Resistance { start, strength }
                 };
-                Ok(Self::Set {
-                    side: usize::from(side),
+                Self::Set {
+                    side: usize::from(side == TriggerSide::Right),
                     effect,
-                })
+                }
             }
-            _ => Err("invalid adaptive trigger preview"),
         }
     }
 }
@@ -100,11 +83,11 @@ fn packet(
     // Only set the valid bits for the actuators being updated.
     if let Some(right) = right {
         bytes[offset] |= 0x04;
-        bytes[offset + 10..offset + 21].copy_from_slice(&right.encode());
+        bytes[offset + 10..offset + 21].copy_from_slice(&encode_effect(right));
     }
     if let Some(left) = left {
         bytes[offset] |= 0x08;
-        bytes[offset + 21..offset + 32].copy_from_slice(&left.encode());
+        bytes[offset + 21..offset + 32].copy_from_slice(&encode_effect(left));
     }
     if transport == Transport::Bluetooth {
         let crc = joyshockrust_input::bluetooth_crc32(0xa2, &bytes[..74]);
@@ -414,10 +397,10 @@ mod tests {
 
         let mut report = [0; 78];
         for (flags, right, left) in [
-            (0x08, [0; 11], saved.encode()),
-            (0x08, [0; 11], Effect::Off.encode()),
-            (0x04, live.encode(), [0; 11]),
-            (0x0c, Effect::Off.encode(), saved.encode()),
+            (0x08, [0; 11], encode_effect(saved)),
+            (0x08, [0; 11], encode_effect(Effect::Off)),
+            (0x04, encode_effect(live), [0; 11]),
+            (0x0c, encode_effect(Effect::Off), encode_effect(saved)),
         ] {
             assert_eq!(sink.recv(&mut report).unwrap(), 63);
             assert_eq!(report[1], flags);

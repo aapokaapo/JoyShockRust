@@ -834,6 +834,8 @@ application menu or run `systemctl --user start joyshockrust-tray.service`.
 On Bluetooth, the same row shows the battery icon and the percentage
 while discharging. Under **Active controller**, open the submenu to
 choose a connected controller with an HID ID or select **Automatic**.
+The running bridge sends controller list updates to the tray on hotplug.
+Controllers without access or an HID ID appear as disabled entries.
 Under **Active profile**, open the submenu to load a different
 profile from `$config_dir/joyshockrust/profiles/` or choose **Default
 mappings** to unload it. The user service restores the last active
@@ -1019,8 +1021,12 @@ input and blue adjusted angle on the same diagram, with the configured
 engagement ring.
 
 Open the profile actions menu to **Validate Profile** or **Save** to
-disk. **Save & Apply** writes the profile and loads it into the running
-bridge. Use Ctrl+S to save or Ctrl+Shift+S to save and apply.
+disk. The editor uses the same validation rules as `--check-profile`.
+If the file changed since you opened it, reopen it before saving again.
+**Save & Apply** saves the profile and sends that version to the running
+bridge. If activation fails, the editor reports where it saved the file
+and shows the active profile when available. Use Ctrl+S to save or
+Ctrl+Shift+S to save and apply.
 
 Select **Calibrate game sensitivity (RWC)** while a controller is connected. The tray pauses virtual outputs and opens the Wayland
 calibration window. During measurement, the right stick uses its physical

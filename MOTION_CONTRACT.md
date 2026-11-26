@@ -28,13 +28,20 @@ Fusion projects yaw onto the estimated up axis and pitch onto the
 controller's right axis in the horizontal plane. Accelerometer changes
 alone produce no pointer delta.
 
-The Linux adapter feeds the selected mode's angular deltas through the
-same speed threshold and acceleration curve, evaluated over the same
-device-time interval as the rotation. It then applies per-axis
-sensitivity and the RWC / in-game sensitivity factor. Fractional
-counts carry between accepted samples. Mode changes clear integration
-and fractional state at the report boundary while retaining gyro bias.
-The adapter submits integer relative X/Y events in one uinput batch.
+`PointerMotion` uses input's `ImuStream` for timestamp classification and
+factory conversion. It applies the selected aim mode, threshold,
+acceleration and per-axis sensitivity with game calibration. It composes
+the resulting mouse counts with Flick Stick before the Linux adapter
+submits relative X/Y events in one uinput batch. Linux supplies the
+activation decisions for both paths for every report.
+
+Gyro and Flick Stick each accumulate fractional counts for their own
+motion. Flick Stick can skip a span of reports during calibration and
+re-anchors using its own last accepted timestamp. Keeping these rules
+preserves the report on which each count is emitted. Changing aim mode
+clears gyro integration and fractional state while retaining the bias.
+The combined replay compares exact per-report counts with the previous
+pipeline. [Pointer implementation](crates/joyshockrust-motion/src/pointer.rs)
 
 ## Determinism
 Identical initial state, configuration and ordered samples must produce identical results on a defined build/numeric environment. No system-clock reads, RNG, I/O, threads or hidden global state. Explicitly define behavior for duplicate/out-of-order timestamps, long gaps, wraparound and invalid samples. Bit-identical cross-architecture floating-point output is not initially promised.

@@ -1,7 +1,13 @@
+use joyshockrust_ipc::telemetry::{GyroSpeed, StickTravel};
+use joyshockrust_motion::{
+    game_calibration::GameCalibration,
+    sensitivity::{DEFAULT_GYRO_SENSITIVITY, MAX_GYRO_SENSITIVITY},
+    stick_response::{DEFAULT_STICK_EXPONENT, STICK_EXPONENT_RANGE, plot_travel},
+};
+
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    time::Duration,
 };
 
 use adw::{gtk, prelude::*};
@@ -16,7 +22,7 @@ use joyshockrust_motion::aim_response::{
 
 use crate::{
     bindings::replace_value,
-    controller, controller_input,
+    controller,
     response_plot::{self, Curve},
     ui::{self, Context},
 };
@@ -24,7 +30,7 @@ use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
 const GYRO_FIELDS: [&str; 2] = ["sensitivity_x", "sensitivity_y"];
 const GYRO_SLIDER_MAX: f64 = 20.0;
-const GYRO_TEXT_MAX: f64 = 100.0;
+const GYRO_TEXT_MAX: f64 = MAX_GYRO_SENSITIVITY as f64;
 pub const GYRO_SENSITIVITY_ERROR: &str = "Enter a gyro sensitivity between 0 and 100.";
 const ACCEL_ENABLED: &str = "accel_enabled";
 const RESPONSE_FIELDS: [&str; 4] = [
@@ -79,12 +85,9 @@ fn calibration_values(drafts: &[String; 2]) -> Result<[f64; 2], &'static str> {
     });
     let rwc = rwc.ok_or("Real-world calibration must be a positive number.")?;
     let sensitivity = sensitivity.ok_or("In-game sensitivity must be a positive number.")?;
-    let ratio = rwc / sensitivity;
-    if !(ratio > 0.0 && ratio <= 10_000.0) {
-        return Err(
-            "RWC divided by in-game sensitivity must be greater than 0 and at most 10,000.",
-        );
-    }
+    GameCalibration::new(rwc, sensitivity).map_err(
+        |_| "RWC divided by in-game sensitivity must be greater than 0 and at most 10,000.",
+    )?;
     Ok([rwc, sensitivity])
 }
 
@@ -100,10 +103,17 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     };
     let page = adw::PreferencesPage::new();
     page.add(&aim_mode_group(ctx, gyro));
-    page.add(&crate::imu_monitor::group());
+    let (imu, update_imu) = crate::imu_monitor::group();
+    page.add(&imu);
     page.add(&crate::gyro_activation::group(ctx, &doc));
     page.add(&gyro_sensitivity_group(ctx, gyro));
-    page.add(&gyro_response_group(ctx, gyro));
+    let (response, update_speed) = gyro_response_group(ctx, gyro);
+    page.add(&response);
+    ctx.live.watch(&page, move |frame| {
+        let readings = frame.and_then(|frame| frame.history.imu);
+        update_imu(frame.ok_or(()).map(|_| readings.map(|(imu, _)| imu)));
+        update_speed(readings.map(|(_, speed)| speed));
+    });
     page.add(&calibration_shortcut(ctx, gyro));
 
     let calibration = adw::PreferencesGroup::builder()
@@ -254,7 +264,10 @@ fn setting_row(title: &str, subtitle: &str, value: f64, lower: f64, upper: f64) 
         .build()
 }
 
-fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
+fn gyro_response_group(
+    ctx: &Context,
+    gyro: Option<&dyn TableLike>,
+) -> (adw::PreferencesGroup, impl Fn(Option<GyroSpeed>) + use<>) {
     let group = adw::PreferencesGroup::builder()
         .title("Gyro response")
         .build();
@@ -373,19 +386,14 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
         },
     );
     let plot_ref = plot.downgrade();
-    controller_input::watch_status(
-        &group,
-        "gyro_speed_dps=",
-        Duration::from_millis(33),
-        move |result| {
-            let speed = result.ok().flatten().as_deref().and_then(response_input);
-            if live_speed.replace(speed) != speed
-                && let Some(plot) = plot_ref.upgrade()
-            {
-                plot.queue_draw();
-            }
-        },
-    );
+    let update_speed = move |speed: Option<GyroSpeed>| {
+        let speed = speed.map(|speed| speed.0);
+        if live_speed.replace(speed) != speed
+            && let Some(plot) = plot_ref.upgrade()
+        {
+            plot.queue_draw();
+        }
+    };
     watch_plot(&plot, &adjustments);
     let plot = plot.downgrade();
     acceleration.connect_active_notify(move |_| {
@@ -393,7 +401,7 @@ fn gyro_response_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::Pref
             plot.queue_draw();
         }
     });
-    group
+    (group, update_speed)
 }
 
 fn watch_plot(plot: &gtk::DrawingArea, settings: &[gtk::Adjustment]) {
@@ -405,13 +413,6 @@ fn watch_plot(plot: &gtk::DrawingArea, settings: &[gtk::Adjustment]) {
             }
         });
     }
-}
-
-fn response_input(value: &str) -> Option<f64> {
-    value
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite() && *value >= 0.0)
 }
 
 fn gyro_curve(response: GyroResponse, live_speed: Option<f64>) -> Curve {
@@ -575,6 +576,7 @@ fn flick_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesG
         group.add(row);
     }
     let preview = crate::flick_preview::add(
+        &ctx.live,
         &group,
         &threshold.adjustment(),
         &steering.adjustment(),
@@ -641,7 +643,8 @@ fn flick_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesG
 }
 
 fn gyro_values(gyro: Option<&dyn TableLike>) -> [f64; 2] {
-    GYRO_FIELDS.map(|key| gyro.map_or(4.0, |table| number(table, key, 4.0)))
+    let fallback = f64::from(DEFAULT_GYRO_SENSITIVITY);
+    GYRO_FIELDS.map(|key| gyro.map_or(fallback, |table| number(table, key, fallback)))
 }
 
 fn gyro_sensitivity_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesGroup {
@@ -928,7 +931,7 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
     {
         page.add(&flick_group(ctx, gyro));
     }
-    let fallback = number(doc.as_table(), "stick_curve", 1.0);
+    let fallback = number(doc.as_table(), "stick_curve", DEFAULT_STICK_EXPONENT.into());
     let live_travel = Rc::new(Cell::new(None::<[f64; 2]>));
     let mut plots = Vec::new();
     for (index, ((key, title), side)) in STICK_FIELDS
@@ -963,33 +966,37 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
         let plot_ref = plot.downgrade();
         plots.push(plot_ref.clone());
         let curve_ctx = ctx.clone();
-        let row = scale_row("Response exponent", initial, 0.25, 4.0, 20, move |value| {
-            exponent.set(value);
-            if let Some(plot) = plot_ref.upgrade() {
-                plot.queue_draw();
-            }
-            curve_ctx.edit(|doc| {
-                set_number(doc.as_table_mut(), key, value);
-                Ok(())
-            });
-        });
+        let row = scale_row(
+            "Response exponent",
+            initial,
+            (*STICK_EXPONENT_RANGE.start()).into(),
+            (*STICK_EXPONENT_RANGE.end()).into(),
+            20,
+            move |value| {
+                exponent.set(value);
+                if let Some(plot) = plot_ref.upgrade() {
+                    plot.queue_draw();
+                }
+                curve_ctx.edit(|doc| {
+                    set_number(doc.as_table_mut(), key, value);
+                    Ok(())
+                });
+            },
+        );
         group.add(&row);
         group.add(&crate::stick_keys::editor_row(ctx, side, title));
         page.add(&group);
     }
-    controller_input::watch_status(
-        &page,
-        "stick_travel=",
-        Duration::from_millis(33),
-        move |result| {
-            let travel = result.ok().flatten().as_deref().and_then(stick_travel);
-            if live_travel.replace(travel) != travel {
-                for plot in plots.iter().filter_map(adw::glib::WeakRef::upgrade) {
-                    plot.queue_draw();
-                }
+    ctx.live.watch(&page, move |frame| {
+        let travel = frame
+            .and_then(|frame| frame.history.samples.last())
+            .map(|sample| StickTravel::from_sticks(sample.sticks).0);
+        if live_travel.replace(travel) != travel {
+            for plot in plots.iter().filter_map(adw::glib::WeakRef::upgrade) {
+                plot.queue_draw();
             }
-        },
-    );
+        }
+    });
     page.upcast()
 }
 
@@ -1028,15 +1035,8 @@ fn scale_row(
     row
 }
 
-fn stick_travel(value: &str) -> Option<[f64; 2]> {
-    let (left, right) = value.split_once(',')?;
-    let travel = [response_input(left)?, response_input(right)?];
-    travel.iter().all(|&value| value <= 100.0).then_some(travel)
-}
-
 fn stick_curve(exponent: f64, travel: Option<f64>) -> Curve {
-    let exponent = exponent.clamp(0.25, 4.0);
-    let output = |input: f64| 100.0 * (input / 100.0).powf(exponent);
+    let output = |input| plot_travel(exponent, input);
     Curve {
         input_max: 100.0,
         output_max: 100.0,
@@ -1053,8 +1053,6 @@ mod tests {
 
     #[test]
     fn live_points_use_the_configured_curve_at_the_measured_input() {
-        assert_eq!(stick_travel("50,75"), Some([50.0, 75.0]));
-        assert_eq!(stick_travel("101,50"), None);
         assert_eq!(stick_curve(2.0, Some(50.0)).sample, Some((50.0, 25.0)));
 
         let response = GyroResponse::new(10.0, 20.0, 100.0, 2.0).unwrap();
@@ -1089,7 +1087,10 @@ mod tests {
             .unwrap();
         set_number(doc.as_table_mut(), "stick_curve_left", 0.8);
         set_number(doc["gyro"].as_table_mut().unwrap(), "sensitivity_x", 4.5);
-        assert_eq!(number(doc.as_table(), "stick_curve", 1.0), 1.5);
+        assert_eq!(
+            number(doc.as_table(), "stick_curve", DEFAULT_STICK_EXPONENT.into()),
+            1.5
+        );
         assert!(doc.to_string().contains("sensitivity_x = 4.5 # horizontal"));
         assert!(!doc.to_string().contains("stick_curve_right"));
     }

@@ -4,384 +4,74 @@ use evdev::{
     AbsInfo, AbsoluteAxisCode as Axis, AttributeSet, BusType, EventType, InputEvent, InputId,
     KeyCode as Key, UinputAbsSetup, uinput::VirtualDevice,
 };
-use joyshockrust_core::{Button, Buttons, Controls, DPad, Stick};
+use joyshockrust_core::{Button, Controls};
+use joyshockrust_mapping::gamepad::{GamepadAxis, GamepadOutput, MAX_GAMEPAD_EVENTS};
 
-use crate::gyro_gate::TriggerGate;
+pub use joyshockrust_mapping::gamepad::{ButtonRemaps, GamepadMapping, OutputKind, RemapState};
+pub use joyshockrust_motion::stick_response::StickCurve;
 
-#[derive(Clone, Copy, PartialEq)]
-pub struct TriggerStages {
-    pub lower: TriggerGate,
-    pub upper: TriggerGate,
-    pub targets: [Option<Button>; 2],
-    pub keep_partial: bool,
-    pub travel_percent: u8,
-}
-
-#[derive(Clone, Copy, Default)]
-pub enum AnalogTriggerRoute {
-    #[default]
-    Same,
-    Other,
-    Off,
-}
-
-pub fn route_trigger_axes(
-    controls: &mut Controls,
-    travel: [Option<u8>; 2],
-    routes: [AnalogTriggerRoute; 2],
-    suppressed: &mut Buttons,
-) {
-    let mut output = [0.0_f32; 2];
-    for (index, ((axis, full), route)) in [controls.left_trigger, controls.right_trigger]
-        .into_iter()
-        .zip(travel)
-        .zip(routes)
-        .enumerate()
-    {
-        let destination = match route {
-            AnalogTriggerRoute::Same => index,
-            AnalogTriggerRoute::Other => 1 - index,
-            AnalogTriggerRoute::Off => continue,
-        };
-        if destination != index {
-            suppressed.insert([Button::LeftTrigger, Button::RightTrigger][index]);
-        }
-        let scaled = full.map_or(axis, |full| (axis / (f32::from(full) / 100.0)).min(1.0));
-        output[destination] = output[destination].max(scaled);
-    }
-    [controls.left_trigger, controls.right_trigger] = output;
-}
-
-#[derive(Default, PartialEq)]
-pub struct ButtonRemaps {
-    base: Vec<(Button, Button)>,
-    layers: Vec<RemapLayer>,
-}
-
-#[derive(PartialEq)]
-struct RemapLayer {
-    modifier: Button,
-    rules: Vec<(Button, Button)>,
-}
-
-#[derive(Default)]
-pub struct RemapState {
-    active: Option<usize>,
-    previous: Buttons,
-    trigger_pressed: [[bool; 2]; 2],
-}
-
-impl RemapState {
-    pub fn trigger_outputs(
-        &mut self,
-        controls: &Controls,
-        stages: Option<[TriggerStages; 2]>,
-        suppressed: &mut Buttons,
-    ) -> Buttons {
-        let mut targets = Buttons::default();
-        if let Some(stages) = stages {
-            for ((settings, physical), active) in stages
-                .into_iter()
-                .zip([Button::LeftTrigger, Button::RightTrigger])
-                .zip(&mut self.trigger_pressed)
-            {
-                if settings.targets == [None; 2] || suppressed.contains(physical) {
-                    *active = [false; 2];
-                    continue;
-                }
-                suppressed.insert(physical);
-                let [partial, full] = *active;
-                *active = [
-                    settings.lower.pressed(controls, partial),
-                    settings.upper.pressed(controls, full),
-                ];
-                let [partial, full] = *active;
-                for (pressed, target) in [partial && (!full || settings.keep_partial), full]
-                    .into_iter()
-                    .zip(settings.targets)
-                {
-                    if pressed && let Some(target) = target {
-                        targets.insert(target);
-                    }
-                }
-            }
-        }
-        targets
+fn key_code(button: Button) -> Key {
+    match button {
+        Button::South => Key::BTN_SOUTH,
+        Button::East => Key::BTN_EAST,
+        // SDL names the Linux BTN_X/BTN_Y aliases by their position.
+        Button::West => Key::BTN_NORTH,
+        Button::North => Key::BTN_WEST,
+        Button::LeftShoulder => Key::BTN_TL,
+        Button::RightShoulder => Key::BTN_TR,
+        Button::Select => Key::BTN_SELECT,
+        Button::Start => Key::BTN_START,
+        Button::LeftStick => Key::BTN_THUMBL,
+        Button::RightStick => Key::BTN_THUMBR,
+        Button::Home => Key::BTN_MODE,
+        Button::LeftTrigger => Key::BTN_TL2,
+        Button::RightTrigger => Key::BTN_TR2,
+        Button::TouchpadClick => Key::KEY_RECORD,
+        _ => unreachable!("unsupported virtual gamepad button: {button:?}"),
     }
 }
 
-impl ButtonRemaps {
-    pub fn is_empty(&self) -> bool {
-        self.base.is_empty() && self.layers.is_empty()
-    }
-
-    pub fn add(&mut self, spec: &str) -> Result<(), &'static str> {
-        add_rule(&mut self.base, parse_rule(spec)?)
-    }
-
-    pub fn add_layer(&mut self, spec: &str) -> Result<(), &'static str> {
-        let (modifier, rule) = spec
-            .split_once(':')
-            .ok_or("expected MODIFIER:SOURCE=TARGET")?;
-        let modifier = remap_button_by_name(modifier).ok_or("unknown remap layer button")?;
-        let rule = parse_rule(rule)?;
-        if let Some(layer) = self
-            .layers
-            .iter_mut()
-            .find(|layer| layer.modifier == modifier)
-        {
-            add_rule(&mut layer.rules, rule)
-        } else {
-            self.layers.push(RemapLayer {
-                modifier,
-                rules: vec![rule],
-            });
-            Ok(())
-        }
-    }
-
-    #[cfg(test)]
-    pub fn apply(&self, controls: Controls, state: &mut RemapState) -> Controls {
-        self.apply_filtered(controls, state, Buttons::default(), Buttons::default())
-    }
-
-    pub fn apply_filtered(
-        &self,
-        mut controls: Controls,
-        state: &mut RemapState,
-        suppressed: Buttons,
-        direct_outputs: Buttons,
-    ) -> Controls {
-        let physical = controls.buttons.union(controls.dpad.buttons());
-        if state
-            .active
-            .is_some_and(|i| !physical.contains(self.layers[i].modifier))
-        {
-            state.active = None;
-        }
-        if state.active.is_none() {
-            state.active = self.layers.iter().rposition(|layer| {
-                physical.contains(layer.modifier) && !state.previous.contains(layer.modifier)
-            });
-        }
-        state.previous = physical;
-        let mut remaining = physical.difference(suppressed);
-        let mut targets = direct_outputs;
-        let active_layer = state.active.map(|i| &self.layers[i]);
-        for &(source, target) in active_layer
-            .into_iter()
-            .flat_map(|layer| &layer.rules)
-            .chain(&self.base)
-        {
-            if remaining.contains(source) {
-                remaining.remove(source);
-                targets.insert(target);
-            }
-        }
-        let mapped = remaining.union(targets);
-        controls.buttons = mapped.difference(DPad::BUTTONS);
-        controls.dpad = DPad::from_buttons(mapped);
-        controls
+fn axis_code(axis: GamepadAxis) -> Axis {
+    match axis {
+        GamepadAxis::LeftX => Axis::ABS_X,
+        GamepadAxis::LeftY => Axis::ABS_Y,
+        GamepadAxis::RightX => Axis::ABS_RX,
+        GamepadAxis::RightY => Axis::ABS_RY,
+        GamepadAxis::LeftTrigger => Axis::ABS_Z,
+        GamepadAxis::RightTrigger => Axis::ABS_RZ,
+        GamepadAxis::HatX => Axis::ABS_HAT0X,
+        GamepadAxis::HatY => Axis::ABS_HAT0Y,
     }
 }
 
-pub fn dpad_button_by_name(name: &str) -> Option<Button> {
-    Some(match name {
-        "dpad-up" => Button::DPadUp,
-        "dpad-right" => Button::DPadRight,
-        "dpad-down" => Button::DPadDown,
-        "dpad-left" => Button::DPadLeft,
-        _ => return None,
-    })
-}
-
-fn remap_button_by_name(name: &str) -> Option<Button> {
-    super::gyro_gate::button_by_name(name).or_else(|| dpad_button_by_name(name))
-}
-
-fn parse_rule(spec: &str) -> Result<(Button, Button), &'static str> {
-    let (source, target) = spec.split_once('=').ok_or("expected SOURCE=TARGET")?;
-    let source = remap_button_by_name(source).ok_or("unknown source button")?;
-    Ok((source, parse_target(target)?))
-}
-
-pub fn parse_target(name: &str) -> Result<Button, &'static str> {
-    let target = remap_button_by_name(name).ok_or("unknown target button")?;
-    if !DPad::BUTTONS.contains(target)
-        && !OutputKind::Generic
-            .buttons()
-            .any(|(button, _)| button == target)
-    {
-        return Err("target button is unavailable on the virtual gamepad");
-    }
-    Ok(target)
-}
-
-fn add_rule(rules: &mut Vec<(Button, Button)>, rule: (Button, Button)) -> Result<(), &'static str> {
-    if rules.iter().any(|&(source, _)| source == rule.0) {
-        return Err("source button already has a remap in this layer");
-    }
-    rules.push(rule);
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-pub struct StickCurve([f32; 2]);
-
-impl StickCurve {
-    pub fn parse(value: &str) -> Result<Self, &'static str> {
-        Self::new(value.parse().map_err(|_| "invalid stick curve exponent")?)
-    }
-
-    pub fn new(exponent: f32) -> Result<Self, &'static str> {
-        Self::validate(exponent)?;
-        Ok(Self([exponent; 2]))
-    }
-
-    fn validate(exponent: f32) -> Result<(), &'static str> {
-        if !(0.25..=4.0).contains(&exponent) {
-            return Err("stick curve exponent must be between 0.25 and 4");
-        }
-        Ok(())
-    }
-
-    pub fn from_profile(
-        shared: Option<f32>,
-        left: Option<f32>,
-        right: Option<f32>,
-    ) -> Result<Option<Self>, &'static str> {
-        [shared, left, right]
-            .into_iter()
-            .flatten()
-            .try_for_each(Self::validate)?;
-        let fallback = shared.unwrap_or(1.0);
-        Ok((shared.is_some() || left.is_some() || right.is_some())
-            .then_some(Self([left.unwrap_or(fallback), right.unwrap_or(fallback)])))
-    }
-
-    pub fn apply(self, mut controls: Controls) -> Controls {
-        controls.left_stick = Self::shape(controls.left_stick, self.0[0]);
-        controls.right_stick = Self::shape(controls.right_stick, self.0[1]);
-        controls
-    }
-
-    fn shape(stick: Stick, exponent: f32) -> Stick {
-        let radius_squared = stick.x * stick.x + stick.y * stick.y;
-        // Keep center and full travel unchanged, including square corners.
-        if exponent == 1.0 || radius_squared == 0.0 || radius_squared >= 1.0 {
-            return stick;
-        }
-        let scale = radius_squared.powf((exponent - 1.0) * 0.5);
-        Stick {
-            x: stick.x * scale,
-            y: stick.y * scale,
-        }
-    }
-}
-
-const BUTTONS: [(Button, Key); 11] = [
-    (Button::South, Key::BTN_SOUTH),
-    (Button::East, Key::BTN_EAST),
-    // SDL maps generic gamepads by the Linux BTN_X/BTN_Y aliases rather
-    // than using the Sony-specific positional mapping.
-    (Button::West, Key::BTN_NORTH), // BTN_X
-    (Button::North, Key::BTN_WEST), // BTN_Y
-    (Button::LeftShoulder, Key::BTN_TL),
-    (Button::RightShoulder, Key::BTN_TR),
-    (Button::Select, Key::BTN_SELECT),
-    (Button::Start, Key::BTN_START),
-    (Button::LeftStick, Key::BTN_THUMBL),
-    (Button::RightStick, Key::BTN_THUMBR),
-    (Button::Home, Key::BTN_MODE),
-];
-const DIGITAL_TRIGGERS: [(Button, Key); 2] = [
-    (Button::LeftTrigger, Key::BTN_TL2),
-    (Button::RightTrigger, Key::BTN_TR2),
-];
-
-const STICK_SCALE: i32 = 32_767;
-const TRIGGER_SCALE: i32 = 255;
-const SERIES_TRIGGER_SCALE: i32 = 1023;
-const AXES: [(Axis, i32, i32); 8] = [
-    (Axis::ABS_X, -STICK_SCALE, STICK_SCALE),
-    (Axis::ABS_Y, -STICK_SCALE, STICK_SCALE),
-    (Axis::ABS_RX, -STICK_SCALE, STICK_SCALE),
-    (Axis::ABS_RY, -STICK_SCALE, STICK_SCALE),
-    (Axis::ABS_Z, 0, TRIGGER_SCALE),
-    (Axis::ABS_RZ, 0, TRIGGER_SCALE),
-    (Axis::ABS_HAT0X, -1, 1),
-    (Axis::ABS_HAT0Y, -1, 1),
-];
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum OutputKind {
-    #[default]
-    Generic,
-    Xbox360,
-    XboxSeries,
-}
-
-impl OutputKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Generic => "generic",
-            Self::Xbox360 => "xbox360",
-            Self::XboxSeries => "xbox-series",
-        }
-    }
-
-    fn identity(self) -> (&'static str, InputId) {
-        match self {
-            Self::Generic => (
-                "JoyShockRust Virtual Gamepad",
-                InputId::new(BusType::BUS_VIRTUAL, 0, 0, 1),
-            ),
-            Self::Xbox360 => (
-                "JoyShockRust Virtual Xbox 360 Gamepad",
-                InputId::new(BusType::BUS_USB, 0x045e, 0x028e, 0x0114),
-            ),
-            Self::XboxSeries => (
-                "JoyShockRust Virtual Xbox Series X|S Gamepad",
-                InputId::new(BusType::BUS_USB, 0x045e, 0x0b12, 0x0507),
-            ),
-        }
-    }
-
-    fn buttons(self) -> impl Iterator<Item = (Button, Key)> {
-        let extra: &[_] = match self {
-            Self::Generic => &DIGITAL_TRIGGERS,
-            Self::Xbox360 => &[],
-            Self::XboxSeries => &[(Button::TouchpadClick, Key::KEY_RECORD)],
-        };
-        BUTTONS.iter().chain(extra).copied()
-    }
-
-    fn trigger_scale(self) -> i32 {
-        match self {
-            Self::Generic | Self::Xbox360 => TRIGGER_SCALE,
-            Self::XboxSeries => SERIES_TRIGGER_SCALE,
-        }
+fn identity(kind: OutputKind) -> (&'static str, InputId) {
+    match kind {
+        OutputKind::Generic => (
+            "JoyShockRust Virtual Gamepad",
+            InputId::new(BusType::BUS_VIRTUAL, 0, 0, 1),
+        ),
+        OutputKind::Xbox360 => (
+            "JoyShockRust Virtual Xbox 360 Gamepad",
+            InputId::new(BusType::BUS_USB, 0x045e, 0x028e, 0x0114),
+        ),
+        OutputKind::XboxSeries => (
+            "JoyShockRust Virtual Xbox Series X|S Gamepad",
+            InputId::new(BusType::BUS_USB, 0x045e, 0x0b12, 0x0507),
+        ),
     }
 }
 
 pub fn open(kind: OutputKind, rumble_enabled: bool) -> io::Result<VirtualDevice> {
-    let (name, id) = kind.identity();
-    let keys = kind
-        .buttons()
-        .map(|(_, code)| code)
-        .collect::<AttributeSet<Key>>();
+    let (name, id) = identity(kind);
+    let keys = kind.buttons().map(key_code).collect::<AttributeSet<Key>>();
     let mut builder = VirtualDevice::builder()?
         .name(name)
         .input_id(id)
         .with_keys(&keys)?;
-    for (code, min, max) in AXES {
-        let max = match code {
-            Axis::ABS_Z | Axis::ABS_RZ => kind.trigger_scale(),
-            _ => max,
-        };
+    for (axis, range) in GamepadAxis::ALL.into_iter().zip(kind.ranges()) {
+        let (min, max) = range.limits();
         builder = builder.with_absolute_axis(&UinputAbsSetup::new(
-            code,
+            axis_code(axis),
             AbsInfo::new(0, min, max, 0, 0, 0),
         ))?;
     }
@@ -394,18 +84,11 @@ pub fn open(kind: OutputKind, rumble_enabled: bool) -> io::Result<VirtualDevice>
     builder.build()
 }
 
-#[derive(Default)]
-pub struct GamepadState {
-    kind: OutputKind,
-    current: Controls,
-}
+pub struct GamepadState(GamepadOutput);
 
 impl GamepadState {
     pub fn new(kind: OutputKind) -> Self {
-        Self {
-            kind,
-            current: Controls::default(),
-        }
+        Self(GamepadOutput::new(kind, kind.ranges()))
     }
 
     pub fn publish(
@@ -413,64 +96,34 @@ impl GamepadState {
         next: Controls,
         mut emit: impl FnMut(&[InputEvent]) -> io::Result<()>,
     ) -> io::Result<bool> {
-        let mut changes =
-            [InputEvent::new(0, 0, 0); BUTTONS.len() + DIGITAL_TRIGGERS.len() + AXES.len()];
-        let mut count = 0;
-        for (button, code) in self.kind.buttons() {
-            let pressed = next.buttons.contains(button);
-            if pressed != self.current.buttons.contains(button) {
-                changes[count] = InputEvent::new(EventType::KEY.0, code.0, i32::from(pressed));
+        self.0.publish(next, |changes| {
+            let mut batch = [InputEvent::new(0, 0, 0); MAX_GAMEPAD_EVENTS];
+            let mut count = 0;
+            for (button, pressed) in changes.buttons() {
+                batch[count] =
+                    InputEvent::new(EventType::KEY.0, key_code(button).0, i32::from(pressed));
                 count += 1;
             }
-        }
-        let trigger_scale = self.kind.trigger_scale();
-        for (((code, _, _), old), new) in AXES
-            .into_iter()
-            .zip(axes(self.current, trigger_scale))
-            .zip(axes(next, trigger_scale))
-        {
-            if old != new {
-                changes[count] = InputEvent::new(EventType::ABSOLUTE.0, code.0, new);
+            for (axis, value) in changes.axes() {
+                batch[count] = InputEvent::new(EventType::ABSOLUTE.0, axis_code(axis).0, value);
                 count += 1;
             }
-        }
-        if count > 0 {
-            emit(&changes[..count])?;
-        }
-        self.current = next;
-        Ok(count > 0)
+            emit(&batch[..count])
+        })
     }
 }
 
-fn axes(controls: Controls, trigger_scale: i32) -> [i32; AXES.len()] {
-    let (x, y) = match controls.dpad {
-        DPad::Neutral => (0, 0),
-        DPad::Up => (0, -1),
-        DPad::UpRight => (1, -1),
-        DPad::Right => (1, 0),
-        DPad::DownRight => (1, 1),
-        DPad::Down => (0, 1),
-        DPad::DownLeft => (-1, 1),
-        DPad::Left => (-1, 0),
-        DPad::UpLeft => (-1, -1),
-    };
-    let stick = |axis: f32| (axis * STICK_SCALE as f32).round() as i32;
-    let trigger = |axis: f32| (axis * trigger_scale as f32).round() as i32;
-    [
-        stick(controls.left_stick.x),
-        stick(controls.left_stick.y),
-        stick(controls.right_stick.x),
-        stick(controls.right_stick.y),
-        trigger(controls.left_trigger),
-        trigger(controls.right_trigger),
-        x,
-        y,
-    ]
+#[cfg(test)]
+impl Default for GamepadState {
+    fn default() -> Self {
+        Self::new(OutputKind::default())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use joyshockrust_core::{DPad, Stick};
     use joyshockrust_input::{DeviceModel, Transport, parse_report};
 
     #[test]
@@ -649,7 +302,16 @@ mod tests {
         let result = StickCurve::parse("2").unwrap().apply(controls);
         assert!((result.left_stick.x - 0.15).abs() < 1e-6);
         assert!((result.left_stick.y + 0.2).abs() < 1e-6);
-        assert_eq!(axes(result, TRIGGER_SCALE)[2], -8192);
+        GamepadState::default()
+            .publish(result, |events| {
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| event.code() == Axis::ABS_RX.0 && event.value() == -8192)
+                );
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(result.left_trigger, controls.left_trigger);
         assert_eq!(result.dpad, controls.dpad);
         assert_eq!(StickCurve::parse("1").unwrap().apply(controls), controls);
@@ -738,7 +400,7 @@ mod tests {
                 ),
             }
         };
-        let (name, id) = kind.identity();
+        let (name, id) = identity(kind);
         assert_eq!(observer.name(), Some(name));
         assert_eq!(observer.input_id(), id);
         assert_eq!(
@@ -762,7 +424,12 @@ mod tests {
             .filter(|(code, _)| matches!(*code, Axis::ABS_Z | Axis::ABS_RZ))
             .map(|(_, info)| (info.minimum(), info.maximum()))
             .collect();
-        assert_eq!(trigger_axes, [(0, kind.trigger_scale()); 2]);
+        let max = if kind == OutputKind::XboxSeries {
+            1023
+        } else {
+            255
+        };
+        assert_eq!(trigger_axes, [(0, max); 2]);
         observer.set_nonblocking(true).unwrap();
 
         let mut report = [0; 64];
@@ -896,8 +563,8 @@ mod tests {
             [
                 (EventType::KEY, Key::BTN_SOUTH.0, 1),
                 (EventType::KEY, Key::BTN_TL2.0, 1),
-                (EventType::ABSOLUTE, Axis::ABS_X.0, STICK_SCALE),
-                (EventType::ABSOLUTE, Axis::ABS_Z.0, TRIGGER_SCALE),
+                (EventType::ABSOLUTE, Axis::ABS_X.0, 32_767),
+                (EventType::ABSOLUTE, Axis::ABS_Z.0, 255),
                 (EventType::ABSOLUTE, Axis::ABS_HAT0X.0, 1),
                 (EventType::ABSOLUTE, Axis::ABS_HAT0Y.0, -1),
             ]

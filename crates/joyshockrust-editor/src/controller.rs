@@ -1,9 +1,9 @@
 use adw::{glib, gtk, prelude::*};
+use gtk::{cairo, gdk, gdk_pixbuf};
 use toml_edit::DocumentMut;
 
 use crate::{
     bindings::{self, Gesture, OutputMode},
-    controller_art,
     ui::{self, Context},
 };
 
@@ -18,26 +18,211 @@ struct Control {
 const ART_SCALE: f64 = 2.0;
 const ART_TOP: f64 = 42.0;
 const ART_BOTTOM: f64 = 216.0;
+pub(crate) const ART_SIZE: f64 = 256.0;
+const SVG: &[u8] = include_bytes!("../assets/dualsense.svg");
+const RASTER_SIZE: i32 = 768;
+
+pub(crate) fn load_artwork() -> Option<gdk_pixbuf::Pixbuf> {
+    rasterize_artwork()
+        .inspect_err(|error| eprintln!("DualSense art unavailable: {error}"))
+        .ok()
+}
+
+fn rasterize_artwork() -> Result<gdk_pixbuf::Pixbuf, glib::Error> {
+    let loader = gdk_pixbuf::PixbufLoader::with_type("svg")?;
+    loader.set_size(RASTER_SIZE, RASTER_SIZE);
+    loader.write(SVG)?;
+    loader.close()?;
+    loader.pixbuf().ok_or_else(|| {
+        glib::Error::new(
+            gdk_pixbuf::PixbufError::Failed,
+            "Could not render DualSense art",
+        )
+    })
+}
+
+pub(crate) fn draw_artwork(cr: &cairo::Context, svg: &gdk_pixbuf::Pixbuf, color: gdk::RGBA) {
+    let _ = cr.save();
+    cr.scale(
+        ART_SIZE / f64::from(svg.width()),
+        ART_SIZE / f64::from(svg.height()),
+    );
+    cr.set_source_pixbuf(svg, 0.0, 0.0);
+    let mask = cr.source();
+    // Use the SVG alpha as a mask so the outline follows the GTK theme.
+    cr.set_source_rgba(
+        color.red().into(),
+        color.green().into(),
+        color.blue().into(),
+        0.60,
+    );
+    let _ = cr.mask(&mask);
+    let _ = cr.restore();
+}
 
 const FRONT: [Control; 22] = [
-    control("l2", "L2 · Left trigger", "L2", 74., 54., 46., 22.),
-    control("r2", "R2 · Right trigger", "R2", 182., 54., 46., 22.),
-    control("l1", "L1 · Left bumper", "L1", 74., 69., 50., 22.),
-    control("r1", "R1 · Right bumper", "R1", 182., 69., 50., 22.),
-    control("create", "Create", "Create", 82., 82., 42., 21.),
-    control("options", "Options", "Options", 174., 82., 46., 21.),
-    control("dpad-up", "D-pad up", "↑", 64., 94., 22., 22.),
-    control("dpad-left", "D-pad left", "←", 52., 106., 22., 22.),
-    control("dpad-right", "D-pad right", "→", 76., 106., 22., 22.),
-    control("dpad-down", "D-pad down", "↓", 64., 118., 22., 22.),
-    control("triangle", "Triangle", "△", 192., 94., 22., 22.),
-    control("square", "Square", "□", 180., 106., 22., 22.),
-    control("circle", "Circle", "○", 204., 106., 22., 22.),
-    control("cross", "Cross", "×", 192., 118., 22., 22.),
-    control("l3", "L3 · Left stick press", "L3", 102., 134., 42., 42.),
-    control("r3", "R3 · Right stick press", "R3", 154., 134., 42., 42.),
-    control("fn-left", "Left Fn", "Left Fn", 102., 155., 52., 20.),
-    control("fn-right", "Right Fn", "Right Fn", 154., 155., 52., 20.),
+    control(
+        joyshockrust_core::Button::LeftTrigger.name(),
+        "L2 · Left trigger",
+        "L2",
+        74.,
+        54.,
+        46.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::RightTrigger.name(),
+        "R2 · Right trigger",
+        "R2",
+        182.,
+        54.,
+        46.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::LeftShoulder.name(),
+        "L1 · Left bumper",
+        "L1",
+        74.,
+        69.,
+        50.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::RightShoulder.name(),
+        "R1 · Right bumper",
+        "R1",
+        182.,
+        69.,
+        50.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::Select.name(),
+        "Create",
+        "Create",
+        82.,
+        82.,
+        42.,
+        21.,
+    ),
+    control(
+        joyshockrust_core::Button::Start.name(),
+        "Options",
+        "Options",
+        174.,
+        82.,
+        46.,
+        21.,
+    ),
+    control(
+        joyshockrust_core::Button::DPadUp.name(),
+        "D-pad up",
+        "↑",
+        64.,
+        94.,
+        22.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::DPadLeft.name(),
+        "D-pad left",
+        "←",
+        52.,
+        106.,
+        22.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::DPadRight.name(),
+        "D-pad right",
+        "→",
+        76.,
+        106.,
+        22.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::DPadDown.name(),
+        "D-pad down",
+        "↓",
+        64.,
+        118.,
+        22.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::North.name(),
+        "Triangle",
+        "△",
+        192.,
+        94.,
+        22.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::West.name(),
+        "Square",
+        "□",
+        180.,
+        106.,
+        22.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::East.name(),
+        "Circle",
+        "○",
+        204.,
+        106.,
+        22.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::South.name(),
+        "Cross",
+        "×",
+        192.,
+        118.,
+        22.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::LeftStick.name(),
+        "L3 · Left stick press",
+        "L3",
+        102.,
+        134.,
+        42.,
+        42.,
+    ),
+    control(
+        joyshockrust_core::Button::RightStick.name(),
+        "R3 · Right stick press",
+        "R3",
+        154.,
+        134.,
+        42.,
+        42.,
+    ),
+    control(
+        joyshockrust_core::Button::LeftFunction.name(),
+        "Left Fn",
+        "Left Fn",
+        102.,
+        155.,
+        52.,
+        20.,
+    ),
+    control(
+        joyshockrust_core::Button::RightFunction.name(),
+        "Right Fn",
+        "Right Fn",
+        154.,
+        155.,
+        52.,
+        20.,
+    ),
     control(
         "paddle-left",
         "Left paddle",
@@ -56,8 +241,24 @@ const FRONT: [Control; 22] = [
         84.,
         21.,
     ),
-    control("ps", "PS button", "PS", 128., 133., 29., 22.),
-    control("mute", "Microphone mute", "Mute", 128., 147., 38., 20.),
+    control(
+        joyshockrust_core::Button::Home.name(),
+        "PS button",
+        "PS",
+        128.,
+        133.,
+        29.,
+        22.,
+    ),
+    control(
+        joyshockrust_core::Button::MicrophoneMute.name(),
+        "Microphone mute",
+        "Mute",
+        128.,
+        147.,
+        38.,
+        20.,
+    ),
 ];
 
 pub(crate) fn physical_buttons() -> impl Iterator<Item = (String, String)> {
@@ -65,28 +266,52 @@ pub(crate) fn physical_buttons() -> impl Iterator<Item = (String, String)> {
         .iter()
         .filter(|control| !control.id.starts_with("dpad-"))
         .map(|control| (control.id, control.name))
-        .chain([("touchpad", "Touchpad press")])
+        .chain([(
+            joyshockrust_core::Button::TouchpadClick.name(),
+            "Touchpad press",
+        )])
         .map(|(id, name)| (id.into(), name.into()))
 }
 
 pub(crate) const GAMEPAD_TARGETS: [(&str, &str); 17] = [
-    ("cross", "South · A / Cross"),
-    ("circle", "East · B / Circle"),
-    ("square", "West · X / Square"),
-    ("triangle", "North · Y / Triangle"),
-    ("l1", "Left bumper"),
-    ("r1", "Right bumper"),
-    ("l3", "Left stick press"),
-    ("r3", "Right stick press"),
-    ("create", "Back / Create"),
-    ("options", "Start / Options"),
-    ("ps", "Guide / PS"),
-    ("dpad-up", "D-pad up"),
-    ("dpad-right", "D-pad right"),
-    ("dpad-down", "D-pad down"),
-    ("dpad-left", "D-pad left"),
-    ("l2", "Left digital trigger (Generic)"),
-    ("r2", "Right digital trigger (Generic)"),
+    (joyshockrust_core::Button::South.name(), "South · A / Cross"),
+    (joyshockrust_core::Button::East.name(), "East · B / Circle"),
+    (joyshockrust_core::Button::West.name(), "West · X / Square"),
+    (
+        joyshockrust_core::Button::North.name(),
+        "North · Y / Triangle",
+    ),
+    (
+        joyshockrust_core::Button::LeftShoulder.name(),
+        "Left bumper",
+    ),
+    (
+        joyshockrust_core::Button::RightShoulder.name(),
+        "Right bumper",
+    ),
+    (
+        joyshockrust_core::Button::LeftStick.name(),
+        "Left stick press",
+    ),
+    (
+        joyshockrust_core::Button::RightStick.name(),
+        "Right stick press",
+    ),
+    (joyshockrust_core::Button::Select.name(), "Back / Create"),
+    (joyshockrust_core::Button::Start.name(), "Start / Options"),
+    (joyshockrust_core::Button::Home.name(), "Guide / PS"),
+    (joyshockrust_core::Button::DPadUp.name(), "D-pad up"),
+    (joyshockrust_core::Button::DPadRight.name(), "D-pad right"),
+    (joyshockrust_core::Button::DPadDown.name(), "D-pad down"),
+    (joyshockrust_core::Button::DPadLeft.name(), "D-pad left"),
+    (
+        joyshockrust_core::Button::LeftTrigger.name(),
+        "Left digital trigger (Generic)",
+    ),
+    (
+        joyshockrust_core::Button::RightTrigger.name(),
+        "Right digital trigger (Generic)",
+    ),
 ];
 
 pub(crate) const MOUSE_BUTTONS: &[(&str, &str)] = &[
@@ -155,19 +380,18 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         .build();
     layout.append(&diagram_scroll);
     let outline = gtk::DrawingArea::builder()
-        .content_width((controller_art::SIZE * ART_SCALE) as i32)
+        .content_width((ART_SIZE * ART_SCALE) as i32)
         .content_height(((ART_BOTTOM - ART_TOP) * ART_SCALE) as i32)
         .build();
     outline.set_can_target(false);
-    match controller_art::load() {
-        Ok(svg) => outline.set_draw_func(move |area, cr, _, _| {
+    if let Some(svg) = load_artwork() {
+        outline.set_draw_func(move |area, cr, _, _| {
             let _ = cr.save();
             cr.scale(ART_SCALE, ART_SCALE);
             cr.translate(0.0, -ART_TOP);
-            controller_art::draw(cr, &svg, area.style_context().color(), 0.60);
+            draw_artwork(cr, &svg, area.style_context().color());
             let _ = cr.restore();
-        }),
-        Err(error) => eprintln!("DualSense art unavailable: {error}"),
+        });
     }
     let control_style = gtk::CssProvider::new();
     control_style.load_from_data(
@@ -231,15 +455,23 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         let [x, y] = control.center.map(f64::from);
         let [width, height] = control.size.map(f64::from);
         button.add_css_class("diagram-control");
-        button.set_size_request(width as i32, height as i32);
         if matches!(
             id,
             "triangle" | "cross" | "square" | "circle" | "l3" | "r3" | "ps"
         ) {
             button.add_css_class("circular");
         }
+        if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        }
+        // Keep the SVG coordinates independent of the label's natural width.
+        let slot = gtk::Overlay::builder()
+            .width_request(width as i32)
+            .height_request(height as i32)
+            .build();
+        slot.add_overlay(&button);
         diagram.put(
-            &button,
+            &slot,
             x * ART_SCALE - width / 2.0,
             (y - ART_TOP) * ART_SCALE - height / 2.0,
         );

@@ -25,39 +25,85 @@ flowchart LR
 
 ## Runtime and scheduling
 
-The bridge waits with `poll` on hidraw, IPC and optional force-feedback
-descriptors. Udev discovery waits for hotplug when no eligible controller
+The CLI parses commands and startup options before entering the bridge's
+report loop. The bridge waits with `poll` on hidraw, IPC and optional
+force-feedback descriptors. Udev discovery waits for hotplug when no eligible controller
 is open. Readable hidraw reports are decoded in order in bounded
 nonblocking batches. The next keyboard gesture deadline is part of the
 same wait. Status requests can be served between full batches. This keeps
 device reads, configuration changes and output state on one owner.
-[Report loop](crates/joyshockrust-linux/src/main.rs) · [Wait and reload](crates/joyshockrust-linux/src/reload.rs)
+[CLI](crates/joyshockrust-linux/src/cli.rs) · [Report loop](crates/joyshockrust-linux/src/main.rs) · [Wait and reload](crates/joyshockrust-linux/src/reload.rs)
 
-The logical control plane uses local Unix sockets. There is no separate
-IPC thread for the bridge's command and status loop. Controller selection,
+The logical control plane uses local Unix sockets. The bridge handles
+commands and one-shot status queries on its readiness loop. The shared
+IPC codec decodes request datagrams into typed commands. The bridge
+checks discovery policy and owns device actions. Controller selection,
 mapping profile and calibration are stored separately. Session setup can
-open device handles and read settings. Calibration persistence and PCM
-haptics use worker paths when needed. The steady-state report path avoids
+open device handles and read settings. Force feedback and touchpad grabs
+share the evdev node lookup under the physical controller. Calibration
+persistence and PCM haptics use worker paths when needed. The steady-state report path avoids
 filesystem work, blocking IPC and shared configuration locks.
-[Discovery](crates/joyshockrust-linux/src/discovery.rs) · [Calibration storage](crates/joyshockrust-linux/src/gyro_calibration.rs) · [Haptics](crates/joyshockrust-linux/src/haptics.rs)
+[Command codec](crates/joyshockrust-ipc/src/control.rs) · [Discovery](crates/joyshockrust-linux/src/discovery.rs) · [Calibration storage](crates/joyshockrust-linux/src/gyro_calibration.rs) · [Haptics](crates/joyshockrust-linux/src/haptics.rs)
+
+The profile worker reads and compiles live profiles and persists the
+selected profile. The bridge applies a prepared profile between report
+batches and acknowledges it after the persistence attempt. Profile
+requests run in the order the bridge accepts them, with a bounded queue.
+The bridge continues serving status and emulation commands while the
+worker waits for the disk.
+[Profile worker](crates/joyshockrust-linux/src/reload/profile_work.rs)
+
+An inventory worker listens for udev changes while the bridge is waiting
+or processing a controller. It publishes bounded snapshots over a private
+Unix stream. The tray reconnects to that stream after a bridge restart and
+marks the list unavailable until a fresh snapshot arrives.
+[Inventory worker](crates/joyshockrust-linux/src/inventory.rs) · [Inventory protocol](crates/joyshockrust-ipc/src/inventory.rs)
+
+The tray also subscribes to status over a separate private stream. The
+bridge captures status between report batches for subscribed clients on
+state changes. The legacy status socket and the stream use the same
+snapshot renderer. The IPC crate manages the Unix connections, framed
+updates, backpressure and client reconnection.
+[Bridge scheduling](crates/joyshockrust-linux/src/status_updates.rs) · [Unix subscriptions](crates/joyshockrust-ipc/src/unix/subscriptions.rs) · [Stream codec](crates/joyshockrust-ipc/src/stream.rs)
+
+The editor subscribes to a separate preview topic only while preview
+widgets are visible. The bridge retains up to 96 ordered controller
+samples and publishes the recent window about every 16 ms with the
+latest calibrated IMU reading. The editor uses sequence numbers to
+consume each sample once, even if the subscription coalesces a frame.
+It resets its state on a gap, disconnect or new session. The explicit
+calibration flows still use their own controller reads.
+[Bridge preview capture](crates/joyshockrust-linux/src/preview_updates.rs) · [Preview codec](crates/joyshockrust-ipc/src/telemetry/preview.rs) · [Editor subscription](crates/joyshockrust-editor/src/live_preview.rs)
 
 The tray starts and stops the user service and uses XDG autostart for its
-login preference. The editor validates and applies profiles through the
-bridge CLI. The bridge exposes a calibrated IMU snapshot through its
-status socket. The stick preview reads the selected hidraw node while
-visible. Desktop refresh timers are independent of bridge report timing.
+login preference. The editor retains its TOML draft and validates it with
+the shared profile compiler. Desktop control commands and CLI commands
+use the same Unix-socket client for profile activation and emulation changes.
+The legacy status socket exposes the last observed readings for CLI
+diagnostics. The editor displays calibrated IMU and projected gyro speed
+from one preview frame, and applies the draft Flick Stick settings to the
+ordered stick history.
 [Desktop lifecycle](DECISIONS.md#desktop-process-lifecycle) · [Live IMU](crates/joyshockrust-editor/src/imu_monitor.rs) · [Stick preview](crates/joyshockrust-editor/src/flick_preview.rs)
 
 ## Workspace
 
 | Crate | Responsibility |
 |---|---|
-| `joyshockrust-core` | Transport-neutral controller state. |
+| `joyshockrust-core` | Transport-neutral controller state, canonical input names, analog trigger gates and touch-grid geometry. |
+| `joyshockrust-config` | TOML profile compilation, legacy compatibility, Linux key names, atomic profile persistence and desktop paths. |
 | `joyshockrust-input` | USB and Bluetooth parsing, factory conversion and device timebase. |
-| `joyshockrust-motion` | Deterministic stationary calibration, gyro and fusion aim, aim response and game calibration math. |
-| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, TOML, status/control IPC, mapping, uinput and feedback. |
+| `joyshockrust-ipc` | Local status fields, typed telemetry, control and controller inventory codecs, Unix clients and subscription transport. |
+| `joyshockrust-motion` | Deterministic calibration, gyro and fusion aim, Flick Stick composition, integer pointer motion and stick response. |
+| `joyshockrust-mapping` | Gamepad, keyboard and mouse routing, gesture deadlines, gyro activation, touch regions, layers and trigger stages. |
+| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, runtime profile activation, IPC dispatch at report boundaries, uinput event encoding and feedback. |
 | `joyshockrust-tray` | StatusNotifierItem, desktop lifecycle and calibration launch. |
-| `joyshockrust-editor` | GTK 4/libadwaita profile editing and Wayland calibration windows. |
+| `joyshockrust-editor` | GTK 4/libadwaita profile editing with `toml_edit`, live charts and Wayland calibration windows. |
+
+Applications use shared codecs at the control boundary. The editor and
+bridge compile TOML with the same validator. The bridge checks live
+compatibility before activating the resulting settings. The editor opens
+and saves profiles on a worker and applies the exact saved snapshot over
+IPC. HID report processing uses resolved gates, settings and bitsets.
 
 ## Key invariants
 

@@ -15,7 +15,7 @@ pub const MAX_REPORTS: usize = 100_000;
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 pub const MAX_TIMEOUT_SECONDS: u64 = 3600;
 // Match the 50 ms motion gap at three DualSense sensor ticks per microsecond.
-const DEVICE_GAP_TICKS: u32 = 150_000;
+const DEVICE_GAP_TICKS: u32 = joyshockrust_input::ticks_in_nanoseconds(50_000_000) as u32;
 
 pub struct Benchmark {
     target: usize,

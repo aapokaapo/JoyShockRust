@@ -147,6 +147,127 @@ fn installing_a_profile_preserves_source_bytes_and_rejects_invalid_replacements(
 }
 
 #[test]
+fn profile_persistence_does_not_block_status_or_control_and_preserves_request_order() {
+    use joyshockrust_ipc::control::{
+        ControlCommand, OutputTarget, Reply, load_socket_path, profile_path_payload,
+    };
+    use std::{io::Read, os::unix::net::UnixStream, thread, time::Instant};
+
+    let directory = TestDirectory::new("profile-lock");
+    let startup = directory.0.join("profile.toml");
+    let selected = directory.0.join("selected.toml");
+    let remembered = directory.0.join("profile.toml.active");
+    let status = directory.0.join("status");
+    let reload = directory.0.join("reload");
+    let notify = directory.0.join("notify");
+    let listener = UnixDatagram::bind(&notify).unwrap();
+    listener
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let _bridge = Bridge(
+        Command::new(env!("CARGO_BIN_EXE_joyshockrust-linux"))
+            .env("NOTIFY_SOCKET", &notify)
+            .env("XDG_CONFIG_HOME", &directory.0)
+            .arg("--profile-if-present")
+            .arg(&startup)
+            .args(["--controller-id", "ff:ff:ff:ff:ff:ff", "--status-socket"])
+            .arg(&status)
+            .arg("--reload-socket")
+            .arg(&reload)
+            .spawn()
+            .unwrap(),
+    );
+    let mut ready = [0; 64];
+    let len = listener.recv(&mut ready).expect("bridge readiness");
+    assert_eq!(&ready[..len], b"READY=1");
+
+    let connect = |name| {
+        let client = UnixDatagram::bind(directory.0.join(name)).unwrap();
+        client.connect(load_socket_path(&reload)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        client
+    };
+    let profiles = connect("profiles");
+    let control = connect("control");
+    let lock = fs::File::open(&directory.0).unwrap();
+    lock.lock().unwrap();
+    profiles
+        .send(&profile_path_payload(&selected, b"version = 1\n[gyro]\n").unwrap())
+        .unwrap();
+
+    // The atomic save creates its temporary file before taking the directory lock.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !fs::read_dir(&directory.0).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .as_encoded_bytes()
+            .starts_with(b".joyshockrust-profile-")
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "profile persistence did not begin"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    profiles
+        .send(&ControlCommand::UnloadProfile.encode())
+        .unwrap();
+    control
+        .send(
+            &ControlCommand::Emulation {
+                target: OutputTarget::Gamepad,
+                enabled: false,
+            }
+            .encode(),
+        )
+        .unwrap();
+    let assert_reply = |client: &UnixDatagram, expected: Reply| {
+        let mut reply = [0; 32];
+        let len = client.recv(&mut reply).unwrap();
+        assert_eq!(&reply[..len], expected.bytes());
+    };
+    assert_reply(&control, Reply::Applied);
+    for invalid in [
+        &b"\0set-outputs\nmaybe"[..],
+        b"\0preview-trigger\n",
+        b"\0unknown\n",
+    ] {
+        control.send(invalid).unwrap();
+        assert_reply(&control, Reply::Rejected);
+    }
+    let mut stream = UnixStream::connect(&status).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let mut snapshot = String::new();
+    stream.read_to_string(&mut snapshot).unwrap();
+    assert!(
+        snapshot.lines().any(|line| line == "profile_source=loaded"),
+        "{snapshot}"
+    );
+    assert!(
+        snapshot
+            .lines()
+            .any(|line| line == "last_reload=not_attempted"),
+        "{snapshot}"
+    );
+    assert!(!remembered.exists());
+
+    profiles
+        .send(b"\0load-profile-path\nmissing separator")
+        .unwrap();
+    lock.unlock().unwrap();
+    assert_reply(&profiles, Reply::Applied);
+    assert_reply(&profiles, Reply::Applied);
+    assert_reply(&profiles, Reply::Rejected);
+    assert_eq!(fs::read_to_string(remembered).unwrap(), "defaults\n");
+}
+
+#[test]
 fn live_profiles_and_controller_selection_change_independently_while_waiting() {
     let directory = TestDirectory::new("selection");
     let controller_file = directory.0.join("joyshockrust/controller.toml");
@@ -684,4 +805,134 @@ fn gyro_calibration_is_saved_separately_for_each_controller() {
     let second_bias = fs::read_to_string(bias_dir.join(format!("{second}.toml"))).unwrap();
     assert!(first_bias.contains("gyro_bias_dps = [0.25, 0.0, -0.1]"));
     assert!(second_bias.contains("gyro_bias_dps = [0.5, 0.0, -0.1]"));
+}
+
+#[test]
+fn shared_control_client_preserves_requests_and_reports_rejection() {
+    use joyshockrust_ipc::{
+        control::{ControlCommand, OutputTarget, Reply, load_socket_path},
+        unix::ControlClient,
+    };
+
+    let directory = TestDirectory::new("control-client");
+    let reload = directory.0.join("reload.sock");
+    let server = UnixDatagram::bind(load_socket_path(&reload)).unwrap();
+    server
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let profile = directory.0.join("profile.toml");
+    fs::write(&profile, "version = 1\n").unwrap();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut bytes = [0; 512];
+            for (expected, reply) in [
+                (&b"\0set-gamepad\noff"[..], Reply::Applied),
+                (&b"\0select-controller\nany\nany\nauto"[..], Reply::Rejected),
+            ] {
+                let (len, sender) = server.recv_from(&mut bytes).unwrap();
+                assert_eq!(&bytes[..len], expected);
+                assert!(!sender.is_unnamed());
+                server.send_to_addr(reply.bytes(), &sender).unwrap();
+            }
+            let (len, sender) = server.recv_from(&mut bytes).unwrap();
+            let view = joyshockrust_ipc::control::InlineProfile::decode(&bytes[..len]).unwrap();
+            assert_eq!(view.path, Some(profile.as_path()));
+            assert_eq!(view.contents, b"version = 1\n");
+            server
+                .send_to_addr(Reply::Applied.bytes(), &sender)
+                .unwrap();
+        });
+
+        let client = ControlClient::new(reload);
+        client
+            .send(ControlCommand::Emulation {
+                target: OutputTarget::Gamepad,
+                enabled: false,
+            })
+            .unwrap();
+        let error = client
+            .send(ControlCommand::SelectController {
+                id: "any",
+                model: Some("any"),
+                transport: Some("auto"),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert!(error.to_string().contains("controller selection rejected"));
+        client.load_profile(&profile).unwrap();
+    });
+}
+
+#[test]
+fn live_status_stream_matches_legacy_status_and_notifies_on_commands() {
+    use std::{
+        io::{Read, Write},
+        os::unix::net::UnixStream,
+    };
+
+    use joyshockrust_ipc::{
+        status::Field,
+        stream::{Topic, read_status},
+    };
+
+    let directory = TestDirectory::new("status-stream");
+    let status = directory.0.join("status");
+    let reload = directory.0.join("reload");
+    let notify = directory.0.join("notify");
+    let listener = UnixDatagram::bind(&notify).unwrap();
+    let timeout = Some(Duration::from_secs(3));
+    listener.set_read_timeout(timeout).unwrap();
+    let binary = env!("CARGO_BIN_EXE_joyshockrust-linux");
+    let bridge = Bridge(
+        Command::new(binary)
+            .env("NOTIFY_SOCKET", &notify)
+            .env("XDG_CONFIG_HOME", &directory.0)
+            .args(["--controller-id", "ff:ff:ff:ff:ff:ff"])
+            .arg("--status-socket")
+            .arg(&status)
+            .arg("--reload-socket")
+            .arg(&reload)
+            .spawn()
+            .unwrap(),
+    );
+    let mut ready = [0; 64];
+    let len = listener.recv(&mut ready).expect("bridge readiness");
+    assert_eq!(&ready[..len], b"READY=1");
+
+    let updates = Topic::Status.socket_path(&status);
+    let mut incomplete = UnixStream::connect(&updates).unwrap();
+    incomplete
+        .write_all(&Topic::Status.subscribe(99)[..3])
+        .unwrap();
+    let mut reader = UnixStream::connect(&updates).unwrap();
+    reader.set_read_timeout(timeout).unwrap();
+    reader.write_all(&Topic::Status.subscribe(42)).unwrap();
+    let legacy = || {
+        let reply = Command::new(binary)
+            .arg("--status")
+            .arg(&status)
+            .output()
+            .unwrap();
+        assert!(reply.status.success());
+        String::from_utf8(reply.stdout).unwrap()
+    };
+    let (first, body) = read_status(&mut reader, 42).unwrap();
+    assert_eq!(Field::Controller.value(&body), Some("waiting"));
+    assert_eq!(body, legacy());
+
+    let command = Command::new(binary)
+        .args(["--set-gamepad", "off"])
+        .arg(&reload)
+        .output()
+        .unwrap();
+    assert!(command.status.success(), "{command:?}");
+    let (updated, body) = read_status(&mut reader, 42).unwrap();
+    assert_eq!(updated.instance, first.instance);
+    assert!(updated.revision > first.revision);
+    assert_eq!(Field::VirtualGamepadEnabled.value(&body), Some("false"));
+    assert_eq!(body, legacy());
+
+    drop(bridge);
+    assert_eq!(reader.read(&mut [0]).unwrap(), 0);
 }

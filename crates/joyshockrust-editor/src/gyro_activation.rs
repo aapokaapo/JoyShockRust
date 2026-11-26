@@ -219,17 +219,8 @@ fn refresh_inputs(group: &adw::PreferencesGroup, ctx: &Context, rows: &Rc<InputR
 }
 
 fn trigger_parts(spec: &str) -> Option<(&str, f64, f64)> {
-    let mut fields = spec.split(':');
-    let side = fields.next().filter(|side| matches!(*side, "l2" | "r2"))?;
-    match (fields.next(), fields.next(), fields.next()) {
-        (None, None, None) => Some((side, 0.45, 0.35)),
-        (Some(press), Some(release), None) => {
-            let press = press.parse().ok()?;
-            let release = release.parse().ok()?;
-            (0.0 <= release && release < press && press <= 1.0).then_some((side, press, release))
-        }
-        _ => None,
-    }
+    let (side, press, release) = joyshockrust_core::trigger::parse_analog_trigger(spec).ok()?;
+    Some((side.name(), press, release))
 }
 
 fn trigger_rows(ctx: &Context, input: &str) -> Vec<gtk::Widget> {

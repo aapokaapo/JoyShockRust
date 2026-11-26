@@ -1,10 +1,18 @@
 use core::{fmt, time::Duration};
 
+use crate::{CalibratedImu, FactoryCalibration, RawImuSample};
+
 const HALF_COUNTER_RANGE: u32 = 1 << 31;
 const TICKS_PER_MICROSECOND: u64 = 3;
 const NANOS_PER_MICROSECOND: u64 = 1_000;
 
 /// Classification of a timestamp from a successfully parsed report.
+/// Convert a duration to whole device ticks, rounding down.
+pub const fn ticks_in_nanoseconds(nanos: u64) -> u64 {
+    nanos / NANOS_PER_MICROSECOND * TICKS_PER_MICROSECOND
+        + nanos % NANOS_PER_MICROSECOND * TICKS_PER_MICROSECOND / NANOS_PER_MICROSECOND
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimestampUpdate {
     /// A new segment starts with zero elapsed time and no integration delta.
@@ -107,5 +115,54 @@ impl Timebase {
             delta,
             wrapped: ticks < previous_ticks,
         }
+    }
+}
+
+/// Applies one controller's factory calibration and tracks its sensor clock.
+pub struct ImuStream {
+    factory: FactoryCalibration,
+    timebase: Timebase,
+}
+
+impl ImuStream {
+    pub fn new(
+        factory: FactoryCalibration,
+        max_forward_ticks: u32,
+    ) -> Result<Self, InvalidForwardLimit> {
+        Ok(Self {
+            factory,
+            timebase: Timebase::new(max_forward_ticks)?,
+        })
+    }
+
+    pub fn observe(&mut self, sample: RawImuSample) -> TimedImu<'_> {
+        TimedImu {
+            factory: &self.factory,
+            sample,
+            timing: self.timebase.observe(sample.device_ticks),
+        }
+    }
+
+    pub fn factory_calibration(&self) -> FactoryCalibration {
+        self.factory
+    }
+}
+
+/// Sensor timing and on-demand factory conversion for one report.
+pub struct TimedImu<'a> {
+    factory: &'a FactoryCalibration,
+    sample: RawImuSample,
+    pub timing: TimestampUpdate,
+}
+
+impl TimedImu<'_> {
+    #[inline]
+    pub fn gyro_dps(&self) -> [f32; 3] {
+        self.factory.convert_gyro(self.sample.gyro_counts)
+    }
+
+    #[inline]
+    pub fn calibrated(&self) -> CalibratedImu {
+        self.factory.convert(self.sample)
     }
 }
