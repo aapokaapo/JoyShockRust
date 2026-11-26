@@ -1,15 +1,12 @@
 use joyshockrust_ipc::status::Field;
 use std::{
-    cell::RefCell,
     fs::{File, OpenOptions},
     io::{self, Read},
     os::unix::fs::OpenOptionsExt,
     path::Path,
-    rc::Rc,
-    time::Duration,
 };
 
-use adw::{gio, glib, gtk, prelude::*};
+use adw::{gio, glib, prelude::*};
 use joyshockrust_core::Controls;
 use joyshockrust_input::{
     DUALSENSE_EDGE_BLUETOOTH_REPORT_LEN, DUALSENSE_EDGE_USB_REPORT_LEN, DeviceModel, Transport,
@@ -19,15 +16,6 @@ use joyshockrust_input::{
 pub fn status_address() -> Option<gio::UnixSocketAddress> {
     joyshockrust_config::paths::runtime_socket(joyshockrust_ipc::STATUS_SOCKET, true)
         .map(|path| gio::UnixSocketAddress::new(&path))
-}
-
-pub async fn status_value(
-    client: &gio::SocketClient,
-    address: &gio::UnixSocketAddress,
-    key: Field,
-) -> Result<Option<String>, glib::Error> {
-    let [value] = status_values(client, address, [key]).await?;
-    Ok(value)
 }
 
 pub(crate) async fn status_values<const N: usize>(
@@ -57,60 +45,6 @@ pub(crate) async fn status_values<const N: usize>(
         }
     }
     Ok(values)
-}
-
-pub fn watch_status(
-    widget: &impl IsA<gtk::Widget>,
-    key: Field,
-    interval: Duration,
-    update: impl Fn(Result<Option<String>, ()>) + 'static,
-) {
-    watch_status_fields(widget, [key], interval, move |result| {
-        update(result.map(|[value]| value));
-    });
-}
-
-pub fn watch_status_fields<const N: usize>(
-    widget: &impl IsA<gtk::Widget>,
-    fields: [Field; N],
-    interval: Duration,
-    update: impl Fn(Result<[Option<String>; N], ()>) + 'static,
-) {
-    let update = Rc::new(update);
-    let polling = Rc::new(RefCell::new(None::<glib::JoinHandle<()>>));
-    let on_map = polling.clone();
-    let start = move || {
-        let update = update.clone();
-        let task = glib::MainContext::default().spawn_local(async move {
-            update(Ok(std::array::from_fn(|_| None)));
-            let Some(address) = status_address() else {
-                update(Err(()));
-                return;
-            };
-            let client = gio::SocketClient::new();
-            client.set_timeout(1);
-            loop {
-                update(
-                    status_values(&client, &address, fields)
-                        .await
-                        .map_err(|_| ()),
-                );
-                glib::timeout_future(interval).await;
-            }
-        });
-        on_map.replace(Some(task));
-    };
-    let on_map = start.clone();
-    widget.connect_map(move |_| on_map());
-    widget.connect_unmap(move |_| {
-        if let Some(task) = polling.borrow_mut().take() {
-            task.abort();
-        }
-    });
-    // The inspector can attach a chart to an already visible preferences group.
-    if widget.as_ref().is_mapped() {
-        start();
-    }
 }
 
 pub fn open(path: &Path) -> io::Result<File> {

@@ -46,6 +46,14 @@ pub fn read_inventory(
     Ok((Stamp { instance, revision }, controllers))
 }
 
+pub fn read_preview(
+    stream: &mut UnixStream,
+    id: u32,
+) -> io::Result<(Stamp, Option<crate::telemetry::preview::Preview>)> {
+    crate::telemetry::preview::Preview::read(stream, id)
+        .map(|(stamp, preview)| (stamp, Some(preview)))
+}
+
 impl<T: Clone + PartialEq + Send + 'static> Subscription<T> {
     pub fn start(
         status_socket: &Path,

@@ -602,6 +602,12 @@ pub(super) fn run() -> Result<std::process::ExitCode, Box<dyn std::error::Error>
     {
         eprintln!("Status subscription unavailable: {error}");
     }
+    if let (Some(status), Some(path)) = (&mut status, status_path.as_deref())
+        && benchmark_target.is_none()
+        && let Err(error) = status.enable_preview(path)
+    {
+        eprintln!("Controller preview subscription unavailable: {error}");
+    }
     let status = status.as_ref();
     let _inventory = status_path
         .as_deref()

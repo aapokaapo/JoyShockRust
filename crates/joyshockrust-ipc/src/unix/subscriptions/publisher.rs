@@ -1,7 +1,8 @@
-//! Demand-driven Unix transport for a status snapshot source.
+//! Demand-driven Unix transport for bridge snapshot sources.
 
 use std::{
     io,
+    marker::PhantomData,
     os::{
         fd::{AsFd, BorrowedFd},
         unix::net::UnixDatagram,
@@ -13,17 +14,66 @@ use std::{
     },
 };
 
-use super::server::{self, Worker};
-use crate::stream::{STATUS_LIMIT, Topic};
+use super::server::{self, Snapshot, Worker};
+use crate::{
+    stream::STATUS_LIMIT,
+    telemetry::preview::{self, History},
+};
 
-pub struct StatusPublisher {
+pub type StatusPublisher = Publisher<String>;
+pub type PreviewPublisher = Publisher<History>;
+
+pub trait SnapshotPayload: Snapshot + Send + 'static {
+    const LIMIT: usize;
+    fn body_len(&self) -> usize;
+    fn write_body(&self, target: &mut Vec<u8>) -> io::Result<()>;
+    fn read_body(body: &[u8]) -> io::Result<Self>
+    where
+        Self: Sized;
+}
+
+impl SnapshotPayload for String {
+    const LIMIT: usize = STATUS_LIMIT;
+
+    fn body_len(&self) -> usize {
+        self.len()
+    }
+
+    fn write_body(&self, target: &mut Vec<u8>) -> io::Result<()> {
+        target.extend(self.as_bytes());
+        Ok(())
+    }
+
+    fn read_body(body: &[u8]) -> io::Result<Self> {
+        String::from_utf8(body.to_vec()).map_err(io::Error::other)
+    }
+}
+
+impl SnapshotPayload for History {
+    const LIMIT: usize = preview::BODY_LIMIT;
+
+    fn body_len(&self) -> usize {
+        History::body_len(self)
+    }
+
+    fn write_body(&self, target: &mut Vec<u8>) -> io::Result<()> {
+        History::write_body(self, target)
+    }
+
+    fn read_body(body: &[u8]) -> io::Result<Self> {
+        History::read_body(body)
+    }
+}
+
+pub struct Publisher<T> {
     socket: UnixDatagram,
     demand: Arc<AtomicU64>,
     _worker: Worker,
+    snapshot: PhantomData<T>,
 }
 
-impl StatusPublisher {
-    pub fn start(status: &Path) -> io::Result<Self> {
+impl<T: SnapshotPayload> Publisher<T> {
+    pub fn start(label: &str, status: &Path) -> io::Result<Self> {
         let (socket, destination) = UnixDatagram::pair()?;
         socket.set_nonblocking(true)?;
         destination.set_nonblocking(true)?;
@@ -32,15 +82,22 @@ impl StatusPublisher {
         let demand = Arc::new(AtomicU64::new(0));
         let worker_demand = demand.clone();
         let worker = Worker::start(
-            "status",
-            Topic::Status.socket_path(status),
+            label,
+            T::TOPIC.socket_path(status),
             move |listener, shutdown| {
+                let mut buffer = vec![0; 8 + T::LIMIT + 1];
                 let result = server::serve(
                     listener,
                     shutdown,
                     destination.as_fd(),
                     None,
-                    || receive(&destination, worker_demand.load(Ordering::Acquire)),
+                    || {
+                        receive::<T>(
+                            &destination,
+                            worker_demand.load(Ordering::Acquire),
+                            &mut buffer,
+                        )
+                    },
                     |active| {
                         worker_demand.fetch_add(1, Ordering::AcqRel);
                         if active {
@@ -56,6 +113,7 @@ impl StatusPublisher {
             socket,
             demand,
             _worker: worker,
+            snapshot: PhantomData,
         })
     }
 
@@ -71,32 +129,46 @@ impl StatusPublisher {
         }
     }
 
-    pub fn has_subscribers(&self) -> bool {
-        !self.demand.load(Ordering::Acquire).is_multiple_of(2)
+    pub fn generation(&self) -> Option<u64> {
+        let generation = self.demand.load(Ordering::Acquire);
+        (!generation.is_multiple_of(2)).then_some(generation)
     }
 
-    pub fn send(&self, snapshot: impl FnOnce() -> String) -> io::Result<()> {
-        let generation = self.demand.load(Ordering::Acquire);
-        if generation.is_multiple_of(2) {
+    pub fn has_subscribers(&self) -> bool {
+        self.generation().is_some()
+    }
+
+    pub fn send(&self, snapshot: impl FnOnce() -> T) -> io::Result<()> {
+        let Some(generation) = self.generation() else {
+            return Ok(());
+        };
+        self.send_for(generation, snapshot)
+    }
+
+    pub fn send_for(&self, generation: u64, snapshot: impl FnOnce() -> T) -> io::Result<()> {
+        if self.generation() != Some(generation) {
             return Ok(());
         }
         let snapshot = snapshot();
-        if snapshot.len() > STATUS_LIMIT {
+        let mut message = Vec::with_capacity(8 + snapshot.body_len().min(T::LIMIT));
+        message.extend(generation.to_le_bytes());
+        snapshot.write_body(&mut message)?;
+        if message.len() - 8 > T::LIMIT {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "status snapshot too large",
+                "subscription snapshot too large",
             ));
         }
-        let mut message = Vec::with_capacity(8 + snapshot.len());
-        message.extend(generation.to_le_bytes());
-        message.extend(snapshot.as_bytes());
         self.socket.send(&message).map(|_| ())
     }
 }
 
-fn receive(socket: &UnixDatagram, generation: u64) -> io::Result<Option<String>> {
-    let mut bytes = [0; 8 + STATUS_LIMIT + 1];
-    let len = match socket.recv(&mut bytes) {
+fn receive<T: SnapshotPayload>(
+    socket: &UnixDatagram,
+    generation: u64,
+    bytes: &mut [u8],
+) -> io::Result<Option<T>> {
+    let len = match socket.recv(bytes) {
         Ok(len) => len,
         Err(error)
             if matches!(
@@ -113,13 +185,11 @@ fn receive(socket: &UnixDatagram, generation: u64) -> io::Result<Option<String>>
         return Ok(None);
     }
     let body = &message[8..];
-    if body.len() > STATUS_LIMIT {
+    if body.len() > T::LIMIT {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "status snapshot too large",
+            "subscription snapshot too large",
         ));
     }
-    String::from_utf8(body.to_vec())
-        .map(Some)
-        .map_err(io::Error::other)
+    T::read_body(body).map(Some)
 }

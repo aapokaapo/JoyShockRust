@@ -664,6 +664,51 @@ accounting resolution. The harness measured a synthetic input socket
 and gamepad encoding. Physical HID and kernel uinput latency remain
 unmeasured for this revision.
 
+## Editor telemetry verification
+
+The bridge test decodes synthetic USB and Bluetooth reports for DualSense
+and DualSense Edge. It checks press/release ordering, bounded history,
+disconnect clearing and a new session on reconnect. Capturing reports
+into a full history ring performs zero heap allocations in the test.
+IPC tests cover wire payload validation and detecting missed samples.
+The editor test verifies that a neutral report between two frames rearms
+Flick Stick and that a gap clears its accumulated turn. The Wayland test
+maps two preview widgets, confirms they receive the same subscription
+and verifies that the connection closes when the last widget unmaps.
+
+```sh
+cargo test --locked -p joyshockrust-ipc -p joyshockrust-linux preview
+cargo test --locked -p joyshockrust-editor intermediate_neutral_report
+scripts/test-editor-wayland.sh
+```
+
+2026-11-26. A release-mode harness compared the bridge with the preview
+endpoint disabled, enabled without a subscriber, and enabled with a
+subscriber consuming the stream. Six interleaved runs per condition used
+one pinned CPU and 1,200 measured synthetic reports at a target 1 kHz
+after a 200-report warm-up. The interval ran from datagram injection to
+gamepad event batch encoding. The table shows medians of run percentiles
+in microseconds.
+
+| Preview endpoint | p50 | p99 |
+|---|---:|---:|
+| Disabled | 5.51 | 33.19 |
+| Enabled, no subscriber | 5.69 | 78.05 |
+| Active subscriber | 6.57 | 134.07 |
+
+With a subscriber, the worker delivered a median of 83 snapshots per run.
+Run-level p99 ranges overlapped substantially. The active subscriber's
+range was 17.24–172.30 µs and the disabled endpoint's was
+15.02–207.06 µs. This comparison covers capture and publication under
+synthetic input. Hardware and kernel uinput delivery are outside the
+measured interval.
+
+For a physical check, open Sticks, Gyro, Touchpad and the L2 or R2
+inspector in turn. Verify that their live readings follow the active
+controller. Change between USB and Bluetooth, and between DualSense
+and DualSense Edge. Check that disconnect clears each preview and that
+Flick Stick rearms after centering on the new connection.
+
 ## Profile installation acceptance
 
 The user verified valid and invalid installs on Fedora with `c703382`.

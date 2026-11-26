@@ -66,14 +66,23 @@ snapshot renderer. The IPC crate manages the Unix connections, framed
 updates, backpressure and client reconnection.
 [Bridge scheduling](crates/joyshockrust-linux/src/status_updates.rs) · [Unix subscriptions](crates/joyshockrust-ipc/src/unix/subscriptions.rs) · [Stream codec](crates/joyshockrust-ipc/src/stream.rs)
 
+The editor subscribes to a separate preview topic only while preview
+widgets are visible. The bridge retains up to 96 ordered controller
+samples and publishes the recent window about every 16 ms with the
+latest calibrated IMU reading. The editor uses sequence numbers to
+consume each sample once, even if the subscription coalesces a frame.
+It resets its state on a gap, disconnect or new session. The explicit
+calibration flows still use their own controller reads.
+[Bridge preview capture](crates/joyshockrust-linux/src/preview_updates.rs) · [Preview codec](crates/joyshockrust-ipc/src/telemetry/preview.rs) · [Editor subscription](crates/joyshockrust-editor/src/live_preview.rs)
+
 The tray starts and stops the user service and uses XDG autostart for its
 login preference. The editor retains its TOML draft and validates it with
 the shared profile compiler. Desktop control commands and CLI commands
 use the same Unix-socket client for profile activation and emulation changes.
-The bridge exposes calibrated IMU and preview readings through its status
-socket. The Gyro tab reads both gyro fields from the same reply. The
-Flick Stick preview reads the selected hidraw node while visible.
-Desktop refresh timers are independent of bridge report timing.
+The legacy status socket exposes the last observed readings for CLI
+diagnostics. The editor displays calibrated IMU and projected gyro speed
+from one preview frame, and applies the draft Flick Stick settings to the
+ordered stick history.
 [Desktop lifecycle](DECISIONS.md#desktop-process-lifecycle) · [Live IMU](crates/joyshockrust-editor/src/imu_monitor.rs) · [Stick preview](crates/joyshockrust-editor/src/flick_preview.rs)
 
 ## Workspace

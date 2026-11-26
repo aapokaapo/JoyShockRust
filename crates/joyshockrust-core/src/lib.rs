@@ -9,6 +9,7 @@ pub mod trigger;
 pub use trigger::{DEFAULT_TRIGGER_THRESHOLDS, validate_trigger_thresholds};
 
 /// Face buttons are named by their position on the controller.
+/// The variant order defines the bit positions used by the telemetry protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Button {
     West,
@@ -42,6 +43,20 @@ pub enum Button {
 pub struct Buttons(u32);
 
 impl Buttons {
+    /// Bit positions use the order of the existing Button variants.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    pub const fn from_bits(bits: u32) -> Option<Self> {
+        let supported = (1 << (Button::DPadLeft as u32 + 1)) - 1;
+        if bits & !supported == 0 {
+            Some(Self(bits))
+        } else {
+            None
+        }
+    }
+
     pub fn insert(&mut self, button: Button) {
         self.0 |= 1 << button as u32;
     }

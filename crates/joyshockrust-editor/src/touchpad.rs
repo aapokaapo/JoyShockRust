@@ -1,6 +1,5 @@
-use joyshockrust_ipc::status::Field;
 use joyshockrust_ipc::telemetry::TouchPoints;
-use std::{cell::Cell as State, rc::Rc, time::Duration};
+use std::{cell::Cell as State, rc::Rc};
 
 use adw::{gtk, prelude::*};
 use joyshockrust_input::{DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH};
@@ -8,7 +7,7 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike, Value, value
 
 use crate::{
     bindings::{self, Gesture, region_input, replace_value},
-    controller, controller_input,
+    controller,
     ui::{self, Context},
 };
 
@@ -294,7 +293,7 @@ pub fn page(ctx: &Context) -> gtk::Widget {
     let selectors = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let selected = Rc::new(State::new(FIRST_CELL));
     let grid_size = Rc::new(State::new(size));
-    let preview = live_preview(grid_size.clone(), selected.clone(), &layout);
+    let preview = live_preview(&ctx.live, grid_size.clone(), selected.clone(), &layout);
     layout.append(&selectors);
     cells.add(&layout);
     page.add(&cells);
@@ -406,9 +405,9 @@ fn show_cells(
 
 type Contacts = [Option<(f64, f64)>; 2];
 
-fn parse_contacts(value: &str) -> Option<Contacts> {
+fn normalize_contacts(points: TouchPoints) -> Option<Contacts> {
     let mut contacts = [None; 2];
-    for (normalized, point) in contacts.iter_mut().zip(TouchPoints::parse(value)?.0) {
+    for (normalized, point) in contacts.iter_mut().zip(points.0) {
         if let Some((x, y)) = point {
             if x >= DUALSENSE_TOUCHPAD_WIDTH || y >= DUALSENSE_TOUCHPAD_HEIGHT {
                 return None;
@@ -423,6 +422,7 @@ fn parse_contacts(value: &str) -> Option<Contacts> {
 }
 
 fn live_preview(
+    telemetry: &crate::live_preview::LivePreview,
     size: Rc<State<Cell>>,
     selected: Rc<State<Cell>>,
     layout: &gtk::Box,
@@ -454,24 +454,20 @@ fn live_preview(
         );
     });
     let chart = area.clone();
-    controller_input::watch_status(
-        &preview,
-        Field::TouchContacts,
-        Duration::from_millis(33),
-        move |result| {
-            let (points, message) = match result {
-                Ok(value) => match value.as_deref().and_then(parse_contacts) {
-                    Some(points) => (points, ""),
-                    None => (Contacts::default(), "Waiting for touchpad reports…"),
-                },
-                Err(()) => (Contacts::default(), "Bridge status is unavailable."),
-            };
-            if contacts.replace(points) != points {
-                chart.queue_draw();
-            }
-            status.set_text(message);
-        },
-    );
+    telemetry.watch(&preview, move |frame| {
+        let points = frame
+            .and_then(|frame| frame.history.samples.last())
+            .and_then(|sample| normalize_contacts(sample.touch));
+        let (points, message) = match (frame, points) {
+            (_, Some(points)) => (points, ""),
+            (Some(_), None) => (Contacts::default(), "Waiting for touchpad reports…"),
+            (None, None) => (Contacts::default(), "Bridge telemetry is unavailable."),
+        };
+        if contacts.replace(points) != points {
+            chart.queue_draw();
+        }
+        status.set_text(message);
+    });
     area
 }
 
@@ -649,6 +645,7 @@ mod tests {
 
     #[test]
     fn preview_parses_zero_one_or_two_contacts_in_surface_coordinates() {
+        let parse_contacts = |value| TouchPoints::parse(value).and_then(normalize_contacts);
         assert_eq!(parse_contacts(""), Some([None, None]));
         assert_eq!(parse_contacts("960,540"), Some([Some((0.5, 0.5)), None]));
         assert_eq!(

@@ -15,6 +15,7 @@ pub const STATUS_LIMIT: usize = u16::MAX as usize - STAMP_LEN;
 pub enum Topic {
     Inventory,
     Status,
+    Preview,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +30,7 @@ impl Topic {
         path.push(match self {
             Self::Inventory => ".inventory",
             Self::Status => ".updates",
+            Self::Preview => ".preview",
         });
         path.into()
     }
@@ -37,6 +39,7 @@ impl Topic {
         match self {
             Self::Inventory => 1,
             Self::Status => 3,
+            Self::Preview => 5,
         }
     }
 

@@ -28,6 +28,7 @@ use crate::{discovery::ControllerFilter, hidraw::Identity, status_updates::Publi
 pub struct StatusSocket {
     listener: UnixListener,
     publisher: Option<Publisher>,
+    preview: Option<crate::preview_updates::Publisher>,
     snapshot: Cell<Snapshot>,
     reports: Cell<ReportStats>,
     sessions: Cell<SessionCounts>,
@@ -53,6 +54,25 @@ struct ImuSnapshot {
     sample: Option<RawImuSample>,
     bias: Calibration,
     projected_interval: Option<([f32; 2], Duration)>,
+}
+
+impl ImuSnapshot {
+    fn reading(self) -> Option<(ImuReading, GyroSpeed)> {
+        let sample = self.factory?.convert(self.sample?);
+        let gyro_dps = std::array::from_fn(|i| sample.gyro_dps[i] - self.bias.gyro_bias_dps[i]);
+        let [gx, gy, _] = gyro_dps;
+        let speed = self.projected_interval.map_or_else(
+            || f64::from(gx).hypot(f64::from(gy)),
+            |([x, y], duration)| f64::from(x).hypot(f64::from(y)) / duration.as_secs_f64(),
+        );
+        Some((
+            ImuReading {
+                gyro_dps,
+                accel_g: sample.accel_g,
+            },
+            GyroSpeed(speed),
+        ))
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -122,6 +142,7 @@ impl StatusSocket {
         Ok(Self {
             listener,
             publisher: None,
+            preview: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),
@@ -149,6 +170,31 @@ impl StatusSocket {
     pub fn enable_updates(&mut self, path: &Path) -> io::Result<()> {
         self.publisher = Some(Publisher::start(path)?);
         Ok(())
+    }
+
+    pub fn enable_preview(&mut self, path: &Path) -> io::Result<()> {
+        let preview = crate::preview_updates::Publisher::start(path)?;
+        preview.set_session(self.snapshot.get().identity);
+        self.preview = Some(preview);
+        Ok(())
+    }
+
+    pub fn preview_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.preview
+            .as_ref()
+            .map(crate::preview_updates::Publisher::wake_fd)
+    }
+
+    pub fn publish_preview(&self, wake: bool) -> Option<Instant> {
+        self.preview
+            .as_ref()?
+            .publish(wake, || self.imu.get().reading())
+    }
+
+    pub fn observe_preview(&self, controls: Controls, contacts: [Option<TouchContact>; 2]) {
+        if let Some(preview) = &self.preview {
+            preview.observe(controls, contacts);
+        }
     }
 
     pub fn updates_fd(&self) -> Option<BorrowedFd<'_>> {
@@ -235,6 +281,9 @@ impl StatusSocket {
         }
         let mut snapshot = self.snapshot.get();
         if snapshot.identity != identity {
+            if let Some(preview) = &self.preview {
+                preview.set_session(identity);
+            }
             let mut sessions = self.sessions.get();
             sessions.ended += u64::from(snapshot.identity.is_some());
             sessions.started += u64::from(identity.is_some());
@@ -473,33 +522,15 @@ impl StatusSocket {
         if let Some(path) = self.profile_path_hex.borrow().as_deref() {
             write_field(&mut response, Field::ProfilePathHex, path);
         }
-        let imu = self.imu.get();
-        if let (Some(factory), Some(raw)) = (imu.factory, imu.sample) {
-            let sample = factory.convert(raw);
-            let [gx, gy, gz] =
-                std::array::from_fn(|i| sample.gyro_dps[i] - imu.bias.gyro_bias_dps[i]);
-            let [ax, ay, az] = sample.accel_g;
-            write_field(
-                &mut response,
-                Field::Imu,
-                ImuReading {
-                    gyro_dps: [gx, gy, gz],
-                    accel_g: [ax, ay, az],
-                },
-            );
-            let speed = imu.projected_interval.map_or_else(
-                || f64::from(gx).hypot(f64::from(gy)),
-                |([x, y], duration)| f64::from(x).hypot(f64::from(y)) / duration.as_secs_f64(),
-            );
-            write_field(&mut response, Field::GyroSpeedDps, GyroSpeed(speed));
+        if let Some((imu, speed)) = self.imu.get().reading() {
+            write_field(&mut response, Field::Imu, imu);
+            write_field(&mut response, Field::GyroSpeedDps, speed);
         }
         if let Some(sticks) = snapshot.sticks {
-            let [left, right] =
-                sticks.map(|stick| 100.0 * f64::from(stick.x).hypot(f64::from(stick.y)).min(1.0));
             write_field(
                 &mut response,
                 Field::StickTravel,
-                StickTravel([left, right]),
+                StickTravel::from_sticks(sticks),
             );
         }
         if let Some([left, right]) = snapshot.triggers {
@@ -708,6 +739,7 @@ mod tests {
         let status = StatusSocket {
             listener,
             publisher: None,
+            preview: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),
@@ -902,6 +934,7 @@ mod tests {
         let status = StatusSocket {
             listener,
             publisher: None,
+            preview: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),
@@ -1000,6 +1033,7 @@ mod tests {
         let status = StatusSocket {
             listener,
             publisher: None,
+            preview: None,
             snapshot: Cell::default(),
             reports: Cell::default(),
             sessions: Cell::default(),

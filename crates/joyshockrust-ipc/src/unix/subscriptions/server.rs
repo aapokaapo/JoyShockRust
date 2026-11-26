@@ -60,6 +60,15 @@ impl Snapshot for String {
     }
 }
 
+impl Snapshot for crate::telemetry::preview::History {
+    const TOPIC: Topic = Topic::Preview;
+    const ON_DEMAND: bool = true;
+
+    fn frame(&self, request: u32, stamp: Stamp) -> io::Result<Vec<u8>> {
+        self.frame(request, stamp)
+    }
+}
+
 pub struct Worker {
     stop: UnixStream,
     thread: Option<thread::JoinHandle<()>>,

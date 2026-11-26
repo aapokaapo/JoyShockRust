@@ -15,6 +15,7 @@ mod flick_preview;
 mod gyro_activation;
 mod imu_monitor;
 mod key_capture;
+mod live_preview;
 mod response_plot;
 mod sensitivity;
 mod stick_keys;

@@ -135,7 +135,7 @@ pub fn append(
         .and_then(Item::as_bool)
         .unwrap_or_else(|| legacy_overlap(doc, side));
     let range = travel_range(values);
-    let travel = trigger_travel::add(&group, side, initial, overlap, range);
+    let travel = trigger_travel::add(&ctx.live, &group, side, initial, overlap, range);
     add_travel_limit(&group, ctx, side, mode, range.0, travel.clone());
     let stages = Rc::new(Cell::new([false; 2]));
 

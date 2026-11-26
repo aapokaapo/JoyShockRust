@@ -35,9 +35,9 @@ subscribes to versioned inventory and status streams using the shared
 Unix transport in `joyshockrust-ipc`. The shared codec decodes
 profile, output, controller-selection and trigger preview datagrams.
 The bridge validates controller selection and applies the decoded
-commands. The next IPC step gives editor previews ordered telemetry
-from the bridge. Calibration sessions follow. The RWC sweep runs in
-motion. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17) · [Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
+commands. Editor previews share one demand-driven stream of ordered
+bridge telemetry. The next IPC step moves calibration sessions into
+the bridge. The RWC sweep runs in motion. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17) · [Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
 
 | Area | Shipped | Next acceptance step |
 |---|---|---|

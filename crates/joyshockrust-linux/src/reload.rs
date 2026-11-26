@@ -451,9 +451,15 @@ pub fn wait<'a>(
         reload.worker.start_next()?;
     }
     let updates_fd = status.and_then(StatusSocket::updates_fd);
+    let preview_fd = status.and_then(StatusSocket::preview_fd);
     let outcome = reload.map_or("unavailable", Reload::outcome);
     let publish_at = status.and_then(|status| status.publish_updates(false, outcome));
-    let deadline = deadline.into_iter().chain(publish_at).min();
+    let preview_at = status.and_then(|status| status.publish_preview(false));
+    let deadline = deadline
+        .into_iter()
+        .chain(publish_at)
+        .chain(preview_at)
+        .min();
     let listener = reload.and_then(|reload| reload.listener.as_ref());
     let load_socket = reload.and_then(|reload| reload.load_socket.as_ref());
     let mut descriptors = [
@@ -471,8 +477,11 @@ pub fn wait<'a>(
             reload.map_or(fd, |reload| reload.worker.wake.as_fd()),
             PollFlags::POLLIN,
         ),
+        PollFd::new(preview_fd.unwrap_or(fd), PollFlags::POLLIN),
     ];
-    let len = if reload.is_some() {
+    let len = if preview_fd.is_some() {
+        9
+    } else if reload.is_some() {
         8
     } else if updates_fd.is_some() {
         7
@@ -515,6 +524,13 @@ pub fn wait<'a>(
                 .contains(PollFlags::POLLIN)
         {
             status.publish_updates(true, outcome);
+        }
+        if preview_fd.is_some()
+            && descriptors[8]
+                .revents()
+                .is_some_and(|flags| flags.contains(PollFlags::POLLIN))
+        {
+            status.publish_preview(true);
         }
     }
     let ready = descriptors[0].revents().unwrap_or_else(PollFlags::empty);

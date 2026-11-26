@@ -90,8 +90,7 @@ captures snapshots between report batches on state changes, with
 successive updates coalesced to a 250 ms interval. It renders no
 subscription snapshots when nobody is listening. Socket I/O for desktop
 clients stays on the worker. The tray clears stale status on disconnect
-and subscribes again after a restart. The editor still uses the
-one-shot socket for its live previews. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
+and subscribes again after a restart. [IPC issue](https://github.com/aapokaapo/JoyShockRust/issues/17)
 
 The IPC crate owns the shared Unix subscription client and server,
 including connection limits and partial I/O. The bridge supplies udev
@@ -154,12 +153,11 @@ For changes, add a dated ADR with context, alternatives, consequences and valida
 
 ## Live editor input previews
 
-2026-11-24. The editor polls the existing bridge status socket while the
-corresponding preview is mapped. The bridge retains only the latest touch
-positions for display, using the same decoded reports as the touch mappings.
-The editor draws those positions over its draft grid. This keeps the preview
-independent of profile activation and avoids a second hidraw reader.
-The touch snapshot distinguishes finger release from connection loss.
+2026-11-24. The first touchpad preview polled the bridge status socket
+and used the latest touch positions from the same decoded reports as the
+touch mappings. The editor draws those positions over its draft grid
+independently of profile activation. The touch snapshot distinguishes
+finger release from connection loss.
 The touchpad preview projects zone boundaries and contact positions
 onto the same tapered surface so both follow the illustrated pad.
 Buttons and Touchpad share the bundled DualSense SVG. Touchpad crops the
@@ -168,6 +166,18 @@ The editor applies valid dimensions to the draft when the row or column
 value changes and retains the live preview across those edits.
 Response charts reuse the bridge's stick travel and projected gyro speed
 and apply the editor's draft curve settings to those inputs.
+
+2026-11-26. Normal editor previews share a single versioned
+`.preview` subscription per window while any preview widget is mapped.
+The bridge owns HID acquisition and captures ordered normalized buttons,
+sticks, triggers and touch points in a 96-report ring. Calibrated IMU
+values are included once per snapshot. A worker sends snapshots to
+desktop clients at a 16 ms publication interval during active input.
+Clients consume unseen reports by sequence number. If a client lags
+past the retained window or the session changes, Flick Stick drops its
+state and waits for the stick to return to neutral before rearming. The
+existing calibration windows keep their dedicated controller readers.
+[Telemetry issue](https://github.com/aapokaapo/JoyShockRust/issues/18) · [Preview verification](TESTING_AND_PERFORMANCE.md#editor-telemetry-verification)
 
 ## D-pad remapping
 
@@ -281,7 +291,7 @@ Only one remap layer is active at a time. The selected layer remains active unti
 
 The generic uinput gamepad emits Linux `BTN_X` for physical Square and `BTN_Y` for Triangle. Linux aliases those codes to `BTN_NORTH` and `BTN_WEST` respectively. SDL's Linux fallback uses X/Y for generic devices and position names for Sony devices. The USB parser retains the physical face positions. Sources checked 2026-11-22. [Linux event codes](https://github.com/torvalds/linux/blob/7d0a66e4bb9081d75c82ec4957c50034cb0ea449/include/uapi/linux/input-event-codes.h#L380-L389) · [SDL mapping](https://github.com/libsdl-org/SDL/blob/402fc52af4e731184ad6a704068b5ccd27d8f1b8/src/joystick/linux/SDL_sysjoystick.c#L2342-L2374)
 
-Flick Stick uses the selected physical stick and device report timing. It defaults to the right stick, a 100 ms initial turn and 90% engagement, follows the shortest angular change while held, and re-arms within 25% radial travel. It clears queued motion on timestamp gaps and keeps the selected virtual stick centered. An angular axial threshold snaps directions close to each cardinal axis and blends continuously back to the physical angle. Only the initial flick uses this response. Held steering tracks physical angle changes from the starting position with a separate multiplier. Calibration sweeps use the physical angle and full sensitivity so small corrections remain possible near each axis. The Sticks editor uses the runtime angle calculation and reads the active controller directly while the preview is visible. The Gyro editor reads the latest IMU snapshot over the existing status socket. The bridge stores the raw sample and active bias during report processing and converts them to physical units when serving that socket. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
+Flick Stick uses the selected physical stick and device report timing. It defaults to the right stick, a 100 ms initial turn and 90% engagement, follows the shortest angular change while held, and re-arms within 25% radial travel. It clears queued motion on timestamp gaps and keeps the selected virtual stick centered. An angular axial threshold snaps directions close to each cardinal axis and blends continuously back to the physical angle. Only the initial flick uses this response. Held steering tracks physical angle changes from the starting position with a separate multiplier. Calibration sweeps use the physical angle and full sensitivity so small corrections remain possible near each axis. The Sticks editor uses the runtime angle calculation on ordered bridge telemetry. The Gyro editor displays the latest calibrated IMU snapshot from the same stream. The bridge stores the raw sample and active bias during report processing and converts them to physical units when publishing telemetry or serving legacy status. The mouse sensitivity is configurable because host and game settings determine the resulting turn. [Flick Stick acceptance](TESTING_AND_PERFORMANCE.md#flick-stick-acceptance)
 
 ## Phase 5 first increment
 

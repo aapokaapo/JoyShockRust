@@ -2,6 +2,8 @@
 
 use std::fmt::{self, Display, Formatter};
 
+pub mod preview;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImuReading {
     pub gyro_dps: [f32; 3],
@@ -61,6 +63,10 @@ fn parse_pair(value: &str, max: f64) -> Option<[f64; 2]> {
 pub struct StickTravel(pub [f64; 2]);
 
 impl StickTravel {
+    pub fn from_sticks(sticks: [joyshockrust_core::Stick; 2]) -> Self {
+        Self(sticks.map(|stick| 100.0 * f64::from(stick.x).hypot(f64::from(stick.y)).min(1.0)))
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         parse_pair(value, 100.0).map(Self)
     }

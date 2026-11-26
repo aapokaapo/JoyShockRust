@@ -32,6 +32,8 @@ mod launch;
 #[cfg(all(test, target_os = "linux"))]
 mod live_uinput_test;
 #[cfg(target_os = "linux")]
+mod preview_updates;
+#[cfg(target_os = "linux")]
 mod profile;
 #[cfg(target_os = "linux")]
 mod reload;
@@ -576,6 +578,7 @@ fn serve_session(
             if let Some(status) = status {
                 status.observe_touch(report.touch_contacts);
                 status.observe_analog(&report.controls);
+                status.observe_preview(report.controls, report.touch_contacts);
                 status.observe_imu(
                     report.imu,
                     mouse

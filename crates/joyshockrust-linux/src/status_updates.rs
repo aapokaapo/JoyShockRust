@@ -22,7 +22,7 @@ pub struct Publisher {
 impl Publisher {
     pub fn start(status: &Path) -> io::Result<Self> {
         Ok(Self {
-            transport: StatusPublisher::start(status)?,
+            transport: StatusPublisher::start("status", status)?,
             dirty: Cell::new(true),
             next_publish: Cell::new(None),
             last_reload: Cell::new(""),

@@ -14,6 +14,7 @@ use crate::{Editor, controller, sensitivity, touchpad};
 #[derive(Clone)]
 pub struct Context {
     pub editor: Rc<RefCell<Editor>>,
+    pub live: crate::live_preview::LivePreview,
     window: glib::WeakRef<adw::ApplicationWindow>,
     overlay: glib::WeakRef<adw::ToastOverlay>,
 }
@@ -88,6 +89,7 @@ pub fn open_window(app: &adw::Application, editor: Rc<RefCell<Editor>>) {
     window.set_size_request(365, 370);
     let overlay = adw::ToastOverlay::new();
     let ctx = Context {
+        live: Default::default(),
         editor,
         window: window.downgrade(),
         overlay: overlay.downgrade(),
@@ -659,6 +661,7 @@ pub(crate) mod tests {
         adw::init().unwrap();
         let editor = Editor::open(PathBuf::new(), None).unwrap();
         let ctx = Context {
+            live: Default::default(),
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
             overlay: glib::WeakRef::new(),
@@ -767,6 +770,7 @@ pub(crate) mod tests {
         app.register(None::<&gio::Cancellable>).unwrap();
         let window = adw::ApplicationWindow::builder().application(&app).build();
         let ctx = Context {
+            live: Default::default(),
             editor: Rc::new(RefCell::new(editor)),
             window: window.downgrade(),
             overlay: glib::WeakRef::new(),
@@ -855,6 +859,7 @@ pub(crate) mod tests {
             .draft
             .append_text("[gyro.calibration_hold]\nbutton = 'l3'\nhold_ms = 2500\n");
         let ctx = Context {
+            live: Default::default(),
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
             overlay: glib::WeakRef::new(),
@@ -896,6 +901,7 @@ pub(crate) mod tests {
         let mut editor = Editor::open(PathBuf::new(), None).unwrap();
         editor.draft.append_text("[gyro]\nsensitivity_x = 4.0 # retain\nbinding = { mode = 'disable-while-held', input = 'l2' }\n");
         let ctx = Context {
+            live: Default::default(),
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
             overlay: glib::WeakRef::new(),
@@ -981,6 +987,7 @@ pub(crate) mod tests {
         );
         let initial_text = editor.draft.text().to_owned();
         let ctx = Context {
+            live: Default::default(),
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
             overlay: glib::WeakRef::new(),
@@ -1229,6 +1236,7 @@ pub(crate) mod tests {
         let mut editor = Editor::open(PathBuf::new(), None).unwrap();
         editor.draft.append_text("[bridge]\nrumble = true\n");
         let ctx = Context {
+            live: Default::default(),
             editor: Rc::new(RefCell::new(editor)),
             window: glib::WeakRef::new(),
             overlay: glib::WeakRef::new(),

@@ -1,5 +1,4 @@
-use joyshockrust_ipc::status::Field;
-use joyshockrust_ipc::telemetry::{GyroSpeed, ImuReading, StickTravel};
+use joyshockrust_ipc::telemetry::{GyroSpeed, StickTravel};
 use joyshockrust_motion::{
     game_calibration::GameCalibration,
     sensitivity::{DEFAULT_GYRO_SENSITIVITY, MAX_GYRO_SENSITIVITY},
@@ -9,7 +8,6 @@ use joyshockrust_motion::{
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    time::Duration,
 };
 
 use adw::{gtk, prelude::*};
@@ -24,7 +22,7 @@ use joyshockrust_motion::aim_response::{
 
 use crate::{
     bindings::replace_value,
-    controller, controller_input,
+    controller,
     response_plot::{self, Curve},
     ui::{self, Context},
 };
@@ -111,21 +109,11 @@ pub fn gyro_page(ctx: &Context) -> gtk::Widget {
     page.add(&gyro_sensitivity_group(ctx, gyro));
     let (response, update_speed) = gyro_response_group(ctx, gyro);
     page.add(&response);
-    controller_input::watch_status_fields(
-        &page,
-        [Field::Imu, Field::GyroSpeedDps],
-        Duration::from_millis(33),
-        move |result| match result {
-            Ok([imu, speed]) => {
-                update_imu(Ok(imu.as_deref().and_then(ImuReading::parse)));
-                update_speed(speed.as_deref().and_then(GyroSpeed::parse));
-            }
-            Err(()) => {
-                update_imu(Err(()));
-                update_speed(None);
-            }
-        },
-    );
+    ctx.live.watch(&page, move |frame| {
+        let readings = frame.and_then(|frame| frame.history.imu);
+        update_imu(frame.ok_or(()).map(|_| readings.map(|(imu, _)| imu)));
+        update_speed(readings.map(|(_, speed)| speed));
+    });
     page.add(&calibration_shortcut(ctx, gyro));
 
     let calibration = adw::PreferencesGroup::builder()
@@ -588,6 +576,7 @@ fn flick_group(ctx: &Context, gyro: Option<&dyn TableLike>) -> adw::PreferencesG
         group.add(row);
     }
     let preview = crate::flick_preview::add(
+        &ctx.live,
         &group,
         &threshold.adjustment(),
         &steering.adjustment(),
@@ -998,19 +987,16 @@ pub fn sticks_page(ctx: &Context) -> gtk::Widget {
         group.add(&crate::stick_keys::editor_row(ctx, side, title));
         page.add(&group);
     }
-    controller_input::watch_status(
-        &page,
-        Field::StickTravel,
-        Duration::from_millis(33),
-        move |result| {
-            let travel = result.ok().flatten().as_deref().and_then(stick_travel);
-            if live_travel.replace(travel) != travel {
-                for plot in plots.iter().filter_map(adw::glib::WeakRef::upgrade) {
-                    plot.queue_draw();
-                }
+    ctx.live.watch(&page, move |frame| {
+        let travel = frame
+            .and_then(|frame| frame.history.samples.last())
+            .map(|sample| StickTravel::from_sticks(sample.sticks).0);
+        if live_travel.replace(travel) != travel {
+            for plot in plots.iter().filter_map(adw::glib::WeakRef::upgrade) {
+                plot.queue_draw();
             }
-        },
-    );
+        }
+    });
     page.upcast()
 }
 
@@ -1049,10 +1035,6 @@ fn scale_row(
     row
 }
 
-fn stick_travel(value: &str) -> Option<[f64; 2]> {
-    StickTravel::parse(value).map(|travel| travel.0)
-}
-
 fn stick_curve(exponent: f64, travel: Option<f64>) -> Curve {
     let output = |input| plot_travel(exponent, input);
     Curve {
@@ -1071,8 +1053,6 @@ mod tests {
 
     #[test]
     fn live_points_use_the_configured_curve_at_the_measured_input() {
-        assert_eq!(stick_travel("50,75"), Some([50.0, 75.0]));
-        assert_eq!(stick_travel("101,50"), None);
         assert_eq!(stick_curve(2.0, Some(50.0)).sample, Some((50.0, 25.0)));
 
         let response = GyroResponse::new(10.0, 20.0, 100.0, 2.0).unwrap();
