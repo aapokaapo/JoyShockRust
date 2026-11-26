@@ -715,6 +715,52 @@ Gamepad and gyro mouse selections are process-local and independent.
 The master switch suppresses both outputs while retaining the selections.
 Status exposes the master, individual choices, and effective output states.
 
+## Bridge-owned calibration sessions
+
+2026-11-26. Before this change the tray paused outputs, started the
+calibration window and resumed outputs when the window exited. The window
+started its own measurement and save processes. A tray crash could leave
+outputs paused, and the resume discarded a pause the user had set
+before calibrating. [Calibration issue](https://github.com/aapokaapo/JoyShockRust/issues/19)
+
+The bridge now owns the session. It listens on a stream socket next to
+the reload socket (`reload.sock.calibration`) and serves one session at
+a time. A second client receives `busy`. The connection is the
+session's lifetime. The calibration window sends `begin` with the
+session kind and controller node. The bridge then asks its main loop
+for an output lease through a bounded channel and wake descriptor,
+like the profile worker. Nothing is added to the per-report path. The
+main loop pauses outputs and records whether they were already paused.
+When the session ends, it restores that state. This happens on `end`,
+window exit or crash (end of stream), idle timeout and measurement
+failure. It never resumes blindly. While a lease is held, a resume
+request from the tray or CLI is rejected. A pause request is applied and
+becomes the state to restore.
+
+Measurements run in worker processes started from the bridge
+executable with the existing `--gyro-calibration --measure` and
+`--calibrate-game --measure-stick` modes. The workers exit with the
+bridge thread that started them. The session forwards their progress as
+typed messages and kills them on cancel, disconnect or timeout. Each
+completed measurement gets a number. Save requests name that number,
+and the bridge saves the values it recorded, not values sent by the
+client. A save for an earlier or unknown measurement is rejected as
+stale. Starting a new measurement invalidates the previous one. Gyro
+bias storage and RWC profile writes use the same functions as the CLI.
+
+Bounds: 5 seconds for the `begin` request and for each lease change,
+30 seconds for a gyro measurement, 10 minutes for an RWC sweep, and
+10 minutes without a request while nothing is measuring. Session IDs
+start from a clock-derived value, so IDs differ across bridge restarts.
+A lease lives only in bridge memory. If the bridge restarts, the window
+sees end of stream and reports that calibration was cancelled. The new
+bridge starts with outputs unpaused, and the next `begin` starts a new
+session. Leases require automatic discovery, so the session socket is
+not served when the bridge runs against a fixed hidraw path.
+
+The tray only launches the window. The editor's calibration windows
+require a running bridge. The CLI calibration modes are unchanged.
+
 ## Desktop process lifecycle
 
 2026-11-23. The input bridge stays supervised by systemd in the user
@@ -743,7 +789,8 @@ so Wayland shells can associate its window with the installed icon.
 For tray RWC calibration, the bridge ends its active output session
 before acknowledging the pause and keeps serving control requests.
 Discovery resumes with the existing profile and controller filter.
-The tray waits for the GTK calibration window, then resumes the bridge.
+Since 2026-11-26 the bridge owns the calibration session. See
+[Bridge-owned calibration sessions](#bridge-owned-calibration-sessions).
 The calibration window opens the selected hidraw node read-only and
 watches it through a bounded nonblocking source on the GTK main loop.
 It handles navigation presses only while focused. Options remains
@@ -751,12 +798,8 @@ available to the measurement worker. The review screen uses the same
 RWC calculation as the save command.
 The window runs the same Flick Stick sweep as the interactive CLI.
 Measurement emits line-delimited status on readiness and Options
-transitions. The GTK window drains these messages asynchronously before
-reaping the worker. Measurement and saving are separate commands. The
-save command validates
-and atomically updates the profile. Closing the window during measurement
-stops and waits for the measurement process before the tray resumes
-normal outputs.
+transitions. Measurement and saving are separate commands. The
+save command validates and atomically updates the profile.
 
 The tray also offers controller gyro calibration. A dedicated measurement
 reads the selected controller without creating a virtual pointer, using

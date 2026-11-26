@@ -1,18 +1,21 @@
 use std::{
     cell::{Cell, RefCell},
     error::Error,
-    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     rc::Rc,
 };
 
 use adw::{gio, glib, gtk, prelude::*};
+use joyshockrust_ipc::calibration::{
+    BridgeMessage, ClientMessage, CloseReason, MAX_LINE_BYTES, Progress, SessionKind,
+};
 use joyshockrust_motion::game_calibration::calculate;
 
 use crate::calibration_navigation::{self, Control};
 
+/// Run a calibration window that drives a bridge calibration session at `socket`.
 pub fn run(
-    bridge: PathBuf,
+    socket: PathBuf,
     game: Option<GameProfiles>,
     node: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
@@ -23,7 +26,7 @@ pub fn run(
         .build();
     application.connect_activate(move |application| {
         let (window, session) =
-            open_window(application, bridge.clone(), game.clone(), node.clone());
+            open_window(application, socket.clone(), game.clone(), node.clone());
         session.watch_controller(&window);
     });
     if application.run_with_args(&["joyshockrust-editor"]) != glib::ExitCode::SUCCESS {
@@ -63,23 +66,36 @@ impl GameProfiles {
     }
 }
 
+/// The window's end of a bridge calibration session.
+#[derive(Clone)]
+struct Connection {
+    stream: gio::SocketConnection,
+    input: gio::DataInputStream,
+}
+
 struct Calibration {
-    bridge: PathBuf,
+    socket: PathBuf,
     game: Option<GameProfiles>,
     node: PathBuf,
     window: glib::WeakRef<adw::ApplicationWindow>,
     page: glib::WeakRef<adw::PreferencesPage>,
     group: RefCell<glib::WeakRef<adw::PreferencesGroup>>,
-    worker: RefCell<Option<gio::Subprocess>>,
-    closing: Cell<bool>,
+    connection: RefCell<Option<Connection>>,
     saving: Cell<bool>,
     controls: RefCell<Vec<Control>>,
     navigation_hint: glib::WeakRef<gtk::Label>,
 }
 
+/// How a session request ended.
+enum Outcome {
+    Reply(BridgeMessage),
+    /// The request failed and the session continues.
+    Failed(String),
+}
+
 fn open_window(
     application: &adw::Application,
-    bridge: PathBuf,
+    socket: PathBuf,
     game: Option<GameProfiles>,
     node: PathBuf,
 ) -> (adw::ApplicationWindow, Rc<Calibration>) {
@@ -113,14 +129,13 @@ fn open_window(
     toolbar.add_bottom_bar(&hint);
     window.set_content(Some(&toolbar));
     let session = Rc::new(Calibration {
-        bridge,
+        socket,
         game,
         node,
         window: window.downgrade(),
         page: page.downgrade(),
         group: RefCell::new(glib::WeakRef::new()),
-        worker: RefCell::new(None),
-        closing: Cell::new(false),
+        connection: RefCell::new(None),
         saving: Cell::new(false),
         controls: RefCell::new(Vec::new()),
         navigation_hint: hint.downgrade(),
@@ -130,19 +145,12 @@ fn open_window(
         if on_close.saving.get() {
             return glib::Propagation::Stop;
         }
-        if let Some(worker) = on_close.worker.borrow().as_ref() {
-            on_close.closing.set(true);
-            worker.force_exit();
-            return glib::Propagation::Stop;
-        }
+        // Closing the connection ends the session. The bridge stops any
+        // measurement and restores the outputs it paused.
+        on_close.disconnect();
         glib::Propagation::Proceed
     });
-    if let Some(game) = &session.game {
-        let sensitivity = game.gyro_number("in_game_sens").unwrap_or(1.0);
-        session.setup(sensitivity, None);
-    } else {
-        session.setup_gyro(None);
-    }
+    session.begin();
     window.present();
     (window, session)
 }
@@ -208,6 +216,155 @@ impl Calibration {
         Some(group)
     }
 
+    fn is_open(&self) -> bool {
+        self.window
+            .upgrade()
+            .is_some_and(|window| window.is_visible())
+    }
+
+    fn disconnect(&self) {
+        if let Some(connection) = self.connection.take() {
+            let _ = connection.stream.close(None::<&gio::Cancellable>);
+        }
+    }
+
+    /// Open the bridge session, which pauses outputs for the calibration.
+    fn begin(self: &Rc<Self>) {
+        if self
+            .group(
+                "Preparing the controller",
+                "Pausing virtual outputs for calibration…",
+            )
+            .is_none()
+        {
+            return;
+        }
+        let kind = if self.game.is_some() {
+            SessionKind::Game
+        } else {
+            SessionKind::Gyro
+        };
+        let session = self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            let result = session.connect(kind).await;
+            if !session.is_open() {
+                session.disconnect();
+                return;
+            }
+            match result {
+                Ok(()) => {
+                    if let Some(game) = &session.game {
+                        let sensitivity = game.gyro_number("in_game_sens").unwrap_or(1.0);
+                        session.setup(sensitivity, None);
+                    } else {
+                        session.setup_gyro(None);
+                    }
+                    // The first step arrives after the window was shown, so
+                    // give it the initial focus the window would have chosen.
+                    let first = session.controls.borrow().first().cloned();
+                    if let Some(first) = first {
+                        first.focus();
+                    }
+                }
+                Err(error) => session.ended("Calibration unavailable", &error),
+            }
+        });
+    }
+
+    async fn connect(&self, kind: SessionKind) -> Result<(), String> {
+        let unavailable = |error: &dyn std::fmt::Display| {
+            format!("Could not reach the bridge. Start JoyShockRust and try again. ({error})")
+        };
+        let begin = ClientMessage::Begin {
+            kind,
+            node: std::path::absolute(&self.node).map_err(|error| error.to_string())?,
+        }
+        .encode()
+        .map_err(str::to_owned)?;
+        let address = gio::UnixSocketAddress::new(&self.socket);
+        let stream = gio::SocketClient::new()
+            .connect_future(&address)
+            .await
+            .map_err(|error| unavailable(&error))?;
+        let input = gio::DataInputStream::new(&stream.input_stream());
+        let connection = Connection { stream, input };
+        let reply = exchange(&connection, &begin, |_| {}).await;
+        match reply {
+            Ok(BridgeMessage::Started { .. }) => {
+                self.connection.replace(Some(connection));
+                Ok(())
+            }
+            Ok(BridgeMessage::Busy) => Err("Another calibration is already in progress.".into()),
+            Ok(BridgeMessage::Rejected(reason) | BridgeMessage::Failed(reason)) => Err(reason),
+            Ok(_) => Err("The bridge sent an unexpected reply.".into()),
+            Err(error) => Err(unavailable(&error)),
+        }
+    }
+
+    /// Send one request and wait for its result, forwarding progress.
+    fn request(
+        self: &Rc<Self>,
+        message: ClientMessage,
+        progress: impl FnMut(Progress) + 'static,
+        finished: impl FnOnce(Outcome) + 'static,
+    ) {
+        let line = match message.encode() {
+            Ok(line) => line,
+            Err(error) => {
+                finished(Outcome::Failed(error.to_owned()));
+                return;
+            }
+        };
+        let session = self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            // Keep the session reachable so closing the window can end it
+            // while a request is waiting.
+            let Some(connection) = session.connection.borrow().clone() else {
+                session.ended(
+                    "Calibration ended",
+                    "The calibration session is no longer active.",
+                );
+                return;
+            };
+            let reply = exchange(&connection, &line, progress).await;
+            if !session.is_open() {
+                return;
+            }
+            match reply {
+                Ok(BridgeMessage::Closed(CloseReason::Idle)) => session.ended(
+                    "Calibration ended",
+                    "The session was idle for too long. Virtual outputs were restored.",
+                ),
+                Ok(reply) => {
+                    let outcome = match reply {
+                        BridgeMessage::Rejected(reason) | BridgeMessage::Failed(reason) => {
+                            Outcome::Failed(reason)
+                        }
+                        BridgeMessage::Cancelled => {
+                            Outcome::Failed("The measurement was cancelled.".into())
+                        }
+                        reply => Outcome::Reply(reply),
+                    };
+                    finished(outcome);
+                }
+                Err(_) => session.ended(
+                    "Calibration ended",
+                    "The bridge stopped, so calibration was cancelled. Nothing was saved from this step.",
+                ),
+            }
+        });
+    }
+
+    /// Show a final page after the session can no longer continue.
+    fn ended(&self, title: &str, message: &str) {
+        self.saving.set(false);
+        self.disconnect();
+        if let Some(group) = self.group(title, "") {
+            detail(&group, message, true);
+            self.close_button(&group, "Close", "suggested-action");
+        }
+    }
+
     fn setup_gyro(self: &Rc<Self>, error: Option<&str>) {
         let Some(group) = self.group("Prepare the controller", "Set the controller down on a flat, stable surface. Leave it untouched while the gyroscope is measured.") else { return };
         if let Some(error) = error {
@@ -227,33 +384,30 @@ impl Calibration {
         };
         let status = detail(&group, "Opening the controller…", false);
         self.close_button(&group, "Cancel", "");
-        let args = [
-            OsString::from("--gyro-calibration"),
-            "--measure".into(),
-            self.node.as_os_str().to_owned(),
-            std::process::id().to_string().into(),
-        ];
         let session = self.clone();
-        self.launch(
-            &args,
-            move |line| {
-                if line != "ready" {
-                    return false;
+        self.request(
+            ClientMessage::MeasureGyro,
+            move |progress| {
+                if progress == Progress::Ready {
+                    status.set_text(&format!(
+                        "Waiting for {} seconds of steady readings.",
+                        joyshockrust_motion::StationaryCalibration::SAMPLE_DURATION.as_secs(),
+                    ));
                 }
-                status.set_text(&format!(
-                    "Waiting for {} seconds of steady readings.",
-                    joyshockrust_motion::StationaryCalibration::SAMPLE_DURATION.as_secs(),
-                ));
-                true
             },
-            move |reply| match reply.and_then(parse_bias) {
-                Ok(bias) => session.confirm_gyro(bias, None),
-                Err(error) => session.setup_gyro(Some(&error)),
+            move |outcome| match outcome {
+                Outcome::Reply(BridgeMessage::GyroMeasured { measurement, .. }) => {
+                    session.confirm_gyro(measurement, None)
+                }
+                Outcome::Reply(_) => {
+                    session.setup_gyro(Some("The controller did not return a gyro correction."))
+                }
+                Outcome::Failed(error) => session.setup_gyro(Some(&error)),
             },
         );
     }
 
-    fn confirm_gyro(self: &Rc<Self>, bias: [OsString; 4], error: Option<&str>) {
+    fn confirm_gyro(self: &Rc<Self>, measurement: u64, error: Option<&str>) {
         let Some(group) = self.group("Measurement complete", "Save the correction for this controller. It will be used when the bridge resumes gyro output.") else { return };
         if let Some(error) = error {
             detail(&group, error, true);
@@ -267,25 +421,26 @@ impl Calibration {
                 "Writing the correction for this controller.",
             );
             session.saving.set(true);
-            let mut args = vec!["--gyro-calibration".into(), "--save".into()];
-            args.extend(bias.clone());
-            let session = session.clone();
-            let bias = bias.clone();
-            session.clone().launch(
-                &args,
-                |_| false,
-                move |result| {
-                    session.saving.set(false);
-                    match result {
-                        Ok(_) => {
-                            if let Some(group) = session.group(
+            let done = session.clone();
+            session.request(
+                ClientMessage::SaveGyro { measurement },
+                |_| {},
+                move |outcome| {
+                    done.saving.set(false);
+                    match outcome {
+                        Outcome::Reply(BridgeMessage::GyroSaved) => {
+                            if let Some(group) = done.group(
                                 "Gyro calibration saved",
-                                "Select Done to resume virtual outputs.",
+                                "Select Done to end calibration and restore virtual outputs.",
                             ) {
-                                session.close_button(&group, "Done", "suggested-action");
+                                done.close_button(&group, "Done", "suggested-action");
                             }
                         }
-                        Err(error) => session.confirm_gyro(bias, Some(&error)),
+                        Outcome::Reply(_) => done.confirm_gyro(
+                            measurement,
+                            Some("The bridge sent an unexpected reply."),
+                        ),
+                        Outcome::Failed(error) => done.confirm_gyro(measurement, Some(&error)),
                     }
                 },
             );
@@ -350,52 +505,44 @@ impl Calibration {
             .subtitle("Opening the controller and calibration mouse…")
             .build();
         group.add(&status);
-        let cancel = self.button(&group, "Cancel", "");
-        let window = self.window.clone();
-        cancel.connect_clicked(move |_| {
-            if let Some(window) = window.upgrade() {
-                window.close();
-            }
-        });
-        let args = [
-            OsString::from("--calibrate-game"),
-            "--measure-stick".into(),
-            sensitivity.to_string().into(),
-            self.node.as_os_str().to_owned(),
-            std::process::id().to_string().into(),
-            // Also disable snapping with older bridge binaries.
-            "0".into(),
-        ];
+        self.close_button(&group, "Cancel", "");
         let session = self.clone();
-        self.launch(
-            &args,
-            move |line| {
-                let message = match line {
-                    "ready" => "Ready. Center the right stick and press Options.",
-                    "started" => "Measuring. Sweep the stick around its edge.",
-                    "center-stick" => "Center the right stick, then press Options again.",
-                    "no-motion" => "No movement recorded. Turn the camera before confirming.",
-                    _ => return false,
-                };
-                status.set_subtitle(message);
-                true
+        self.request(
+            ClientMessage::MeasureGame { sensitivity },
+            move |progress| {
+                status.set_subtitle(match progress {
+                    Progress::Ready => "Ready. Center the right stick and press Options.",
+                    Progress::Started => "Measuring. Sweep the stick around its edge.",
+                    Progress::CenterStick => "Center the right stick, then press Options again.",
+                    Progress::NoMotion => {
+                        "No movement recorded. Turn the camera before confirming."
+                    }
+                });
             },
-            move |reply| match reply.and_then(|line| {
-                line.strip_prefix("counts ")
-                    .and_then(|counts| counts.parse::<i32>().ok())
-                    .filter(|&counts| counts > 0)
-                    .ok_or_else(|| "The measurement returned no mouse counts.".to_owned())
-            }) {
-                Ok(counts) => session.confirm(sensitivity, counts, 1, None, None),
-                Err(error) => session.setup(sensitivity, Some(&error)),
+            move |outcome| match outcome {
+                Outcome::Reply(BridgeMessage::GameMeasured {
+                    measurement,
+                    counts,
+                }) if counts > 0 => {
+                    let measured = Measured {
+                        id: measurement,
+                        sensitivity,
+                        counts,
+                    };
+                    session.confirm(measured, 1, None, None)
+                }
+                Outcome::Reply(_) => session.setup(
+                    sensitivity,
+                    Some("The measurement returned no mouse counts."),
+                ),
+                Outcome::Failed(error) => session.setup(sensitivity, Some(&error)),
             },
         );
     }
 
     fn confirm(
         self: &Rc<Self>,
-        sensitivity: f64,
-        counts: i32,
+        measured: Measured,
         turns: u32,
         previous: Option<&Path>,
         message: Option<&str>,
@@ -406,6 +553,11 @@ impl Calibration {
         ) else {
             return;
         };
+        let Measured {
+            sensitivity,
+            counts,
+            ..
+        } = measured;
         let entry = input(&group, "Complete turns", &turns.to_string());
         self.controls
             .borrow_mut()
@@ -508,7 +660,7 @@ impl Calibration {
         let browse_turns = confirm_turns.clone();
         browse.connect_clicked(move |_| {
             if let Some(turns) = browse_turns() {
-                session.browse(sensitivity, counts, turns);
+                session.browse(measured, turns);
             }
         });
         let session = self.clone();
@@ -519,12 +671,12 @@ impl Calibration {
                 .and_then(|index| profiles.get(index as usize))
                 && let Some(turns) = confirm_turns()
             {
-                session.save(sensitivity, counts, turns, path.clone());
+                session.save(measured, turns, path.clone());
             }
         });
     }
 
-    fn browse(self: &Rc<Self>, sensitivity: f64, counts: i32, turns: u32) {
+    fn browse(self: &Rc<Self>, measured: Measured, turns: u32) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
@@ -549,12 +701,12 @@ impl Calibration {
                     .is_some_and(|window| window.is_visible())
                 && let Some(path) = chooser.file().and_then(|file| file.path())
             {
-                session.save(sensitivity, counts, turns, path);
+                session.save(measured, turns, path);
             }
         });
     }
 
-    fn save(self: &Rc<Self>, sensitivity: f64, counts: i32, turns: u32, path: PathBuf) {
+    fn save(self: &Rc<Self>, measured: Measured, turns: u32, path: PathBuf) {
         if self
             .group(
                 "Saving calibration",
@@ -565,27 +717,29 @@ impl Calibration {
             return;
         }
         self.saving.set(true);
-        let args = [
-            OsString::from("--calibrate-game"),
-            "--save-measurement".into(),
-            path.as_os_str().to_owned(),
-            counts.to_string().into(),
-            sensitivity.to_string().into(),
-            turns.to_string().into(),
-        ];
         let session = self.clone();
-        self.launch(
-            &args,
-            |_| false,
-            move |reply| {
+        let profile = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
+        self.request(
+            ClientMessage::SaveGame {
+                measurement: measured.id,
+                turns,
+                profile,
+            },
+            |_| {},
+            move |outcome| {
                 session.saving.set(false);
-                match reply.and_then(|text| {
-                    positive_decimal(text.trim())
-                        .ok_or_else(|| "The result could not be read.".to_owned())
-                }) {
-                    Ok(calibration) => session.finished(calibration, sensitivity, &path),
-                    Err(error) => {
-                        session.confirm(sensitivity, counts, turns, Some(&path), Some(&error))
+                match outcome {
+                    Outcome::Reply(BridgeMessage::GameSaved { calibration }) => {
+                        session.finished(calibration, measured.sensitivity, &path)
+                    }
+                    Outcome::Reply(_) => session.confirm(
+                        measured,
+                        turns,
+                        Some(&path),
+                        Some("The result could not be read."),
+                    ),
+                    Outcome::Failed(error) => {
+                        session.confirm(measured, turns, Some(&path), Some(&error))
                     }
                 }
             },
@@ -621,85 +775,45 @@ impl Calibration {
             }
         });
     }
-
-    fn launch(
-        self: &Rc<Self>,
-        args: &[OsString],
-        mut progress: impl FnMut(&str) -> bool + 'static,
-        finished: impl FnOnce(Result<String, String>) + 'static,
-    ) {
-        let argv: Vec<&OsStr> = std::iter::once(self.bridge.as_os_str())
-            .chain(args.iter().map(OsString::as_os_str))
-            .collect();
-        let flags = gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_MERGE;
-        let worker = match gio::Subprocess::newv(&argv, flags) {
-            Ok(worker) => worker,
-            Err(error) => {
-                finished(Err(error.to_string()));
-                return;
-            }
-        };
-        self.worker.replace(Some(worker.clone()));
-        let session = self.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let stream = gio::DataInputStream::new(&worker.stdout_pipe().expect("piped stdout"));
-            let mut last = String::new();
-            let result = loop {
-                match stream.read_line_utf8_future(glib::Priority::DEFAULT).await {
-                    Ok(Some(line)) => {
-                        let line = line.trim();
-                        if !line.is_empty() && !progress(line) {
-                            last = line.to_owned();
-                        }
-                    }
-                    Ok(None) => break Ok(()),
-                    Err(error) => {
-                        worker.force_exit();
-                        break Err(error);
-                    }
-                }
-            };
-            // Drain the stream and reap the process before the tray may resume outputs.
-            let waited = worker.wait_future().await;
-            session.worker.take();
-            if session.closing.get() {
-                if let Some(window) = session.window.upgrade() {
-                    window.close();
-                }
-                return;
-            }
-            finished(
-                result
-                    .and(waited)
-                    .map_err(|error| error.to_string())
-                    .and_then(|()| {
-                        if worker.is_successful() {
-                            Ok(last)
-                        } else if last.is_empty() {
-                            Err("Calibration process exited.".into())
-                        } else {
-                            Err(last)
-                        }
-                    }),
-            );
-        });
-    }
 }
 
-fn parse_bias(reply: String) -> Result<[OsString; 4], String> {
-    let mut fields = reply.split_ascii_whitespace();
-    match [
-        fields.next(),
-        fields.next(),
-        fields.next(),
-        fields.next(),
-        fields.next(),
-        fields.next(),
-    ] {
-        [Some("bias"), Some(id), Some(x), Some(y), Some(z), None] => {
-            Ok([id, x, y, z].map(OsString::from))
+/// A completed RWC measurement recorded by the bridge.
+#[derive(Clone, Copy)]
+struct Measured {
+    id: u64,
+    sensitivity: f64,
+    counts: i32,
+}
+
+/// Write one request line and read replies until one is not progress.
+async fn exchange(
+    connection: &Connection,
+    line: &str,
+    mut progress: impl FnMut(Progress),
+) -> Result<BridgeMessage, glib::Error> {
+    connection
+        .stream
+        .output_stream()
+        .write_all_future(line.as_bytes().to_vec(), glib::Priority::DEFAULT)
+        .await
+        .map_err(|(_, error)| error)?;
+    loop {
+        let line = connection
+            .input
+            .read_line_utf8_future(glib::Priority::DEFAULT)
+            .await?
+            .ok_or_else(|| glib::Error::new(gio::IOErrorEnum::BrokenPipe, "session closed"))?;
+        if line.len() >= MAX_LINE_BYTES {
+            return Err(glib::Error::new(
+                gio::IOErrorEnum::InvalidData,
+                "calibration reply too long",
+            ));
         }
-        _ => Err("The controller did not return a gyro correction.".into()),
+        match BridgeMessage::decode(line.trim()) {
+            Ok(BridgeMessage::Progress(step)) => progress(step),
+            Ok(reply) => return Ok(reply),
+            Err(error) => return Err(glib::Error::new(gio::IOErrorEnum::InvalidData, error)),
+        }
     }
 }
 
@@ -763,7 +877,12 @@ fn button(group: &adw::PreferencesGroup, text: &str, style: &str) -> gtk::Button
 mod tests {
     use std::{
         fs,
-        os::unix::fs::PermissionsExt,
+        io::{BufRead, BufReader, Write},
+        os::unix::net::{UnixListener, UnixStream},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
 
@@ -785,6 +904,114 @@ mod tests {
         }
     }
 
+    fn wait_for_gate(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "gate {} not opened",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// A scripted bridge session server. The node's file name selects the
+    /// behavior. Counts sessions that have ended.
+    fn fake_bridge(socket: &Path, ended: Arc<AtomicUsize>) {
+        let listener = UnixListener::bind(socket).unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let ended = ended.clone();
+                std::thread::spawn(move || {
+                    let stream = stream.unwrap();
+                    serve_fake(&stream);
+                    ended.fetch_add(1, Ordering::SeqCst);
+                });
+            }
+        });
+    }
+
+    fn serve_fake(stream: &UnixStream) {
+        let mut reader = BufReader::new(stream);
+        let mut writer = stream;
+        let mut reply =
+            |message: BridgeMessage| writer.write_all(message.encode().as_bytes()).is_ok();
+        let mut next = || {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => None,
+                Ok(_) => Some(ClientMessage::decode(line.trim_end()).unwrap()),
+            }
+        };
+        let Some(ClientMessage::Begin { node, .. }) = next() else {
+            return;
+        };
+        let name = node.file_name().unwrap().to_str().unwrap().to_owned();
+        if name == "busy" {
+            reply(BridgeMessage::Busy);
+            return;
+        }
+        reply(BridgeMessage::Started { session: 1 });
+        let mut measurement = 0;
+        while let Some(message) = next() {
+            let answered = match message {
+                ClientMessage::MeasureGame { sensitivity } => {
+                    assert_eq!(sensitivity, 2.0);
+                    if name == "cancel" {
+                        // Never finish. The window ends the session.
+                        continue;
+                    }
+                    for (progress, gate) in [
+                        (Progress::Ready, "ready"),
+                        (Progress::CenterStick, "centered"),
+                        (Progress::Started, "swept"),
+                        (Progress::NoMotion, "confirmed"),
+                    ] {
+                        reply(BridgeMessage::Progress(progress));
+                        wait_for_gate(&node.with_extension(gate));
+                    }
+                    measurement += 1;
+                    reply(BridgeMessage::GameMeasured {
+                        measurement,
+                        counts: 28_800,
+                    })
+                }
+                ClientMessage::SaveGame {
+                    measurement: saved,
+                    turns,
+                    profile,
+                } => {
+                    assert_eq!((saved, turns), (measurement, 4));
+                    fs::write(node.with_file_name("rwc-saved"), profile.to_str().unwrap()).unwrap();
+                    reply(BridgeMessage::GameSaved { calibration: 40.0 })
+                }
+                ClientMessage::MeasureGyro => {
+                    if name == "drop" {
+                        return;
+                    }
+                    reply(BridgeMessage::Progress(Progress::Ready));
+                    measurement += 1;
+                    reply(BridgeMessage::GyroMeasured {
+                        measurement,
+                        controller: "00:11:22:33:44:55".into(),
+                        bias_dps: [0.25, 0.0, -0.1],
+                    })
+                }
+                ClientMessage::SaveGyro { measurement: saved } => {
+                    assert_eq!(saved, measurement);
+                    fs::write(node.with_file_name("gyro-saved"), "").unwrap();
+                    reply(BridgeMessage::GyroSaved)
+                }
+                ClientMessage::End => return,
+                other => panic!("unexpected request {other:?}"),
+            };
+            if !answered {
+                return;
+            }
+        }
+    }
+
     #[test]
     #[ignore = "requires a Wayland compositor"]
     fn calibration_window_completes_and_cancels() {
@@ -795,57 +1022,9 @@ mod tests {
             .build();
         application.register(None::<&gio::Cancellable>).unwrap();
         let directory = tempfile::tempdir().unwrap();
-        let helper = directory.path().join("calibration-helper");
-        fs::write(
-            &helper,
-            r#"#!/bin/sh
-wait_for_gate() {
-    attempts=0
-    while [ ! -f "$1" ] && [ "$attempts" -lt 250 ]; do
-        sleep 0.02
-        attempts=$((attempts + 1))
-    done
-    [ -f "$1" ] || exit 1
-}
-case "$1:$2" in
-    --gyro-calibration:*)
-        case "$2" in
-            --measure)
-                printf 'ready\nbias 00:11:22:33:44:55 0.25 0 -0.1\n'
-                ;;
-            --save)
-                [ "$3 $4 $5 $6" = "00:11:22:33:44:55 0.25 0 -0.1" ] || exit 1
-                touch "${0%/*}/gyro-saved"
-                ;;
-            *) exit 1 ;;
-        esac
-        ;;
-    --calibrate-game:--measure-stick)
-        shift
-        [ "$2" = 2 ] && [ "$5" = 0 ] || exit 1
-        if [ "$3" = cancel ]; then exec sleep 60; fi
-        printf 'ready\n'
-        wait_for_gate "$3.ready"
-        printf 'center-stick\n'
-        wait_for_gate "$3.centered"
-        printf 'started\n'
-        wait_for_gate "$3.swept"
-        printf 'no-motion\n'
-        wait_for_gate "$3.confirmed"
-        printf 'counts 28800\n'
-        ;;
-    --calibrate-game:--save-measurement)
-        shift
-        [ "$3" = 28800 ] && [ "$4" = 2 ] && [ "$5" = 4 ] || exit 1
-        printf '%s' "$2" > "${0%/*}/rwc-saved"
-        printf '40.0\n'
-        ;;
-    *) exit 1 ;;
-esac
-"#,
-        )
-        .unwrap();
-        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = directory.path().join("reload.sock.calibration");
+        let ended = Arc::new(AtomicUsize::new(0));
+        fake_bridge(&socket, ended.clone());
         let profile = directory.path().join("profile.toml");
         fs::write(
             &profile,
@@ -859,24 +1038,36 @@ esac
         fs::write(&alternate, "version = 1\n").unwrap();
         let rwc_saved = directory.path().join("rwc-saved");
 
-        let open = |node: &str| {
-            open_window(
-                &application,
-                helper.clone(),
-                Some(GameProfiles {
-                    active: Some(profile.clone()),
-                    available: vec![alternate.clone()],
-                }),
-                node.into(),
-            )
-        };
         let find_button = |window: &adw::ApplicationWindow, name| {
             descendants::<gtk::Button>(window.upcast_ref())
                 .into_iter()
                 .find(|button| button.label().as_deref() == Some(name))
         };
+        let open_with = |socket: &Path, game: bool, node: &str| {
+            let (window, session) = open_window(
+                &application,
+                socket.to_owned(),
+                game.then(|| GameProfiles {
+                    active: Some(profile.clone()),
+                    available: vec![alternate.clone()],
+                }),
+                directory.path().join(node),
+            );
+            let start = if game {
+                "Start Measurement"
+            } else {
+                "Start Gyro Calibration"
+            };
+            wait_for(|| {
+                find_button(&window, start).is_some() || find_button(&window, "Close").is_some()
+            });
+            (window, session)
+        };
+        let open = |node: &str| open_with(&socket, true, node);
+        let wait_ended = |count| wait_for(|| ended.load(Ordering::SeqCst) == count);
+
         let node = directory.path().join("measure");
-        let (window, session) = open(node.to_str().unwrap());
+        let (window, session) = open("measure");
         if !window.is_active() {
             session.navigate("back");
             assert!(window.is_visible());
@@ -958,8 +1149,10 @@ esac
             fs::read_to_string(&rwc_saved).unwrap(),
             profile.to_str().unwrap()
         );
+        // Closing the window ends the bridge session.
+        wait_ended(1);
 
-        let (window, session) = open(node.to_str().unwrap());
+        let (window, session) = open("measure");
         session.navigate_window(&window, "down");
         session.navigate_window(&window, "accept");
         wait_for(|| find_button(&window, "Save Calibration").is_some());
@@ -968,6 +1161,7 @@ esac
             fs::read_to_string(&rwc_saved).unwrap(),
             alternate.to_str().unwrap()
         );
+        wait_ended(2);
 
         let (window, session) = open("cancel");
         session.navigate_window(&window, "down");
@@ -976,18 +1170,21 @@ esac
         session.navigate_window(&window, "back");
         wait_for(|| !window.is_visible());
         assert!(find_button(&window, "Save Calibration").is_none());
+        // Cancelling mid-measurement releases the session at once.
+        wait_ended(3);
 
         let record = directory.path().join("gyro-saved");
-        let open_gyro = || open_window(&application, helper.clone(), None, "gyro".into());
-        let (window, session) = open_gyro();
+        let open_gyro = |node: &str| open_with(&socket, false, node);
+        let (window, session) = open_gyro("gyro");
         session.navigate_window(&window, "accept");
         wait_for(|| find_button(&window, "Save Gyro Calibration").is_some());
         assert!(!record.exists());
         session.navigate_window(&window, "back");
         assert!(!window.is_visible());
         assert!(!record.exists());
+        wait_ended(4);
 
-        let (window, session) = open_gyro();
+        let (window, session) = open_gyro("gyro");
         session.navigate_window(&window, "accept");
         wait_for(|| find_button(&window, "Save Gyro Calibration").is_some());
         let save = find_button(&window, "Save Gyro Calibration").unwrap();
@@ -1004,6 +1201,27 @@ esac
         session.navigate_window(&window, "accept");
         wait_for(|| find_button(&window, "Done").is_some());
         assert!(record.exists());
+        session.navigate_window(&window, "accept");
+        assert!(!window.is_visible());
+        wait_ended(5);
+
+        // A bridge restart ends the session and says so.
+        let (window, session) = open_gyro("drop");
+        session.navigate_window(&window, "accept");
+        wait_for(|| find_button(&window, "Close").is_some());
+        assert!(find_button(&window, "Save Gyro Calibration").is_none());
+        session.navigate_window(&window, "accept");
+        assert!(!window.is_visible());
+        wait_ended(6);
+
+        // Overlapping and unreachable sessions show why calibration cannot start.
+        let (window, session) = open_gyro("busy");
+        assert!(find_button(&window, "Close").is_some());
+        session.navigate_window(&window, "accept");
+        assert!(!window.is_visible());
+        let (window, session) = open_with(&directory.path().join("missing"), false, "gyro");
+        assert!(find_button(&window, "Close").is_some());
+        assert!(find_button(&window, "Start Gyro Calibration").is_none());
         session.navigate_window(&window, "accept");
         assert!(!window.is_visible());
     }

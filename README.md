@@ -1028,8 +1028,10 @@ bridge. If activation fails, the editor reports where it saved the file
 and shows the active profile when available. Use Ctrl+S to save or
 Ctrl+Shift+S to save and apply.
 
-Select **Calibrate game sensitivity (RWC)** while a controller is connected. The tray pauses virtual outputs and opens the Wayland
-calibration window. During measurement, the right stick uses its physical
+Select **Calibrate game sensitivity (RWC)** while a controller is connected. The tray opens the Wayland
+calibration window, and the bridge pauses virtual outputs while the window
+is open. Closing the window restores the outputs as they were before
+calibration. If you had paused them, they stay paused. During measurement, the right stick uses its physical
 angle with full resolution near the cardinal directions. Enter the game's
 mouse sensitivity and select **Start Measurement**. Wait for **Ready**, then focus the game, aim at a landmark
 and press Options with the right stick centered. The window shows when
@@ -1346,8 +1348,8 @@ digital button names used by the gyro flags.
 With a controller connected, choose **Calibrate Controller Gyro** from the
 tray. Put the controller on a flat, stable surface and select **Start Gyro
 Calibration**. Keep it still for five uninterrupted seconds, then select
-**Save Gyro Calibration** and **Done**. The bridge resumes and uses the
-correction whenever it opens gyro output for that controller. Calibration
+**Save Gyro Calibration** and **Done**. The bridge restores the previous
+output state and uses the correction whenever it opens gyro output for that controller. Calibration
 is stored by controller ID in `$XDG_CONFIG_HOME/joyshockrust/gyro-calibration/`
 or under `~/.config` if XDG_CONFIG_HOME is unset. Cancel before saving to
 discard the measurement. A saved correction takes precedence over the

@@ -741,6 +741,7 @@ pub(super) fn run() -> Result<std::process::ExitCode, Box<dyn std::error::Error>
                             None
                         }
                         Some(reload::Update::OutputsPaused(paused)) => {
+                            reload.outputs_were_paused(outputs_paused.get());
                             outputs_paused.set(paused);
                             if let Some(status) = status {
                                 status.set_outputs_paused(paused);

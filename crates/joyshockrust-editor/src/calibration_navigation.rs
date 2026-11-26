@@ -85,7 +85,7 @@ impl Control {
         }
     }
 
-    fn focus(&self) {
+    pub fn focus(&self) {
         if let Some(widget) = self.widget()
             && !widget.grab_focus()
         {

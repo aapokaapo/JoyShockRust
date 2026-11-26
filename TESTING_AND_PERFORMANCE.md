@@ -1126,7 +1126,18 @@ and Options still controls measurement. Refocus calibration, change the
 whole-turn count with the D-pad and check the RWC preview changes while
 the in-game sensitivity stays constant. Choose a profile and save with
 Cross.
-Check Circle cancels and the tray resumes the bridge.
+Check Circle cancels and the bridge restores the outputs.
+
+Check bridge session ownership. Pause virtual outputs from the tray, then
+open a calibration window and close it. Verify `outputs_paused=true`
+remains. Resume, open a window and select **Resume virtual outputs** or
+run `joyshockrust-linux --set-outputs resume`. The bridge rejects the
+request while the window is open. With a measurement running, end the
+window process with `kill -9`. Verify the calibration mouse disappears,
+`outputs_paused=false` and the controller reconnects. Open a second
+window while one is open and check it reports that calibration is in
+progress. Restart the bridge service during a session and check that
+the window reports the cancellation.
 
 Install the tray and bridge using the [combined desktop setup](README.md#install-the-service-tray-and-editor-together).
 Run JoyShockRust from the applications menu in a Wayland session with a
@@ -1303,9 +1314,23 @@ profile to apply the new values. Repeat, cancel during measurement,
 and verify the calibration mouse disappears and the profile stays
 unchanged.
 
-The Wayland widget test pauses the simulated worker at each progress
-update and checks that the window responds before the worker exits. It
-also checks Save and Cancel.
+The Wayland widget test drives the window against a scripted session
+socket. It pauses at each progress update and checks that the window
+responds before the measurement completes. It also checks Save and
+Cancel, that closing the window ends the session, and the messages for
+a busy bridge, an unreachable bridge and a bridge that ends the session.
+
+Bridge session tests in `joyshockrust-linux` run the real session
+thread and lease handling with a scripted worker. They cover normal gyro
+and RWC completion, stale and replayed saves, save failure, a busy
+second client, a failed measurement with outputs paused beforehand,
+client disconnect during measurement, cancellation, measurement and
+idle timeouts, a missing `begin`, and rejecting resume while a lease is
+held.
+
+```sh
+cargo test --locked -p joyshockrust-linux calibration_sessions
+```
 
 ```sh
 cargo test --locked -p joyshockrust-editor calibration_window_completes_and_cancels -- --ignored
