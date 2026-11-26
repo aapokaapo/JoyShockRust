@@ -1,9 +1,9 @@
 use adw::{glib, gtk, prelude::*};
+use gtk::{cairo, gdk, gdk_pixbuf};
 use toml_edit::DocumentMut;
 
 use crate::{
     bindings::{self, Gesture, OutputMode},
-    controller_art,
     ui::{self, Context},
 };
 
@@ -18,6 +18,47 @@ struct Control {
 const ART_SCALE: f64 = 2.0;
 const ART_TOP: f64 = 42.0;
 const ART_BOTTOM: f64 = 216.0;
+pub(crate) const ART_SIZE: f64 = 256.0;
+const SVG: &[u8] = include_bytes!("../assets/dualsense.svg");
+const RASTER_SIZE: i32 = 768;
+
+pub(crate) fn load_artwork() -> Option<gdk_pixbuf::Pixbuf> {
+    rasterize_artwork()
+        .inspect_err(|error| eprintln!("DualSense art unavailable: {error}"))
+        .ok()
+}
+
+fn rasterize_artwork() -> Result<gdk_pixbuf::Pixbuf, glib::Error> {
+    let loader = gdk_pixbuf::PixbufLoader::with_type("svg")?;
+    loader.set_size(RASTER_SIZE, RASTER_SIZE);
+    loader.write(SVG)?;
+    loader.close()?;
+    loader.pixbuf().ok_or_else(|| {
+        glib::Error::new(
+            gdk_pixbuf::PixbufError::Failed,
+            "Could not render DualSense art",
+        )
+    })
+}
+
+pub(crate) fn draw_artwork(cr: &cairo::Context, svg: &gdk_pixbuf::Pixbuf, color: gdk::RGBA) {
+    let _ = cr.save();
+    cr.scale(
+        ART_SIZE / f64::from(svg.width()),
+        ART_SIZE / f64::from(svg.height()),
+    );
+    cr.set_source_pixbuf(svg, 0.0, 0.0);
+    let mask = cr.source();
+    // Use the SVG alpha as a mask so the outline follows the GTK theme.
+    cr.set_source_rgba(
+        color.red().into(),
+        color.green().into(),
+        color.blue().into(),
+        0.60,
+    );
+    let _ = cr.mask(&mask);
+    let _ = cr.restore();
+}
 
 const FRONT: [Control; 22] = [
     control(
@@ -339,19 +380,18 @@ pub fn page(ctx: &Context) -> gtk::Widget {
         .build();
     layout.append(&diagram_scroll);
     let outline = gtk::DrawingArea::builder()
-        .content_width((controller_art::SIZE * ART_SCALE) as i32)
+        .content_width((ART_SIZE * ART_SCALE) as i32)
         .content_height(((ART_BOTTOM - ART_TOP) * ART_SCALE) as i32)
         .build();
     outline.set_can_target(false);
-    match controller_art::load() {
-        Ok(svg) => outline.set_draw_func(move |area, cr, _, _| {
+    if let Some(svg) = load_artwork() {
+        outline.set_draw_func(move |area, cr, _, _| {
             let _ = cr.save();
             cr.scale(ART_SCALE, ART_SCALE);
             cr.translate(0.0, -ART_TOP);
-            controller_art::draw(cr, &svg, area.style_context().color(), 0.60);
+            draw_artwork(cr, &svg, area.style_context().color());
             let _ = cr.restore();
-        }),
-        Err(error) => eprintln!("DualSense art unavailable: {error}"),
+        });
     }
     let control_style = gtk::CssProvider::new();
     control_style.load_from_data(

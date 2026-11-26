@@ -10,7 +10,6 @@ mod bindings;
 mod calibration;
 mod calibration_navigation;
 mod controller;
-mod controller_art;
 mod controller_input;
 mod flick_preview;
 mod gyro_activation;

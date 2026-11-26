@@ -8,7 +8,7 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike, Value, value
 
 use crate::{
     bindings::{self, Gesture, region_input, replace_value},
-    controller, controller_art, controller_input,
+    controller, controller_input,
     ui::{self, Context},
 };
 
@@ -441,11 +441,7 @@ fn live_preview(
 
     let contacts = Rc::new(State::new(Contacts::default()));
     let drawn_contacts = contacts.clone();
-    let svg = controller_art::load()
-        .map_err(|error| {
-            eprintln!("DualSense art unavailable: {error}");
-        })
-        .ok();
+    let svg = controller::load_artwork();
     area.set_draw_func(move |area, cr, width, height| {
         draw_preview(
             area,
@@ -482,7 +478,7 @@ fn live_preview(
 const CROP_TOP: f64 = 56.0;
 const CROP_HEIGHT: f64 = 80.0;
 // SVG viewBox coordinates for the touch surface.
-const PAD_CENTER: f64 = controller_art::SIZE / 2.0;
+const PAD_CENTER: f64 = controller::ART_SIZE / 2.0;
 const PAD_TOP: f64 = 72.0;
 const PAD_BOTTOM: f64 = 118.0;
 const PAD_TOP_WIDTH: f64 = 68.0;
@@ -511,18 +507,18 @@ fn draw_preview(
     let color = |c: gtk::gdk::RGBA, alpha| {
         cr.set_source_rgba(c.red().into(), c.green().into(), c.blue().into(), alpha);
     };
-    let scale = ((f64::from(width) - 12.0) / controller_art::SIZE)
+    let scale = ((f64::from(width) - 12.0) / controller::ART_SIZE)
         .min((f64::from(height) - 12.0) / CROP_HEIGHT);
     if scale <= 0.0 {
         return;
     }
     let _ = cr.save();
     cr.translate(
-        (f64::from(width) - controller_art::SIZE * scale) / 2.0,
+        (f64::from(width) - controller::ART_SIZE * scale) / 2.0,
         (f64::from(height) - CROP_HEIGHT * scale) / 2.0,
     );
     cr.scale(scale, scale);
-    cr.rectangle(0.0, 0.0, controller_art::SIZE, CROP_HEIGHT);
+    cr.rectangle(0.0, 0.0, controller::ART_SIZE, CROP_HEIGHT);
     cr.clip();
     cr.translate(0.0, -CROP_TOP);
 
@@ -583,7 +579,7 @@ fn draw_preview(
     }
     let _ = cr.restore();
     if let Some(svg) = svg {
-        controller_art::draw(cr, svg, fg, 0.60);
+        controller::draw_artwork(cr, svg, fg);
     }
     let _ = cr.restore();
 }
