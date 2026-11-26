@@ -9,8 +9,6 @@ mod diagnostics;
 #[cfg(target_os = "linux")]
 mod discovery;
 #[cfg(target_os = "linux")]
-mod flick_stick;
-#[cfg(target_os = "linux")]
 mod game_calibration;
 #[cfg(target_os = "linux")]
 mod gamepad;
@@ -324,12 +322,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let value = args
                 .next()
                 .ok_or("expected generic, xbox360 or xbox-series after --gamepad")?;
-            gamepad_kind = Some(match value.to_str() {
-                Some("generic") => gamepad::OutputKind::Generic,
-                Some("xbox360") => gamepad::OutputKind::Xbox360,
-                Some("xbox-series") => gamepad::OutputKind::XboxSeries,
-                _ => return Err("expected generic, xbox360 or xbox-series after --gamepad".into()),
-            });
+            const EXPECTED: &str = "expected generic, xbox360 or xbox-series after --gamepad";
+            gamepad_kind = Some(
+                value
+                    .to_str()
+                    .ok_or(EXPECTED)?
+                    .parse()
+                    .map_err(|_| EXPECTED)?,
+            );
         } else if arg == "--flick-stick" {
             if options.flick_stick.is_some() {
                 return Err("select only one Flick Stick sensitivity".into());
@@ -1181,7 +1181,7 @@ fn serve_session(
                         (&mut mouse, active_gyro, next_gyro)
                         && current.can_reconfigure(next)
                     {
-                        mouse.reconfigure(current, next);
+                        mouse.reconfigure(next);
                     } else if active_gyro != next_gyro {
                         let input = reload_input.as_ref().expect("reload descriptor");
                         match open_mouse(input, identity.transport, next_gyro) {
@@ -1377,48 +1377,26 @@ fn map_gamepad_controls(
     layer_state: &mut gamepad::RemapState,
     touch_click: &mut touchpad::ClickState,
 ) -> joyshockrust_core::Controls {
-    let mut controls = runtime
-        .stick_curve
-        .map_or(report.controls, |curve| curve.apply(report.controls));
-    if let Some(options) = active_gyro.filter(|options| options.flick_stick.is_some()) {
-        *options
-            .flick_stick_side
-            .select(&mut controls.left_stick, &mut controls.right_stick) = Default::default();
+    gamepad::GamepadMapping {
+        stick_curve: runtime.stick_curve,
+        flick_stick: active_gyro
+            .filter(|options| options.flick_stick.is_some())
+            .map(|options| options.flick_stick_side),
+        suppressed: runtime
+            .keyboard
+            .as_ref()
+            .map_or_else(Default::default, |keyboard| keyboard.gamepad_mask.buttons),
+        touchpad: runtime.touchpad.as_ref(),
+        trigger_stages: runtime.trigger_stages,
+        trigger_full_travel: runtime.trigger_full_travel,
+        trigger_analog_routes: runtime.trigger_analog_routes,
+        remaps: &runtime.remaps,
     }
-    let mut suppressed = joyshockrust_core::Buttons::default();
-    if let Some(keyboard) = &runtime.keyboard {
-        keyboard.gamepad_mask.filter_axes(&mut controls);
-        suppressed = keyboard.gamepad_mask.buttons;
-    }
-    let touch_buttons = runtime
-        .touchpad
-        .as_ref()
-        .map_or_else(Default::default, |grid| {
-            use joyshockrust_core::Button::TouchpadClick;
-            let suppress_click =
-                suppressed.contains(TouchpadClick) && controls.buttons.contains(TouchpadClick);
-            if suppress_click {
-                controls.buttons.remove(TouchpadClick);
-            }
-            let buttons = grid.map(&mut controls.buttons, report.touch_contacts, touch_click);
-            if suppress_click {
-                controls.buttons.insert(TouchpadClick);
-            }
-            buttons
-        });
-    let trigger_buttons =
-        layer_state.trigger_outputs(&controls, runtime.trigger_stages, &mut suppressed);
-    gamepad::route_trigger_axes(
-        &mut controls,
-        runtime.trigger_full_travel,
-        runtime.trigger_analog_routes,
-        &mut suppressed,
-    );
-    runtime.remaps.apply_filtered(
-        controls,
+    .apply(
+        report.controls,
+        report.touch_contacts,
         layer_state,
-        suppressed,
-        touch_buttons.union(trigger_buttons),
+        touch_click,
     )
 }
 

@@ -800,6 +800,7 @@ dependencies = [
  "joyshockrust-core",
  "joyshockrust-input",
  "joyshockrust-ipc",
+ "joyshockrust-mapping",
  "joyshockrust-motion",
  "nix",
  "serde",
@@ -809,10 +810,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "joyshockrust-motion"
+name = "joyshockrust-mapping"
 version = "0.1.0"
 dependencies = [
  "joyshockrust-core",
+ "joyshockrust-input",
+ "joyshockrust-motion",
+ "serde",
+]
+
+[[package]]
+name = "joyshockrust-motion"
+version = "0.1.0"
+dependencies = [
+ "allocation-counter",
+ "joyshockrust-core",
+ "joyshockrust-input",
 ]
 
 [[package]]

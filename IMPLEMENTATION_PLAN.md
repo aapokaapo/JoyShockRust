@@ -20,6 +20,12 @@ CI also runs the display-dependent editor suite in a headless Wayland
 session. The physical editor sequence remains the next device
 acceptance check. [Headless Wayland editor tests](TESTING_AND_PERFORMANCE.md#headless-wayland-editor-tests)
 
+The pointer and virtual gamepad portions of the architecture migration
+run in `joyshockrust-motion` and `joyshockrust-mapping`. Next migration
+steps cover the activation and keyboard/mouse gesture state in mapping,
+the profile and IPC client changes, bridge telemetry and bridge-owned
+calibration sessions. [Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
+
 | Area | Shipped | Next acceptance step |
 |---|---|---|
 | Desktop controls | Tray lifecycle and telemetry, independent controller/profile selection, guided calibration, and a GTK/Wayland editor with live previews and exclusive per-button routing. | Verify the latest editor on Fedora with a physical controller. Check keyboard capture, output isolation, tray profile restore, and calibration navigation. |

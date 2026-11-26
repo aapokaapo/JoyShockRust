@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use joyshockrust_input::{FactoryCalibration, RawImuSample, Timebase, TimestampUpdate};
+use joyshockrust_input::{FactoryCalibration, ImuStream, RawImuSample, TimestampUpdate};
 use joyshockrust_motion::{
     Calibration, ImuSample, MotionConfig, MotionEngine, StationaryCalibration,
 };
@@ -202,23 +202,25 @@ fn measure(node: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 struct Sampler {
-    factory: FactoryCalibration,
-    clock: Timebase,
+    input: ImuStream,
     estimate: StationaryCalibration,
 }
 
 impl Sampler {
     fn new(factory: FactoryCalibration) -> Self {
         Self {
-            factory,
-            clock: Timebase::new(joyshockrust_input::ticks_in_nanoseconds(50_000_000) as u32)
-                .expect("valid 50 ms sensor gap"),
+            input: ImuStream::new(
+                factory,
+                joyshockrust_input::ticks_in_nanoseconds(MotionConfig::default().max_gap_ns) as u32,
+            )
+            .expect("valid sensor gap limit"),
             estimate: StationaryCalibration::default(),
         }
     }
 
     fn observe(&mut self, sample: RawImuSample) -> Option<Calibration> {
-        let elapsed = match self.clock.observe(sample.device_ticks) {
+        let timed = self.input.observe(sample);
+        let elapsed = match timed.timing {
             TimestampUpdate::FirstSample => Duration::ZERO,
             TimestampUpdate::Advanced { elapsed, .. } => elapsed,
             TimestampUpdate::Gap { .. } => {
@@ -227,7 +229,7 @@ impl Sampler {
             }
             TimestampUpdate::Repeated { .. } | TimestampUpdate::OutOfOrder { .. } => return None,
         };
-        let calibrated = self.factory.convert(sample);
+        let calibrated = timed.calibrated();
         self.estimate.observe(ImuSample {
             timestamp_ns: elapsed.as_nanos() as u64,
             gyro_dps: calibrated.gyro_dps,

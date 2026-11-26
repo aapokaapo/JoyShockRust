@@ -7,6 +7,10 @@ publish.workspace = true
 
 [dependencies]
 joyshockrust-core = { path = "../joyshockrust-core" }
+joyshockrust-input = { path = "../joyshockrust-input" }
+
+[dev-dependencies]
+allocation-counter = "0.8"
 
 [lints]
 workspace = true

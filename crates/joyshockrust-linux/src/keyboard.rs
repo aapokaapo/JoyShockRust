@@ -53,17 +53,6 @@ pub struct GamepadMask {
     pub buttons: Buttons,
 }
 
-impl GamepadMask {
-    pub fn filter_axes(&self, controls: &mut Controls) {
-        if self.buttons.contains(Button::LeftTrigger) {
-            controls.left_trigger = 0.0;
-        }
-        if self.buttons.contains(Button::RightTrigger) {
-            controls.right_trigger = 0.0;
-        }
-    }
-}
-
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct KeepPartial {

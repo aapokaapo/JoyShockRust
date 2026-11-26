@@ -2,6 +2,14 @@ use core::{ops::Div, str::FromStr};
 
 use crate::Controls;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnalogTriggerRoute {
+    #[default]
+    Same,
+    Other,
+    Off,
+}
+
 /// Pull and release points in percent, in partial then full order.
 pub const DEFAULT_TRIGGER_THRESHOLDS: [u8; 4] = [45, 35, 95, 85];
 

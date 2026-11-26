@@ -21,7 +21,9 @@ const MAX_SENSITIVITY: f32 = 10_000.0;
 const GRAVITY_CORRECTION_SECONDS: f64 = 0.5;
 
 pub mod aim_response;
+pub mod flick_stick;
 pub mod game_calibration;
+pub mod pointer;
 pub mod sensitivity;
 mod stationary_calibration;
 pub mod stick_response;

@@ -1,11 +1,11 @@
 use std::time::Duration;
 
-use joyshockrust_core::Stick;
-use joyshockrust_input::{Timebase, TimestampUpdate};
-use joyshockrust_motion::aim_response::{
+use crate::aim_response::{
     DEFAULT_FLICK_AXIAL_THRESHOLD_DEG, DEFAULT_FLICK_DURATION_MS,
     DEFAULT_FLICK_STEERING_SENSITIVITY, FlickDirection, FlickUpdate, snap_flick_angle,
 };
+use joyshockrust_core::Stick;
+use joyshockrust_input::{Timebase, TimestampUpdate};
 
 pub struct FlickStick {
     counts_per_degree: f64,

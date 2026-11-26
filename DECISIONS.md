@@ -21,6 +21,17 @@ preview expiry stay with the bridge. Legacy TOML shapes and field
 precedence, status ordering, socket paths and request sizes retain
 their existing contracts. [IPC codecs](crates/joyshockrust-ipc/src)
 
+## Portable pointer and virtual gamepad processing
+
+2026-11-26. `PointerMotion` owns gyro and Flick Stick state and returns
+integer X/Y counts. The input crate supplies factory scaling and sensor
+timing. Preserve independent fractional carry and Flick Stick's
+resume timing during calibration to retain the existing report deltas.
+The mapping crate owns normalized gamepad routing, target ranges and
+change detection. It commits published state after the output adapter
+accepts the event batch. Linux owns the devices, physical activation
+checks and calibration persistence. [Motion issue](https://github.com/aapokaapo/JoyShockRust/issues/14) · [Mapping issue](https://github.com/aapokaapo/JoyShockRust/issues/15)
+
 ## ADR-001 — Linux-first Rust 2024
 **Accepted.** New implementation, not direct C++ port. Keep safe Rust and clear module boundaries.
 

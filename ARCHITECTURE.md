@@ -56,8 +56,9 @@ visible. Desktop refresh timers are independent of bridge report timing.
 | `joyshockrust-config` | Raw common profile schema, profile version, trigger compatibility rules and desktop paths. |
 | `joyshockrust-input` | USB and Bluetooth parsing, factory conversion and device timebase. |
 | `joyshockrust-ipc` | Local status fields, control payload codecs and socket names. |
-| `joyshockrust-motion` | Deterministic calibration, gyro and fusion aim, gyro sensitivity and stick response. |
-| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, device-dependent profile compilation, socket servicing, mapping, uinput and feedback. |
+| `joyshockrust-motion` | Deterministic calibration, gyro and fusion aim, Flick Stick composition, integer pointer motion and stick response. |
+| `joyshockrust-mapping` | Gamepad routes and suppression, touch regions, layers, trigger stages, and integer axis changes. |
+| `joyshockrust-linux` | CLI, udev/hidraw, session lifecycle, device-dependent profile compilation, socket servicing, keyboard and mouse bindings, uinput and feedback. |
 | `joyshockrust-tray` | StatusNotifierItem, desktop lifecycle and calibration launch. |
 | `joyshockrust-editor` | GTK 4/libadwaita profile editing with `toml_edit`, live charts and Wayland calibration windows. |
 

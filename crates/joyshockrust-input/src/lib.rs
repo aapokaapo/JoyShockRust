@@ -14,6 +14,7 @@ pub use calibration::{
     CalibratedImu, CalibrationReportError, DUALSENSE_USB_CALIBRATION_REPORT_ID,
     DUALSENSE_USB_CALIBRATION_REPORT_LEN, FactoryCalibration, UsbFactoryCalibration,
 };
+pub use timebase::{ImuStream, TimedImu};
 pub use timebase::{InvalidForwardLimit, Timebase, TimestampUpdate, ticks_in_nanoseconds};
 
 /// The frame size including the numbered HID report ID.

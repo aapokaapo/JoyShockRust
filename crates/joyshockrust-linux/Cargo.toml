@@ -17,6 +17,7 @@ toml_edit.workspace = true
 joyshockrust-core = { path = "../joyshockrust-core" }
 joyshockrust-input = { path = "../joyshockrust-input" }
 joyshockrust-motion = { path = "../joyshockrust-motion" }
+joyshockrust-mapping = { path = "../joyshockrust-mapping", features = ["profile"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 allocation-counter = "0.8.1"

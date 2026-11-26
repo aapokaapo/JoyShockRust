@@ -41,13 +41,7 @@ pub struct TriggerProfile<Effect: Default> {
     pub adaptive: Effect,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum AnalogTriggerRoute {
-    #[default]
-    Same,
-    Other,
-    Off,
-}
+pub use joyshockrust_core::trigger::AnalogTriggerRoute;
 
 pub fn analog_route(side: TriggerSide, exclusive: bool, full: Option<&str>) -> AnalogTriggerRoute {
     use AnalogTriggerRoute::{Off, Other, Same};

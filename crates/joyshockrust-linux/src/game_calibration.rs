@@ -11,12 +11,10 @@ use std::{
 use evdev::{EventType, InputEvent, RelativeAxisCode};
 
 use joyshockrust_core::{Button, Stick};
-use joyshockrust_motion::aim_response::validate_flick_axial_threshold;
+use joyshockrust_motion::{aim_response::validate_flick_axial_threshold, flick_stick::FlickStick};
 
 use crate::{
-    SessionEvent, discovery,
-    flick_stick::FlickStick,
-    forward_reports, gyro_mouse,
+    SessionEvent, discovery, forward_reports, gyro_mouse,
     haptics::{Cue, Haptics},
     profile,
 };

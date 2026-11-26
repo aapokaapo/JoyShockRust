@@ -1,3 +1,4 @@
+use joyshockrust_motion::flick_stick::FlickStick;
 use std::{
     ffi::OsString,
     fs::File,
@@ -16,9 +17,7 @@ use joyshockrust_input::Transport;
 use crate::{
     ReportTimers, SessionEvent,
     controller_config::ControllerConfig,
-    discovery,
-    flick_stick::FlickStick,
-    forward_reports,
+    discovery, forward_reports,
     game_calibration::Dial,
     hidraw::{self, Identity},
     rumble::Rumble,

@@ -1,5 +1,29 @@
 # Testing, instrumentation and performance
 
+## Portable pointer and gamepad replay
+
+2026-11-26. The combined gyro and Flick Stick replay matches every
+integer X/Y delta recorded on `023e981`, including wraparound, duplicate
+and backward timestamps, a gap and gyro activation changes. The mapping
+output test covers release and retry after failed submission, 255- and
+1023-count trigger ranges, and unchanged output after rounding.
+
+A temporary release-mode harness compared the previous and extracted
+pointer and gamepad output paths on the same CPU. Each case retained
+10,000 blocks of 64 synthetic reports per run after 300 warm-up blocks.
+Twelve paired runs alternated execution order. Old and new checksums
+matched in every run. The timings below are block averages per report,
+summarized by the median of each run's percentile.
+
+| Path | Old p50 (ns) | New p50 (ns) | Old p99 (ns) | New p99 (ns) |
+|---|---:|---:|---:|---:|
+| Gyro and Flick Stick composition | 64.31 | 66.12 | 121.58 | 108.21 |
+| Gamepad quantization and event encoding | 43.97 | 44.28 | 68.62 | 82.86 |
+
+Run-level p99 ranges overlapped in both cases. The harness measures
+in-process calculation and event encoding. Physical input and uinput
+delivery require separate measurement.
+
 ## Shared-library refactor verification
 
 2026-11-25. The locked offline workspace suite passed 247 tests and
