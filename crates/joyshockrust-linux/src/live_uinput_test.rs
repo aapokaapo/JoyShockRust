@@ -93,7 +93,7 @@ fn uinput_live_gamepad_toggle() {
     let reload_path = directory.0.join("reload");
     let status = StatusSocket::bind(&status_path).unwrap();
     let mut bridge = BridgeOptions::default();
-    let reload = reload::Reload::new(None, Some(&reload_path), bridge, true, None).unwrap();
+    let reload = reload::Reload::new(None, Some(&reload_path), bridge, true, None, None).unwrap();
     let outputs_paused = Cell::new(false);
     let (mut sender, receiver) = UnixStream::pair().unwrap();
     receiver.set_nonblocking(true).unwrap();

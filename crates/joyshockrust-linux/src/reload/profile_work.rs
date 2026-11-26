@@ -26,6 +26,8 @@ pub(super) enum ProfileInput {
     Startup,
     Defaults,
     Invalid(&'static str),
+    /// A profile file other than the startup profile, read by the worker.
+    File(PathBuf),
     Inline {
         name: Option<OsString>,
         path: Option<PathBuf>,
@@ -191,6 +193,16 @@ pub(super) fn prepare(
         ProfileInput::Startup => {
             let path = startup.ok_or(PrepareError::Unavailable)?;
             (ProfileOrigin::Startup, profile::load(path))
+        }
+        ProfileInput::File(path) => {
+            let profile = profile::load(&path);
+            (
+                ProfileOrigin::Inline {
+                    name: path.file_name().map(ToOwned::to_owned),
+                    path: Some(path),
+                },
+                profile,
+            )
         }
         ProfileInput::Inline {
             name,

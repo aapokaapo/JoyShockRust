@@ -5,7 +5,10 @@ use std::{
     io::{self, Write},
     ops::ControlFlow,
     path::{Path, PathBuf},
-    sync::mpsc::{SyncSender, sync_channel},
+    sync::{
+        Mutex, PoisonError,
+        mpsc::{SyncSender, sync_channel},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -37,6 +40,33 @@ fn bias_path(id: ControllerId) -> io::Result<PathBuf> {
         .join(format!("{id}.toml")))
 }
 
+/// The latest bias each controller received in this bridge process.
+///
+/// Pausing outputs, a calibration session or an emulation change reopens the
+/// gyro mouse. A rest calibration finished at startup is not written to disk,
+/// so without this record it would be lost and the startup calibration would
+/// run again. Every completed or saved bias replaces the entry, so the most
+/// recent measurement wins over an older file.
+static SESSION_BIAS: Mutex<Vec<(ControllerId, Calibration)>> = Mutex::new(Vec::new());
+
+fn session_bias(id: ControllerId) -> Option<Calibration> {
+    SESSION_BIAS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map(|&(_, bias)| bias)
+}
+
+/// Keep a completed bias for later gyro mouse sessions of this controller.
+pub fn remember(id: ControllerId, bias: Calibration) {
+    let mut known = SESSION_BIAS.lock().unwrap_or_else(PoisonError::into_inner);
+    match known.iter_mut().find(|(known, _)| *known == id) {
+        Some(entry) => entry.1 = bias,
+        None => known.push((id, bias)),
+    }
+}
+
 fn validated_bias(gyro_bias_dps: [f32; 3]) -> Result<Calibration, &'static str> {
     let bias = Calibration { gyro_bias_dps };
     MotionEngine::new(MotionConfig::default(), bias).map_err(|_| "Invalid gyro bias.")?;
@@ -45,6 +75,9 @@ fn validated_bias(gyro_bias_dps: [f32; 3]) -> Result<Calibration, &'static str> 
 
 pub fn load(device: &File) -> Option<Calibration> {
     let id = hidraw::controller_id(device).ok().flatten()?;
+    if let Some(bias) = session_bias(id) {
+        return Some(bias);
+    }
     let result = (|| -> Result<Calibration, Box<dyn Error>> {
         let path = bias_path(id)?;
         let contents = fs::read_to_string(path)?;
@@ -110,7 +143,15 @@ pub fn run(mut args: impl Iterator<Item = OsString>) -> Result<(), Box<dyn Error
 /// Store a measured bias for the controller with the given stable ID.
 pub(crate) fn save_for(id: &str, bias: [f32; 3]) -> Result<(), Box<dyn Error>> {
     let id = ControllerId::parse(id).ok_or("expected a controller ID")?;
-    save(&bias_path(id)?, bias)
+    save(&bias_path(id)?, bias)?;
+    // A running bridge applies the saved bias when outputs resume.
+    remember(
+        id,
+        Calibration {
+            gyro_bias_dps: bias,
+        },
+    );
+    Ok(())
 }
 
 fn save(path: &Path, bias: [f32; 3]) -> Result<(), Box<dyn Error>> {
@@ -240,5 +281,25 @@ impl Sampler {
             gyro_dps: calibrated.gyro_dps,
             accel_g: calibrated.accel_g,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_latest_bias_is_kept_per_controller_for_reopened_sessions() {
+        let first = ControllerId::parse("0a:11:22:33:44:55").unwrap();
+        let second = ControllerId::parse("0b:11:22:33:44:55").unwrap();
+        let bias = |x| Calibration {
+            gyro_bias_dps: [x, 0.0, 0.0],
+        };
+        assert!(session_bias(first).is_none());
+        remember(first, bias(0.5));
+        remember(second, bias(-0.25));
+        remember(first, bias(0.125));
+        assert_eq!(session_bias(first).unwrap().gyro_bias_dps[0], 0.125);
+        assert_eq!(session_bias(second).unwrap().gyro_bias_dps[0], -0.25);
     }
 }
