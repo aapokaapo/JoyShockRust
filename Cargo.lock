@@ -845,6 +845,7 @@ dependencies = [
  "joyshockrust-config",
  "joyshockrust-ipc",
  "ksni",
+ "tempfile",
 ]
 
 [[package]]

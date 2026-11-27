@@ -3,6 +3,6 @@ Type=Application
 Name=JoyShockRust
 Comment=Manage the JoyShockRust controller bridge
 Icon=io.github.aapokaapo.JoyShockRust
-Exec=systemctl --user start joyshockrust-tray.service
+Exec=systemctl --user start joyshockrust-launch.service
 Categories=Settings;
 Terminal=false

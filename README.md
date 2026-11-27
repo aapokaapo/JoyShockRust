@@ -763,6 +763,7 @@ mappings.
   cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-editor
   install -Dm644 dist/systemd/joyshockrust.service "$config_dir/systemd/user/joyshockrust.service"
   install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
+  install -Dm644 dist/systemd/joyshockrust-launch.service "$config_dir/systemd/user/joyshockrust-launch.service"
   install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
   install -Dm644 crates/joyshockrust-editor/assets/dualsense.svg "$data_dir/icons/hicolor/scalable/apps/io.github.aapokaapo.JoyShockRust.svg"
   systemctl --user daemon-reload
@@ -821,6 +822,7 @@ unit and desktop launcher.
   cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-tray
   cargo install --locked --root "$HOME/.local" --path crates/joyshockrust-editor
   install -Dm644 dist/systemd/joyshockrust-tray.service "$config_dir/systemd/user/joyshockrust-tray.service"
+  install -Dm644 dist/systemd/joyshockrust-launch.service "$config_dir/systemd/user/joyshockrust-launch.service"
   install -Dm644 dist/desktop/io.github.aapokaapo.JoyShockRust.desktop "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop"
   install -Dm644 crates/joyshockrust-editor/assets/dualsense.svg "$data_dir/icons/hicolor/scalable/apps/io.github.aapokaapo.JoyShockRust.svg"
   systemctl --user daemon-reload
@@ -829,8 +831,14 @@ unit and desktop launcher.
 ```
 
 The tray starts the bridge and shows the connection icon and decoded
-report rate in Hz. To launch it again, open **JoyShockRust** from the
-application menu or run `systemctl --user start joyshockrust-tray.service`.
+report rate in Hz. Opening **JoyShockRust** from the application menu
+starts the bridge, the tray and the profile editor, each only if it is
+not already running. If the editor is already open, its window is brought
+forward instead of opening a second one. From a terminal, run
+`systemctl --user start joyshockrust-launch.service` for the same result,
+or `systemctl --user start joyshockrust-tray.service` to start only the
+tray and the bridge. **Start with system** starts only the tray and the
+bridge at login.
 On Bluetooth, the same row shows the battery icon and the percentage
 while discharging. Under **Active controller**, open the submenu to
 choose a connected controller with an HID ID or select **Automatic**.
@@ -1140,6 +1148,7 @@ you used during installation.
    rm -f -- \
      "$config_dir/systemd/user/joyshockrust.service" \
      "$config_dir/systemd/user/joyshockrust-tray.service" \
+     "$config_dir/systemd/user/joyshockrust-launch.service" \
      "$config_dir/autostart/io.github.aapokaapo.JoyShockRust.desktop" \
      "$data_dir/applications/io.github.aapokaapo.JoyShockRust.desktop" \
      "$data_dir/icons/hicolor/scalable/apps/io.github.aapokaapo.JoyShockRust.svg"
