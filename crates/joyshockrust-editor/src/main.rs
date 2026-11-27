@@ -317,14 +317,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .join(APP_DIRECTORY)
         .join(PROFILES_DIRECTORY);
     let editor = std::rc::Rc::new(std::cell::RefCell::new(Editor::open(directory, path)?));
-    // With NON_UNIQUE, GTK uses the program name as the Wayland app ID.
     adw::glib::set_program_name(Some(DESKTOP_APP_ID));
     gtk::gdk::set_allowed_backends("wayland");
+    // A unique application: when an editor is already open in the session,
+    // this process asks it to present its window and exits.
     let app = adw::Application::builder()
         .application_id(DESKTOP_APP_ID)
-        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
         .build();
-    app.connect_activate(move |app| ui::open_window(app, editor.clone()));
+    app.connect_activate(move |app| match app.active_window() {
+        Some(window) => window.present(),
+        None => ui::open_window(app, editor.clone()),
+    });
     if app.run_with_args(&["joyshockrust-editor"]) != adw::glib::ExitCode::SUCCESS {
         return Err("Could not start the profile editor in a Wayland session".into());
     }

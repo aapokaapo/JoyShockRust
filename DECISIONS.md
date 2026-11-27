@@ -778,6 +778,21 @@ Desktop polling and command execution stay outside the input process.
 [XDG Autostart](https://specifications.freedesktop.org/autostart-spec/latest/)
 · [StatusNotifierItem](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/)
 
+2026-11-27. The application menu entry now starts the oneshot
+`joyshockrust-launch.service`. It wants and follows the tray unit and asks
+the running tray, over a socket in `$XDG_RUNTIME_DIR`, to start the bridge
+and show the editor. The login autostart entry the tray writes still starts
+only the tray unit, so logging in does not open a window. Each part starts
+only when it is not already running. Starting an active unit is a no-op for
+the bridge and tray units. The tray holds an exclusive lock in the runtime
+directory, so a second tray process exits. The profile editor is a unique
+GApplication on the session bus, so a second editor process presents the
+open window and exits. Calibration windows keep their separate non-unique
+application ID. The tray's files sit outside the bridge's runtime directory
+because systemd removes that directory when the bridge stops.
+[GApplication uniqueness](https://docs.gtk.org/gio/class.Application.html)
+· [systemd.service Type=oneshot](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#Type=)
+
 2026-11-24. The desktop launcher uses the editor's bundled DualSense SVG.
 The user installation places it in the `hicolor` fallback theme.
 [Icon Theme Specification](https://specifications.freedesktop.org/icon-theme-spec/latest/)

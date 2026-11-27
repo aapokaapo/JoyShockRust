@@ -1,0 +1,10 @@
+[Unit]
+Description=Start JoyShockRust and open the profile editor
+# The tray, the bridge it starts and the editor are each started only when
+# they are not already running. An open editor window is presented instead.
+Wants=joyshockrust-tray.service
+After=joyshockrust-tray.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/joyshockrust-tray --open-editor

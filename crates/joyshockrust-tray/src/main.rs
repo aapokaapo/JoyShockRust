@@ -14,6 +14,8 @@ use joyshockrust_ipc::{
     },
 };
 
+mod instance;
+
 use std::{
     env, fs, io,
     os::unix::net::UnixStream,
@@ -33,6 +35,9 @@ const BRIDGE_SERVICE: &str = "joyshockrust.service";
 const DESKTOP_ID: &str = "io.github.aapokaapo.JoyShockRust.desktop";
 const DESKTOP_ENTRY: &str =
     include_str!("../../../dist/desktop/io.github.aapokaapo.JoyShockRust.desktop");
+/// Login autostart only brings up the tray and the bridge, not the editor
+/// window that the application launcher opens.
+const AUTOSTART_EXEC: &str = "Exec=systemctl --user start joyshockrust-tray.service";
 const REFRESH: Duration = Duration::from_secs(1);
 const PROFILE_REFRESH: Duration = Duration::from_secs(4);
 
@@ -140,6 +145,8 @@ enum Action {
     AutoSelect,
     Load(PathBuf),
     Edit,
+    /// Sent by the desktop launcher: start the bridge and show the editor.
+    OpenEditor,
     CalibrateGame,
     CalibrateGyro,
     Unload,
@@ -438,6 +445,17 @@ impl Desktop {
         dialog.spawn()
     }
 
+    fn open_editor(&self, state: &TrayState) -> io::Result<Child> {
+        let path = state
+            .status
+            .as_ref()
+            .and_then(|status| status.active_profile.as_ref())
+            .filter(|path| path.is_file());
+        Command::new(self.bridge.with_file_name("joyshockrust-editor"))
+            .args(path)
+            .spawn()
+    }
+
     fn run(&self, action: &Action) -> io::Result<()> {
         match action {
             Action::Select(controller) => {
@@ -459,7 +477,9 @@ impl Desktop {
                 })?;
             }
             Action::Load(path) => self.control()?.load_profile(path)?,
-            Action::Edit => unreachable!("the editor is handled by the tray loop"),
+            Action::Edit | Action::OpenEditor => {
+                unreachable!("the editor is handled by the tray loop")
+            }
             Action::Unload => self.control()?.send(ControlCommand::UnloadProfile)?,
             Action::CalibrateGame | Action::CalibrateGyro => {
                 unreachable!("calibration is handled by the tray loop")
@@ -480,7 +500,7 @@ impl Desktop {
                 let path = self.autostart_file();
                 if *enabled {
                     fs::create_dir_all(directory)?;
-                    fs::write(path, DESKTOP_ENTRY)?;
+                    fs::write(path, autostart_entry())?;
                 } else if let Err(error) = fs::remove_file(path)
                     && error.kind() != io::ErrorKind::NotFound
                 {
@@ -493,6 +513,20 @@ impl Desktop {
         }
         Ok(())
     }
+}
+
+fn autostart_entry() -> String {
+    DESKTOP_ENTRY
+        .lines()
+        .map(|line| {
+            if line.starts_with("Exec=") {
+                AUTOSTART_EXEC
+            } else {
+                line
+            }
+        })
+        .flat_map(|line| [line, "\n"])
+        .collect()
 }
 
 fn output(command: &mut Command) -> io::Result<String> {
@@ -518,6 +552,11 @@ fn bridge_service(action: &str) -> io::Result<()> {
     output(Command::new("systemctl").args(["--user", action, BRIDGE_SERVICE])).map(|_| ())
 }
 
+/// Wait for a short-lived child without blocking the tray loop.
+fn reap(mut child: Child) {
+    std::thread::spawn(move || child.wait());
+}
+
 fn read_status(socket: &mut UnixStream, id: u32) -> io::Result<(Stamp, Option<Status>)> {
     let (stamp, body) = stream::read_status(socket, id)?;
     let status = Status::parse(&body)
@@ -526,6 +565,21 @@ fn read_status(socket: &mut UnixStream, id: u32) -> io::Result<(Stamp, Option<St
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = env::args_os().skip(1);
+    let open_editor = match (args.next(), args.next()) {
+        (None, _) => false,
+        (Some(arg), None) if arg == "--open-editor" => true,
+        _ => return Err("usage: joyshockrust-tray [--open-editor]".into()),
+    };
+    let runtime =
+        paths::absolute_env("XDG_RUNTIME_DIR").ok_or("XDG_RUNTIME_DIR must be an absolute path")?;
+    if open_editor {
+        return Ok(instance::open_editor(&runtime)?);
+    }
+    let Some(instance) = instance::Instance::acquire(&runtime)? else {
+        eprintln!("The JoyShockRust tray is already running");
+        return Ok(());
+    };
     let home = paths::absolute_env("HOME").ok_or("HOME must be an absolute path")?;
     let desktop = Desktop {
         bridge: env::current_exe()?.with_file_name("joyshockrust-linux"),
@@ -548,6 +602,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         notify(),
     )?;
     let status = Subscription::start(&desktop.status_socket, Topic::Status, read_status, notify())?;
+    instance.listen(instance::forward(sender.clone(), |request| match request {
+        instance::Request::OpenEditor => Action::OpenEditor,
+    }))?;
     let tray = Tray {
         actions: sender,
         state: TrayState::default(),
@@ -607,20 +664,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match receiver.recv_timeout(REFRESH) {
             Ok(Action::DesktopChanged) => {}
             Ok(_) if calibration.is_some() => {}
-            Ok(Action::Edit) if editor.is_none() => {
-                let path = state
-                    .status
-                    .as_ref()
-                    .and_then(|status| status.active_profile.as_ref())
-                    .filter(|path| path.is_file());
-                match Command::new(desktop.bridge.with_file_name("joyshockrust-editor"))
-                    .args(path)
-                    .spawn()
-                {
-                    Ok(child) => {
-                        editor = Some(child);
-                        state.error = None;
-                    }
+            Ok(Action::Edit) if editor.is_none() => match desktop.open_editor(&state) {
+                Ok(child) => {
+                    editor = Some(child);
+                    state.error = None;
+                }
+                Err(error) => {
+                    state.error = Some(format!("Could not open the profile editor: {error}"))
+                }
+            },
+            Ok(Action::OpenEditor) => {
+                // Starting an active unit does nothing, so this only starts
+                // a bridge that is not already running.
+                state.error = desktop
+                    .run(&Action::Start)
+                    .err()
+                    .map(|error| format!("Start failed: {error}"));
+                match desktop.open_editor(&state) {
+                    // The editor is a unique application. A second process
+                    // presents the open window and exits.
+                    Ok(child) if editor.is_some() => reap(child),
+                    Ok(child) => editor = Some(child),
                     Err(error) => {
                         state.error = Some(format!("Could not open the profile editor: {error}"))
                     }
@@ -667,6 +731,21 @@ mod tests {
     use ksni::Tray as _;
 
     use super::*;
+
+    #[test]
+    fn login_autostart_starts_the_tray_without_opening_the_editor() {
+        let entry = autostart_entry();
+        assert!(DESKTOP_ENTRY.contains("joyshockrust-launch.service"));
+        assert_eq!(
+            entry
+                .lines()
+                .filter(|line| line.starts_with("Exec="))
+                .collect::<Vec<_>>(),
+            [AUTOSTART_EXEC]
+        );
+        assert_eq!(entry.lines().count(), DESKTOP_ENTRY.lines().count());
+        assert!(entry.contains("Name=JoyShockRust\n"));
+    }
 
     #[test]
     fn status_formats_discharge_level_and_clears_disconnected_telemetry() {
